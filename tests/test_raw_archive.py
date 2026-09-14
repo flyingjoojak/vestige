@@ -128,6 +128,45 @@ def test_mirror_size_bytes_sums_all_sources(tmp_path, monkeypatch):
     assert R.mirror_size_bytes() > 0
 
 
+# ── enforce_quota (#163 PR3) ─────────────────────────────────
+def _seed_mirror(tmp_path, db, sid: str, size: int, random_bytes: bool = False):
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(os.urandom(size) if random_bytes else b"x" * size)
+    R.mirror_file(db, f, "claude-code")
+    return R.raw_path("claude-code", sid)
+
+
+def test_enforce_quota_noop_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 1000)
+    assert R.enforce_quota(0) == 0   # 0 이하=무제한 취급, 아무것도 안 지움
+    assert R.mirror_size_bytes() > 0
+
+
+def test_enforce_quota_noop_when_under_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    p = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 100)
+    assert R.enforce_quota(10_000_000) == 0
+    assert p.exists()
+
+
+def test_enforce_quota_deletes_oldest_first(tmp_path, monkeypatch):
+    # 반복 바이트는 gzip이 거의 다 압축해버려 크기 예측이 어려우니, 파일마다 다른 내용을 채워
+    # 압축 후에도 실제 용량이 남게 한다.
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    old = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 2000, random_bytes=True)
+    os.utime(old, (1_000_000_000, 1_000_000_000))   # 더 오래됨
+    new = _seed_mirror(tmp_path, db, "129e80dc-1754-7422-b72f-2d176635efb3", 2000, random_bytes=True)
+    new_size = new.stat().st_size
+    removed = R.enforce_quota(new_size + 1)   # 새 파일 하나만 겨우 남을 상한
+    assert removed == 1
+    assert not old.exists()   # 오래된 것부터 제거
+    assert new.exists()
+
+
 # ── index_all 훅 통합 테스트 ─────────────────────────────────
 class _FakeEmbedder:
     model_name = "fake"
