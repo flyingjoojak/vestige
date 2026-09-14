@@ -90,7 +90,7 @@ brew install --cask vestige
 
 서드파티 tap이라 "untrusted tap" 경고가 뜨면 `brew trust flyingjoojak/vestige` 실행 후 다시 설치하세요. 업데이트는 `brew upgrade --cask vestige`.
 
-**또는 `.dmg` 직접**: [Releases](https://github.com/flyingjoojak/vestige/releases)에서 받아 **Vestige** 를 Applications 로 드래그합니다. 처음 열 때 "확인되지 않은 개발자" 경고가 뜨면 앱을 우클릭 → **열기**를 한 번 눌러주세요. (아직 Apple 인증서로 서명하진 않았지만 ad-hoc 서명이 들어가 있어 "손상됨"으로 막히진 않습니다.)
+**또는 `.dmg` 직접**: [Releases](https://github.com/flyingjoojak/vestige/releases)에서 받아 **Vestige** 를 Applications 로 드래그합니다. 처음 열 때 "확인되지 않은 개발자" 경고가 뜨면 앱을 우클릭 → **열기**를 한 번 눌러주세요. 최신 macOS 에서 우클릭 메뉴에 "열기"가 없으면 **시스템 설정 > 개인정보 보호 및 보안**에서 아래로 스크롤해 **"그래도 열기"**를 누르면 됩니다. (아직 Apple 인증서로 서명하진 않았지만 ad-hoc 서명이 들어가 있어 "손상됨"으로 막히진 않습니다.)
 
 > Intel Mac은 아직 지원하지 않습니다(arm64 빌드).
 
