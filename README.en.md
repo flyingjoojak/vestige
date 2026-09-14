@@ -90,7 +90,7 @@ brew install --cask vestige
 
 It's a third-party tap, so if you see an "untrusted tap" warning, run `brew trust flyingjoojak/vestige` and install again. Update with `brew upgrade --cask vestige`.
 
-**Or the `.dmg` directly**: download from [Releases](https://github.com/flyingjoojak/vestige/releases) and drag **Vestige** to Applications. The first time you open it, if you see an "unidentified developer" warning, right-click the app and choose **Open** once. (It isn't signed with an Apple certificate yet, but it carries an ad-hoc signature, so Apple Silicon no longer blocks it as "damaged".)
+**Or the `.dmg` directly**: download from [Releases](https://github.com/flyingjoojak/vestige/releases) and drag **Vestige** to Applications. The first time you open it, if you see an "unidentified developer" warning, right-click the app and choose **Open** once. On recent macOS, if the right-click menu has no "Open", go to **System Settings > Privacy & Security**, scroll down and click **"Open Anyway"**. (It isn't signed with an Apple certificate yet, but it carries an ad-hoc signature, so Apple Silicon no longer blocks it as "damaged".)
 
 > Intel Macs aren't supported yet (arm64 build).
 
