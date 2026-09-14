@@ -592,12 +592,20 @@ def api_session(id: str = Query(...), limit: int = 2000):
     project = (info[2] if info else "") or ""
     src_file = _find_source_file(source, id, stored)
     is_sub, parent = _subagent_info(stored)
+    from . import raw_archive
+    # 원문이 없어도(정리로 유실) 보존된 원본이 있으면 복구 가능 — 배경 대화는 애초에 재개가
+    # 안 되니(위 resume_cmd) 복구도 의미 없어 제외.
+    can_restore = (
+        src_file is None and not is_sub and bool(_SID_RE.fullmatch(id))
+        and raw_archive.has_mirror(source, id)
+    )
     return {
         "session": id, "project": project, "count": len(turns), "turns": turns,
         "source": source,
         # 배경 대화는 재개 명령이 없음(열기 차단) — 부모 세션 링크만 제공.
         "resume_cmd": "" if is_sub else (_resume_cmd_str(source, id) if _SID_RE.fullmatch(id) else ""),
         "source_file_exists": src_file is not None,
+        "can_restore": can_restore,
         "subagent": is_sub,
         "parent": parent,
     }
@@ -756,6 +764,41 @@ def api_resume(session: str = Query(...), force: bool = False):
     except Exception as e:               # 실행 실패를 사용자에게 그대로 전달
         raise HTTPException(status_code=500, detail={"code": "resume_launch_failed", "msg": f"터미널 실행 실패: {e}", "detail": str(e)})
     return {"ok": True, "cwd": cwd, "source": source}
+
+
+@app.post("/api/session/restore")
+def api_session_restore(session: str = Query(...)):
+    """원문 로그가 사라진(정리됨) 세션을, 보존해둔 원본(#163 P1)으로 되살린다.
+
+    되살리면 실제 파일이 생기므로 이후 /api/resume 이 정상 동작(재개 가능). 이미 원문이
+    있으면(경합 등) 건드리지 않고 그대로 성공 취급. 서브에이전트(배경 대화)는 애초에 재개가
+    안 되니 복구 대상에서 제외."""
+    sid = session.strip()
+    if not _SID_RE.fullmatch(sid):
+        raise HTTPException(status_code=400, detail={"code": "invalid_session_id", "msg": "잘못된 세션 id"})
+    db = ArchiveDB()
+    info = db.session_source(sid)
+    if info is None:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
+    source, stored, _project = info
+
+    is_sub, _parent = _subagent_info(stored)
+    if is_sub:
+        return {"ok": False, "subagent": True, "code": "restore_subagent",
+                "warning": "배경 에이전트 대화는 복구 대상이 아니에요."}
+
+    if _find_source_file(source, sid, stored) is not None:
+        return {"ok": True, "already_exists": True}   # 이미 원문 있음 — no-op 성공
+
+    from . import raw_archive
+    try:
+        target = raw_archive.restore(source, sid)
+    except Exception as e:  # noqa: BLE001 — 파일시스템 오류 등을 사용자에게 그대로 전달
+        raise HTTPException(status_code=500, detail={"code": "restore_failed", "msg": f"복구 실패: {e}", "detail": str(e)})
+    if target is None:
+        return {"ok": False, "missing": True, "code": "restore_no_mirror",
+                "warning": "보존된 원본이 없어 복구할 수 없어요(이 기능 이전에 유실된 세션일 수 있어요)."}
+    return {"ok": True, "path": str(target)}
 
 
 def _resume_env() -> dict:

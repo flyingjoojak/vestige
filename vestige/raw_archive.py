@@ -19,6 +19,7 @@ gzip 멤버 하나로 이어 쓴다(``gzip.open`` 은 이어붙인 여러 멤버
 from __future__ import annotations
 
 import gzip
+import json
 import logging
 import re
 from pathlib import Path
@@ -108,3 +109,66 @@ def mirror_size_bytes() -> int:
     if not RAW_DIR.exists():
         return 0
     return sum(p.stat().st_size for p in RAW_DIR.rglob("*.jsonl.gz") if p.is_file())
+
+
+# ── 복구 (#163 P1) ─────────────────────────────────────────
+# Claude Code 는 실행 중인 cwd 를 스스로 인코딩해 ~/.claude/projects/<encoded>/ 밑에서 세션을
+# 찾는다(실측 확인: "C:\Users\me\chat-memory" → "C--Users-me-chat-memory", "C:\growth_report"
+# → "C--growth-report" — 영숫자가 아닌 문자는 전부 '-'). Vestige 의 재개(_launch_resume)는
+# 그 cwd 에서 그대로 claude 를 띄우므로, 복구본을 이 규칙대로 같은 폴더에 둬야 실제 재개가 된다.
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
+
+
+def _encode_claude_project_dir(cwd: str) -> str:
+    return _NON_ALNUM_RE.sub("-", cwd)
+
+
+def _first_cwd(raw: bytes, *, key_path: tuple[str, ...]) -> str | None:
+    """복구분(raw)의 앞부분 줄들에서 cwd 를 찾는다. key_path 로 중첩 위치 지정(예: ("cwd",) 또는
+    ("payload","cwd")). 앞쪽 몇 줄만 보면 충분(cwd 는 세션 내내 안 바뀜)."""
+    text = raw.decode("utf-8", errors="replace")
+    for i, line in enumerate(text.splitlines()):
+        if i >= 20:   # 앞부분만 - 대형 세션이어도 값싸게
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        cur = obj
+        for k in key_path:
+            if not isinstance(cur, dict):
+                cur = None
+                break
+            cur = cur.get(k)
+        if isinstance(cur, str) and cur:
+            return cur
+    return None
+
+
+def restore(source: str, session_id: str) -> Path | None:
+    """보존된 원본을 실제 로그 위치로 되써넣어 재개 가능하게 만든다.
+
+    이미 원본이 있으면(다른 경로로 복구됐거나 아직 안 지워졌으면) 건드리지 않고 그 경로를
+    그대로 반환(덮어쓰지 않음 - 실수로 최신본을 과거 보존분으로 되돌리는 사고 방지).
+    cwd 를 못 찾거나 지원 안 하는 source면 None.
+    """
+    raw = read_mirror(source, session_id)
+    if raw is None:
+        return None
+    if source == "codex":
+        target = C.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{session_id}.jsonl"
+    elif source == "claude-code":
+        cwd = _first_cwd(raw, key_path=("cwd",))
+        if not cwd:
+            return None
+        target = C.PROJECTS_DIR / _encode_claude_project_dir(cwd) / f"{session_id}.jsonl"
+    else:
+        return None
+    if target.exists():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    return target

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
-import { getGraph3D, getSession, listSessions, resumeSession, search, type SearchMode } from "@/lib/api"
+import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, type SearchMode } from "@/lib/api"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
 import type { Hit, SessionDetail } from "@/lib/types"
@@ -51,6 +51,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [searchErr, setSearchErr] = useState("")
   const [copied, setCopied] = useState(false)
   const [opening, setOpening] = useState(false)
+  const [restoring, setRestoring] = useState(false)   // 원본 복구 진행 중(#163 P1)
   const [resumeMsg, setResumeMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [detail, setDetail] = useState<SessionDetail | null>(null)   // 선택 세션 상세(출처·재개커맨드·원문존재)
   const [detailErr, setDetailErr] = useState(false)                  // 세션 상세 로드 실패
@@ -76,6 +77,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const sourceLabel = detail?.source === "codex" ? "Codex" : detail?.source === "claude-code" ? "Claude Code" : ""
   const isSubagent = detail?.subagent === true              // 배경(서브에이전트) 대화 — 직접 재개 불가
   const parentSid = detail?.parent || null                  // 파생된 부모 세션(역링크)
+  const canRestore = detail?.can_restore === true            // 원문은 없지만 보존된 원본으로 복구 가능(#163 P1)
   async function copyResume() {
     if (!resumeCmd) return
     // clipboard API는 비보안 컨텍스트(평문 http 비-localhost 등)에서 없을 수 있음 → 가드 + 폴백 안내.
@@ -112,6 +114,27 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       flashMsg({ ok: false, text: errText(t, e, "browse.execFailed") })
     } finally {
       setOpening(false)
+    }
+  }
+
+  // 정리로 사라진 원문을 보존된 원본으로 복구(#163 P1). 성공하면 상세를 다시 불러와
+  // source_file_exists/can_restore 를 갱신 — 바로 위 "열기" 버튼이 활성화됨.
+  async function doRestore() {
+    if (!sel || restoring) return
+    setRestoring(true); setResumeMsg(null)
+    try {
+      const r = await restoreSession(sel)
+      if (r.ok) {
+        flashMsg({ ok: true, text: t("browse.restoreDone") })
+        const d = await getSession(sel)
+        setDetail(d)
+      } else {
+        flashMsg({ ok: false, text: errText(t, r, "browse.restoreFailed") })
+      }
+    } catch (e) {
+      flashMsg({ ok: false, text: errText(t, e, "browse.execFailed") })
+    } finally {
+      setRestoring(false)
     }
   }
 
@@ -293,7 +316,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
                 <button type="button" onClick={openResume} disabled={opening || !ready || !fileExists}
                   title={ready && !fileExists ? t("browse.cannotOpenNoLog") : undefined}
                   aria-label={ready && !fileExists ? t("browse.openAriaDisabled") : t("browse.openAriaEnabled")}
-                  aria-describedby={ready && !fileExists ? "resume-missing-note" : undefined}
+                  aria-describedby={ready && !fileExists && !canRestore ? "resume-missing-note" : undefined}
                   className="inline-flex shrink-0 items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-1.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-60">
                   {opening ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}{t("browse.open")}
                 </button>
@@ -309,7 +332,16 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               {detailErr && !resumeMsg && (
                 <div className="mt-1 text-[10.5px] text-destructive">{t("browse.detailLoadFailed")}</div>
               )}
-              {ready && !fileExists && !resumeMsg && (
+              {ready && !fileExists && canRestore && (
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={doRestore} disabled={restoring}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-1.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-60">
+                    {restoring ? <Loader2 className="size-3.5 animate-spin" /> : <ArchiveRestore className="size-3.5" />}{t("browse.restore")}
+                  </button>
+                  <span className="text-[10.5px] text-muted-foreground">{t("browse.restoreHint")}</span>
+                </div>
+              )}
+              {ready && !fileExists && !canRestore && !resumeMsg && (
                 <div id="resume-missing-note" className="mt-1 text-[10.5px] text-destructive">{t("browse.noLogNote")}</div>
               )}
             </div>
