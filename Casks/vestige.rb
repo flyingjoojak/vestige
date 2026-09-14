@@ -14,10 +14,10 @@
 # 릴리스를 자동 감지). 더 강한 보안이 필요하면 릴리스마다 실제 dmg 의 sha256 으로 고정하면 되며,
 # 이 갱신은 릴리스 CI로 자동화할 수 있다.
 cask "vestige" do
-  version "0.2.0"
+  version "0.2.1"
   sha256 :no_check
 
-  url "https://github.com/flyingjoojak/vestige/releases/download/v#{version}/Vestige-Setup-#{version}.dmg",
+  url "https://github.com/flyingjoojak/vestige/releases/download/v#{version}/Vestige-#{version}-macOS.dmg",
       verified: "github.com/flyingjoojak/vestige/"
   name "Vestige"
   desc "Local semantic search over your AI coding CLI conversations"
