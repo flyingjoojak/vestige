@@ -71,6 +71,22 @@ export async function resumeSession(id: string, force = false): Promise<ResumeRe
   return r.json()
 }
 
+// 원문 로그가 사라진(정리됨) 세션을 보존해둔 원본으로 복구(#163 P1). 성공하면 그 뒤 resumeSession 가능.
+export interface RestoreResult {
+  ok: boolean
+  path?: string
+  already_exists?: boolean
+  missing?: boolean            // 보존된 원본도 없음(이 기능 이전에 유실됨)
+  subagent?: boolean
+  warning?: string
+  code?: string
+}
+export async function restoreSession(id: string): Promise<RestoreResult> {
+  const r = await fetch(`/api/session/restore?session=${encodeURIComponent(id)}`, { method: "POST" })
+  if (!r.ok) return failure(r)
+  return r.json()
+}
+
 // 세션 동기화 감시(Syncthing 충돌 해소) 상태·토글.
 export interface SyncStatus {
   running: boolean

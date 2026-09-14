@@ -203,6 +203,113 @@ def test_index_all_mirror_failure_does_not_block_indexing(monkeypatch, tmp_path)
     assert n == 1   # mirror 실패와 무관하게 턴 색인은 정상 완료
 
 
+# ── 복구(restore) ────────────────────────────────────────────
+def test_encode_claude_project_dir_matches_real_claude_code_naming():
+    # 실기 확인된 실제 사례 3건(Claude Code가 실제로 만든 프로젝트 폴더명과 대조).
+    assert R._encode_claude_project_dir(r"C:\Users\JHJOO\chat-memory") == "C--Users-JHJOO-chat-memory"
+    assert R._encode_claude_project_dir(r"C:\growth_report") == "C--growth-report"
+    assert (R._encode_claude_project_dir(r"C:\Users\main\Downloads\chatmem-backend (3)")
+            == "C--Users-main-Downloads-chatmem-backend--3-")
+
+
+def test_first_cwd_finds_field_in_early_lines():
+    raw = (
+        b'{"type":"summary","summary":"x"}\n'
+        b'{"type":"user","cwd":"/home/me/proj","message":{}}\n'
+        b'{"type":"assistant"}\n'
+    )
+    assert R._first_cwd(raw, key_path=("cwd",)) == "/home/me/proj"
+
+
+def test_first_cwd_none_when_absent():
+    raw = b'{"type":"assistant"}\n{"type":"assistant"}\n'
+    assert R._first_cwd(raw, key_path=("cwd",)) is None
+
+
+def test_first_cwd_skips_bad_json_lines():
+    raw = b'not json at all\n{"type":"user","cwd":"/p"}\n'
+    assert R._first_cwd(raw, key_path=("cwd",)) == "/p"
+
+
+def test_restore_claude_code_writes_to_encoded_project_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    raw_bytes = (
+        b'{"type":"user","cwd":"C:\\\\growth_report","sessionId":"' + sid.encode() + b'"}\n'
+        b'{"type":"assistant"}\n'
+    )
+    f.write_bytes(raw_bytes)
+    R.mirror_file(db, f, "claude-code")
+
+    target = R.restore("claude-code", sid)
+    assert target == config.PROJECTS_DIR / "C--growth-report" / f"{sid}.jsonl"
+    assert target.read_bytes() == raw_bytes
+
+
+def test_restore_does_not_overwrite_existing_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"type":"user","cwd":"C:\\\\growth_report"}\n')
+    R.mirror_file(db, f, "claude-code")
+
+    existing_dir = config.PROJECTS_DIR / "C--growth-report"
+    existing_dir.mkdir(parents=True)
+    existing = existing_dir / f"{sid}.jsonl"
+    existing.write_bytes(b"ALREADY THERE - DO NOT TOUCH")
+
+    target = R.restore("claude-code", sid)
+    assert target == existing
+    assert existing.read_bytes() == b"ALREADY THERE - DO NOT TOUCH"   # 안 덮어씀
+
+
+def test_restore_claude_code_without_cwd_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"type":"assistant"}\n')   # cwd 없음
+    R.mirror_file(db, f, "claude-code")
+    assert R.restore("claude-code", sid) is None
+
+
+def test_restore_codex_writes_under_restored_subdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(config, "CODEX_SESSIONS_DIR", tmp_path / "codex_sessions")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"rollout-2026-08-21T10-00-00-{sid}.jsonl"
+    raw_bytes = b'{"type":"session_meta","payload":{"id":"x","cwd":"/p"}}\n'
+    f.write_bytes(raw_bytes)
+    R.mirror_file(db, f, "codex")
+
+    target = R.restore("codex", sid)
+    assert target == config.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{sid}.jsonl"
+    assert target.read_bytes() == raw_bytes
+
+
+def test_restore_unsupported_source_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b"x\n")
+    R.mirror_file(db, f, "weird-source")
+    assert R.restore("weird-source", sid) is None
+
+
+def test_restore_no_mirror_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
+    assert R.restore("claude-code", "no-such-session") is None
+
+
 # ── raw_cursors 왕복(store.py) ───────────────────────────────
 def test_raw_cursor_roundtrip(tmp_path):
     db = _db(tmp_path)

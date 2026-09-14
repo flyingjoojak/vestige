@@ -43,6 +43,7 @@ export interface SessionDetail {
   source?: SessionSource       // 재개 명령이 달라짐
   resume_cmd?: string          // 출처별 재개 커맨드(예: "codex resume <id>")
   source_file_exists?: boolean // 원문 로그가 남아있는지(없으면 재개 불가)
+  can_restore?: boolean        // 원문은 없지만 보존된 원본이 있어 복구 가능(#163 P1)
   subagent?: boolean           // 배경(서브에이전트) 대화 — 직접 재개 불가
   parent?: string | null       // 파생된 부모 세션 id(있으면 역링크)
 }
