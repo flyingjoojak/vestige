@@ -531,6 +531,7 @@ export function SettingsView() {
   const [tab, setTab] = useState<TabKey>("general")
   const [intervalSaved, setIntervalSaved] = useState(false)
   const [indexErr, setIndexErr] = useState("")
+  const [rawMaxMb, setRawMaxMb] = useState("")   // 원본 로그 보존소 상한(MB, 빈값=무제한, #163)
 
   const [embed, setEmbed] = useState<EmbedModel[]>([])
   const [recommendedModel, setRecommendedModel] = useState("")
@@ -626,6 +627,7 @@ export function SettingsView() {
       setClaudeBin(c.claude_bin ?? "")
       setSkipSdk(!!c.skip_sdk)
       setIndexMode((c.index_mode as IndexMode) || "interval"); setIndexTime(c.index_time || "03:00")
+      setRawMaxMb(c.raw_archive_max_mb || "")
       const cur = c.models[c.enrich_backend] ?? ""
       const opts = BACKENDS.find((b) => b.v === c.enrich_backend)?.models ?? []
       setModel(cur); setCustomModel(!!cur && !(opts as readonly string[]).includes(cur))
@@ -887,6 +889,22 @@ export function SettingsView() {
                       {t(skipSdk ? "settings.skipSdkCountOn" : "settings.skipSdkCountOff", { sessions: skipSdkStats.sessions.toLocaleString(), turns: skipSdkStats.turns.toLocaleString() })}
                     </p>
                   )}
+                  {/* 원본 로그 보존소(#163): 정리로 사라져도 복구 가능하게 별도 보관 중인 원본의 용량·상한 */}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 border-t pt-2.5 text-sm">
+                    <span className="font-medium">{t("settings.rawArchive")}</span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      {((cfg?.raw_archive_bytes ?? 0) / 1024 / 1024).toFixed(1)} MB
+                    </span>
+                    <Input type="number" min={0} placeholder={t("settings.rawArchiveUnlimited")}
+                      value={rawMaxMb} onChange={(e) => setRawMaxMb(e.target.value)}
+                      aria-label={t("settings.rawArchiveMaxMb")}
+                      onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                      className="ml-auto h-8 w-24 tabular-nums" />
+                    <span className="text-[11px] text-muted-foreground">MB</span>
+                    <Button size="sm" variant="outline" onClick={() => commitIndex({ VESTIGE_RAW_ARCHIVE_MAX_MB: rawMaxMb.trim() })}>{t("common.save")}</Button>
+                    {intervalSaved && <span className="inline-flex items-center gap-1 text-sm text-primary"><Check className="size-4" />{t("common.saved")}</span>}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">{t("settings.rawArchiveHelp")}</p>
                 </div>
               </Section>
 

@@ -342,6 +342,14 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
             except Exception:  # noqa: BLE001
                 pass
     _update_drift(db, turns_by_src, newdata_by_src, log_fn=log_fn)
+    from . import config as C
+    if C.RAW_ARCHIVE_MAX_MB.strip():
+        try:
+            n = raw_archive.enforce_quota(int(C.RAW_ARCHIVE_MAX_MB) * 1024 * 1024)
+            if n:
+                log_fn(f"raw archive 용량 초과 - 오래된 세션 {n}개 정리")
+        except Exception as ex:  # noqa: BLE001
+            log_fn(f"raw archive quota 정리 실패: {ex}")
     return total
 
 

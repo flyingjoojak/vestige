@@ -197,6 +197,8 @@ INDEX_INTERVAL_MIN = int(os.environ.get("VESTIGE_INDEX_INTERVAL", "10"))  # 증�
 # 자동 색인 모드: off(끔)/interval(주기)/realtime(실시간 자동감지)/scheduled(특정 시각 1회).
 INDEX_MODE = os.environ.get("VESTIGE_INDEX_MODE", "interval")
 INDEX_TIME = os.environ.get("VESTIGE_INDEX_TIME", "03:00")   # scheduled 모드 색인 시각 HH:MM
+# 원본 로그 보존소(raw_archive) 상한 MB. 빈값=무제한(기본, #163). 숫자면 초과 시 오래된 것부터 정리.
+RAW_ARCHIVE_MAX_MB = os.environ.get("VESTIGE_RAW_ARCHIVE_MAX_MB", "")
 
 
 def write_config(updates: dict[str, str]) -> None:

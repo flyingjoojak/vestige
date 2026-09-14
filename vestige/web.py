@@ -1069,6 +1069,7 @@ def api_config():
 
     from . import config as C
     from . import parser as _parser
+    from . import raw_archive
     try:
         from .enrich import resolve_claude_bin
         _claude = resolve_claude_bin()
@@ -1087,6 +1088,8 @@ def api_config():
         "index_mode": getattr(C, "INDEX_MODE", "interval"),
         "index_time": getattr(C, "INDEX_TIME", "03:00"),
         "embed_model": C.EMBED_MODEL,
+        "raw_archive_max_mb": C.RAW_ARCHIVE_MAX_MB,   # 빈값=무제한
+        "raw_archive_bytes": raw_archive.mirror_size_bytes(),
         "keys": {k: bool(os.environ.get(k)) for k in
                  ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")},
         "config_path": str(C.CONFIG_PATH),

@@ -247,6 +247,8 @@ export interface Config {
   index_mode: string        // off|interval|realtime|scheduled
   index_time: string        // scheduled 모드 색인 시각 HH:MM
   embed_model: string
+  raw_archive_max_mb: string   // 원본 로그 보존소 상한(MB). 빈값=무제한(#163)
+  raw_archive_bytes: number    // 현재 보존소 용량(바이트)
   keys: Record<string, boolean>
   config_path: string
   projects_dir: string

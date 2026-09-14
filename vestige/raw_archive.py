@@ -111,6 +111,23 @@ def mirror_size_bytes() -> int:
     return sum(p.stat().st_size for p in RAW_DIR.rglob("*.jsonl.gz") if p.is_file())
 
 
+def enforce_quota(max_bytes: int) -> int:
+    """보존소가 max_bytes 를 넘으면 오래된 세션(mtime 기준)부터 지워 상한 아래로.
+    기본은 무제한(설정 UI에서 켤 때만 호출됨). 반환: 삭제한 파일 수."""
+    if max_bytes <= 0 or not RAW_DIR.exists():
+        return 0
+    files = sorted(RAW_DIR.rglob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
+    total = sum(p.stat().st_size for p in files)
+    removed = 0
+    for p in files:
+        if total <= max_bytes:
+            break
+        total -= p.stat().st_size
+        p.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 # ── 복구 (#163 P1) ─────────────────────────────────────────
 # Claude Code 는 실행 중인 cwd 를 스스로 인코딩해 ~/.claude/projects/<encoded>/ 밑에서 세션을
 # 찾는다(실측 확인: "C:\Users\me\chat-memory" → "C--Users-me-chat-memory", "C:\growth_report"
