@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS cursors(
   hold_offset INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS raw_cursors(
+  file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp);
 CREATE INDEX IF NOT EXISTS idx_chunks_turn ON chunks(turn_id);
@@ -69,10 +72,18 @@ def _mig_0002_cursor_hold_offset(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE cursors ADD COLUMN hold_offset INTEGER")
 
 
+def _mig_0003_raw_cursors(conn: sqlite3.Connection) -> None:
+    """raw_cursors 테이블 추가(#163 P1: 원본 로그 바이트 보존 미러링 오프셋 추적)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS raw_cursors(
+      file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL
+    )""")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
     _mig_0002_cursor_hold_offset,
+    _mig_0003_raw_cursors,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -358,6 +369,23 @@ class ArchiveDB:
         """모든 파일 커서 초기화 → 다음 인덱싱이 전 세션을 처음부터 재처리(모델 교체 재색인용)."""
         self.conn.execute("DELETE FROM cursors")
         self.conn.commit()
+
+    # --- 원본 미러 커서(#163 P1) — turns 의 hold/재처리와 무관한 순수 append 추적 -------
+    def get_raw_cursor(self, file_path: str) -> int:
+        row = self.conn.execute(
+            "SELECT mirrored_offset FROM raw_cursors WHERE file_path=?", (file_path,)
+        ).fetchone()
+        return row["mirrored_offset"] if row else 0
+
+    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str) -> None:
+        self.conn.execute(
+            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at)
+                 VALUES(?,?,?,?,?)
+               ON CONFLICT(file_path) DO UPDATE SET
+                 mirrored_offset=excluded.mirrored_offset, session_id=excluded.session_id,
+                 source=excluded.source, updated_at=excluded.updated_at""",
+            (file_path, mirrored_offset, session_id, source, time.time()),
+        )
 
     # --- 메타 -----------------------------------------------------------
     def get_meta(self, key: str) -> str | None:

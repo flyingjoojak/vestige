@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
+from . import raw_archive
 from .chunker import chunk_turn
 from .config import (
     CHECKPOINT_TURNS,
@@ -321,6 +322,10 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
             had_new = os.path.getsize(f) != off
         except Exception:  # noqa: BLE001 — 커서/스탯 실패가 색인 회차를 중단시키지 않게(파일별 격리와 동일)
             pass
+        try:   # 원본 미러링(#163 P1): 턴 추출과 완전히 별개 — 여기서 실패해도 색인은 계속.
+            raw_archive.mirror_file(db, f, getattr(adapter, "source_name", adapter.name))
+        except Exception as ex:  # noqa: BLE001
+            log_fn(f"raw mirror 실패 {os.path.basename(str(f))}: {ex}")
         try:
             n = index_file(f, db, vi, embedder, adapter=adapter, on_flush=_on_flush)
             if had_new:
