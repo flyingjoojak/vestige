@@ -86,6 +86,55 @@ def test_api_sessions_aggregates_without_n_plus_1(tmp_path, monkeypatch):
     assert by["Bsession"]["count"] == 1 and by["Bsession"]["headline"] == "B첫질문"
 
 
+def test_turns_to_markdown_basic():
+    # 질문/행동/답변이 순서대로 markdown 섹션으로 직렬화되는지(#190).
+    md = web._turns_to_markdown("sess1", "p", [
+        {"timestamp": "2026-07-24T00:00:00Z", "question": "질문1",
+         "actions": ["Edit(x.py)"], "answer": "답변1"},
+    ])
+    assert "# 세션 sess1" in md
+    assert "`p`" in md
+    assert "## 2026-07-24T00:00:00Z" in md
+    assert "질문1" in md and "- Edit(x.py)" in md and "답변1" in md
+
+
+def test_api_session_export_returns_markdown_attachment(tmp_path, monkeypatch):
+    """turns만 있으면(원문·미러 유무 무관) markdown 첨부파일로 내보내기 가능(#190)."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="legacy:u0", session_id="legacysession", uuid="u0",
+                         parent_uuid=None, timestamp="2026-07-24T00:00:00Z",
+                         project="myproj", question="질문", answer="답변", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    resp = web.api_session_export(id="legacysession")
+    assert "text/markdown" in resp.media_type
+    assert "legacysession.md" in resp.headers["content-disposition"]
+    body = resp.body.decode("utf-8")
+    assert "myproj" in body and "질문" in body and "답변" in body
+
+
+def test_api_session_export_404_when_no_turns(tmp_path, monkeypatch):
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_session_export(id="nosuchsession")
+    assert ei.value.status_code == 404
+
+
+def test_api_session_export_400_for_invalid_id():
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_session_export(id="../../etc/passwd")
+    assert ei.value.status_code == 400
+
+
 def test_safe_resume_cwd_rejects_unc_and_missing(tmp_path):
     """세션 로그의 cwd(신뢰 불가)에서 UNC/네트워크·디바이스·없는 경로를 거부(강제 NTLM 인증 등 차단)."""
     from vestige.web import _safe_resume_cwd

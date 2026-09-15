@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .int8_model import INT8_MODEL_ID
@@ -609,6 +609,37 @@ def api_session(id: str = Query(...), limit: int = 2000):
         "subagent": is_sub,
         "parent": parent,
     }
+
+
+def _turns_to_markdown(sid: str, project: str, turns: list[dict]) -> str:
+    """세션 열람용 markdown 직렬화(#190) - 재개용 아님, 시간순 질문/행동/답변만."""
+    lines = [f"# 세션 {sid}", ""]
+    if project:
+        lines += [f"- 프로젝트: `{project}`", ""]
+    for t in turns:
+        lines += [f"## {t['timestamp']}", ""]
+        if t["question"]:
+            lines += ["**질문**", "", t["question"], ""]
+        if t["actions"]:
+            lines += ["**행동**", *[f"- {a}" for a in t["actions"]], ""]
+        if t["answer"]:
+            lines += ["**답변**", "", t["answer"], ""]
+    return "\n".join(lines)
+
+
+@app.get("/api/session/export")
+def api_session_export(id: str = Query(...)):
+    """세션을 markdown으로 내보내기(#190) - 열람용, 재개 아님. 원문·미러 유무와 무관하게
+    turns(아카이브)만 있으면 가능 - 30일 정리로 원문·미러 둘 다 없어진 레거시 세션의 유일한
+    열람 수단."""
+    if not _SID_RE.fullmatch(id):
+        raise HTTPException(status_code=400, detail={"code": "invalid_session_id", "msg": "잘못된 세션 id"})
+    data = api_session(id=id)   # 기존 turns/project 조회 로직 재사용(중복 없음)
+    if not data["turns"]:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
+    md = _turns_to_markdown(id, data["project"], data["turns"])
+    return Response(content=md, media_type="text/markdown; charset=utf-8",
+                     headers={"Content-Disposition": f'attachment; filename="{id}.md"'})
 
 
 @app.get("/api/sessions")

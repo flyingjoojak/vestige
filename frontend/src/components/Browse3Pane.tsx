@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -343,6 +343,13 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               )}
               {ready && !fileExists && !canRestore && !resumeMsg && (
                 <div id="resume-missing-note" className="mt-1 text-[10.5px] text-destructive">{t("browse.noLogNote")}</div>
+              )}
+              {/* 원문·미러 둘 다 없는 레거시 세션: 재개는 불가능해도 아카이브(turns)로 열람용 markdown은 내보낼 수 있음(#190) */}
+              {ready && !fileExists && !canRestore && sel && (
+                <a href={`/api/session/export?id=${encodeURIComponent(sel)}`} download={`${sel}.md`}
+                  className="mt-1 inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
+                  <FileDown className="size-3.5" />{t("browse.exportMarkdown")}
+                </a>
               )}
             </div>
           )}
