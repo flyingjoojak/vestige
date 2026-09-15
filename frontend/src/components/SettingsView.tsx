@@ -717,20 +717,22 @@ export function SettingsView() {
   }
 
   // 경로 계열 설정(로그 폴더·보존소·CLI)은 저장 흐름이 같다 — 한 곳으로 모아 동작을 일치시킨다.
-  async function savePath(key: string, value: string,
+  async function savePath(key: string, value: string, setValue: (v: string) => void,
                           setSaved: (v: boolean) => void, setErr: (v: string) => void) {
+    const v = value.trim()
     setErr("")
     try {
-      const r = await putConfig({ [key]: value.trim() })
+      const r = await putConfig({ [key]: v })
       if (!r.ok) { setErr(errText(t, r, "settings.saveFailed")); return }
     } catch (e) { setErr(errText(t, e, "settings.saveFailed")); return }
+    setValue(v)   // 실제 저장된 값(trim 후)과 입력칸을 일치시킨다 — 앞뒤 공백 넣었을 때 표시 어긋남 방지
     setSaved(true); setTimeout(() => setSaved(false), 1800)
     getConfig().then(setCfg).catch(() => {})
   }
-  const saveProjects = () => savePath("CLAUDE_PROJECTS_DIR", projectsDir, setProjSaved, setProjErr)
-  const saveCodex = () => savePath("CODEX_SESSIONS_DIR", codexDir, setCodexSaved, setCodexErr)
-  const saveRawDir = () => savePath("VESTIGE_RAW_ARCHIVE_DIR", rawDir, setRawSaved, setRawErr)
-  const saveClaudeBin = () => savePath("VESTIGE_CLAUDE_BIN", claudeBin, setBinSaved, setBinErr)
+  const saveProjects = () => savePath("CLAUDE_PROJECTS_DIR", projectsDir, setProjectsDir, setProjSaved, setProjErr)
+  const saveCodex = () => savePath("CODEX_SESSIONS_DIR", codexDir, setCodexDir, setCodexSaved, setCodexErr)
+  const saveRawDir = () => savePath("VESTIGE_RAW_ARCHIVE_DIR", rawDir, setRawDir, setRawSaved, setRawErr)
+  const saveClaudeBin = () => savePath("VESTIGE_CLAUDE_BIN", claudeBin, setClaudeBin, setBinSaved, setBinErr)
 
   // 저장 실패 시 서버 진실로 되돌림(낙관적으로 바꾼 indexMode가 미저장 상태로 남지 않게).
   function resyncIndex() {
