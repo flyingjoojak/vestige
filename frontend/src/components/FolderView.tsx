@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronRight, FolderPlus, Folder as FolderIcon, Loader2, MessagesSquare,
-  Pencil, Search as SearchIcon, Trash2, X,
+  ChevronDown, ChevronRight, ChevronUp, FolderPlus, Folder as FolderIcon, Loader2,
+  MessagesSquare, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
-  createFolder, deleteFolder, getFolder, listFolders, removeFromFolder, renameFolder, search,
+  createFolder, deleteFolder, getFolder, listFolders, removeFromFolder, renameFolder,
+  renameFolderItem, reorderFolder, search,
 } from "@/lib/api"
+import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
-import type { Folder, FolderDetail, Hit } from "@/lib/types"
+import type { Folder, FolderDetail, FolderItem, Hit } from "@/lib/types"
 
 // 폴더(#201) = 사용자가 직접 만드는 수동 군집. 자동 군집(의미 지도)이 알아서 묶어주는 것과 달리
 // 원하는 것만 모아두고, 그 안에서만 검색한다. 왼쪽 트리에서 고르고 오른쪽에서 내용·검색.
@@ -71,7 +73,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle 
   )
 }
 
-export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string) => void }) {
+export function FolderView() {
   const { t } = useTranslation()
   const { confirm, prompt } = useDialogs()
   const [folders, setFolders] = useState<Folder[] | null>(null)
@@ -82,6 +84,8 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
   const [q, setQ] = useState("")
   const [hits, setHits] = useState<Hit[] | null>(null)   // null = 검색 안 한 상태(폴더 내용 표시)
   const [searching, setSearching] = useState(false)
+  // 이 화면 안에서 열어 볼 대화(세션 탭으로 넘어가지 않는다 — 폴더를 보다가 맥락이 끊기지 않게).
+  const [openConv, setOpenConv] = useState<{ session: string; turn?: string } | null>(null)
   const reqId = useRef(0)   // 최신 검색만 반영
 
   const loadFolders = useCallback(() => {
@@ -91,7 +95,7 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
 
   // 폴더를 바꾸면 그 폴더 내용을 불러오고 검색 상태는 초기화.
   useEffect(() => {
-    setHits(null); setQ("")
+    setHits(null); setQ(""); setOpenConv(null)
     if (sel == null) { setDetail(null); return }
     setDetail(null)
     getFolder(sel).then(setDetail).catch((e) => setErr(errText(t, e, "folders.loadFailed")))
@@ -138,6 +142,36 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
     } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
   }
 
+  // 폴더에서만 쓰는 이름. 원본 턴/세션 제목은 그대로다.
+  async function renameItem(it: FolderItem) {
+    if (sel == null) return
+    const alias = await prompt({
+      title: t("folders.itemRename"),
+      description: t("folders.itemRenameHint", { original: it.original_headline || it.headline }),
+      defaultValue: it.alias ?? it.headline, confirmLabel: t("common.save"),
+    })
+    if (alias == null) return
+    try {
+      await renameFolderItem(sel, it.kind === "turn" ? { turnId: it.ref } : { sessionId: it.ref }, alias)
+      reload()
+    } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
+  }
+
+  // 위/아래로 한 칸. 화면에 보이는 순서를 그대로 저장한다(낙관적 반영 후 실패하면 되돌림).
+  async function moveItem(idx: number, dir: -1 | 1) {
+    if (sel == null || !detail) return
+    const next = [...detail.items]
+    const to = idx + dir
+    if (to < 0 || to >= next.length) return
+    ;[next[idx], next[to]] = [next[to], next[idx]]
+    setDetail({ ...detail, items: next })
+    try {
+      await reorderFolder(sel, next.map((x) => ({ kind: x.kind, ref: x.ref })))
+    } catch (e) {
+      setErr(errText(t, e, "folders.saveFailed")); reload()
+    }
+  }
+
   async function removeItem(kind: "turn" | "session", ref: string) {
     if (sel == null) return
     try {
@@ -169,7 +203,7 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
   const cur = detail?.folder
 
   return (
-    <div className="grid h-full grid-cols-[minmax(220px,280px)_1fr] overflow-hidden">
+    <div className="grid h-full grid-cols-[minmax(200px,240px)_minmax(300px,360px)_1fr] overflow-hidden">
       {/* 왼쪽: 폴더 트리 */}
       <div className="flex min-h-0 flex-col border-r">
         <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5">
@@ -197,8 +231,8 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
         </div>
       </div>
 
-      {/* 오른쪽: 선택한 폴더의 내용 + 폴더 내 검색 */}
-      <div className="flex min-h-0 flex-col">
+      {/* 가운데: 선택한 폴더의 내용 + 폴더 내 검색 */}
+      <div className="flex min-h-0 flex-col border-r">
         {err && (
           <div className="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-[12px] text-destructive">
             <span className="flex-1">{err}</span>
@@ -254,8 +288,9 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
                 hits.length === 0 && !searching
                   ? <div className="py-10 text-center text-sm text-muted-foreground">{t("folders.noResults")}</div>
                   : hits.map((h) => (
-                    <button key={h.id} onClick={() => onOpen(h.session_full, h.id)}
-                      className="w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50">
+                    <button key={h.id} onClick={() => setOpenConv({ session: h.session_full, turn: h.id })}
+                      className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                        openConv?.turn === h.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                       <div className="mb-1 text-[10.5px] text-muted-foreground tabular-nums">
                         {fmtTime(h.timestamp)} · {t("search.session", { n: h.session })}
                       </div>
@@ -273,29 +308,60 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
                       <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                     </button>
                   ))}
-                  {detail.items.map((it) => (
-                    <div key={`${it.kind}:${it.ref}`}
-                      className="group flex items-center gap-2 rounded-lg border bg-card p-2.5 transition-colors hover:bg-muted/50">
-                      <button onClick={() => onOpen(it.session_id ?? "", it.kind === "turn" ? it.ref : undefined)}
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                        {it.kind === "session"
-                          ? <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
-                          : <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />}
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium">{it.headline || t("folders.untitled")}</span>
-                          <span className="block truncate text-[10.5px] text-muted-foreground tabular-nums">
-                            {it.kind === "session" ? t("folders.sessionItem", { count: it.count ?? 0 }) : t("folders.turnItem")}
-                            {it.timestamp ? ` · ${fmtTime(it.timestamp)}` : ""}
-                          </span>
+                  {detail.items.map((it, idx) => {
+                    const active = it.kind === "session"
+                      ? openConv?.session === it.ref && !openConv?.turn
+                      : openConv?.turn === it.ref
+                    return (
+                      <div key={`${it.kind}:${it.ref}`}
+                        className={`group flex items-center gap-1.5 rounded-lg border p-2.5 transition-colors ${
+                          active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+                        {/* 순서 바꾸기 — 드래그 대신 위/아래 한 칸(작은 목록엔 이게 더 확실하다) */}
+                        <span className="flex shrink-0 flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0}
+                            title={t("folders.moveUp")} aria-label={t("folders.moveUp")}
+                            className="rounded p-0.5 hover:bg-muted disabled:opacity-30">
+                            <ChevronUp className="size-3" />
+                          </button>
+                          <button type="button" onClick={() => moveItem(idx, 1)} disabled={idx === detail.items.length - 1}
+                            title={t("folders.moveDown")} aria-label={t("folders.moveDown")}
+                            className="rounded p-0.5 hover:bg-muted disabled:opacity-30">
+                            <ChevronDown className="size-3" />
+                          </button>
                         </span>
-                      </button>
-                      <button type="button" onClick={() => removeItem(it.kind, it.ref)}
-                        title={t("folders.removeItem")} aria-label={t("folders.removeItem")}
-                        className="shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100 focus-visible:opacity-100">
-                        <X className="size-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                        <button onClick={() => setOpenConv({
+                          session: it.kind === "session" ? it.ref : (it.session_id ?? ""),
+                          turn: it.kind === "turn" ? it.ref : undefined,
+                        })} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                          {it.kind === "session"
+                            ? <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
+                            : <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />}
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-1">
+                              <span className="min-w-0 truncate text-[13px] font-medium">{it.headline || t("folders.untitled")}</span>
+                              {it.alias && <Tag className="size-3 shrink-0 text-primary/70" aria-label={t("folders.aliasBadge")} />}
+                            </span>
+                            <span className="block truncate text-[10.5px] text-muted-foreground tabular-nums">
+                              {it.kind === "session" ? t("folders.sessionItem", { count: it.count ?? 0 }) : t("folders.turnItem")}
+                              {it.timestamp ? ` · ${fmtTime(it.timestamp)}` : ""}
+                            </span>
+                          </span>
+                        </button>
+                        <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          <button type="button" onClick={() => renameItem(it)}
+                            title={t("folders.itemRename")} aria-label={t("folders.itemRename")}
+                            className="rounded p-1 hover:bg-muted">
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button type="button" onClick={() => removeItem(it.kind, it.ref)}
+                            title={t("folders.removeItem")} aria-label={t("folders.removeItem")}
+                            className="rounded p-1 hover:bg-muted">
+                            <X className="size-3.5" />
+                          </button>
+                        </span>
+                      </div>
+                    )
+                  })}
                   {detail.children.length === 0 && detail.items.length === 0 && (
                     <div className="py-10 text-center text-sm text-muted-foreground">{t("folders.emptyItems")}</div>
                   )}
@@ -304,6 +370,16 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
             </div>
           </>
         )}
+      </div>
+
+      {/* 오른쪽: 고른 항목의 대화를 이 화면 안에서(세션 탭으로 넘어가지 않는다 — 맥락이 끊기지 않게) */}
+      <div className="min-h-0 overflow-hidden">
+        {openConv?.session
+          ? <ChatThread key={`${openConv.session}:${openConv.turn ?? ""}`}
+              session={openConv.session} focusTurn={openConv.turn} />
+          : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
+              {t("folders.pickItemPrompt")}
+            </div>}
       </div>
     </div>
   )

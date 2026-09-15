@@ -91,7 +91,10 @@ export interface FolderItem {
   ref: string            // turn id 또는 session id
   added_at: number
   session_id: string | null
-  headline: string
+  headline: string       // 별칭이 있으면 별칭, 없으면 원본 제목
+  original_headline?: string   // 원본 제목(별칭을 지웠을 때 돌아갈 이름)
+  alias?: string | null  // 이 폴더에서만 쓰는 이름
+  position?: number | null
   timestamp: string | null
   count?: number         // kind=session 일 때 그 세션의 현재 턴 수
 }

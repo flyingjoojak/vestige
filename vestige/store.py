@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS folder_items(
   kind TEXT NOT NULL,      -- 'turn' | 'session'
   ref TEXT NOT NULL,       -- turn id 또는 session id
   added_at REAL,
+  alias TEXT,              -- 이 폴더에서만 쓰는 표시 이름(원본 제목은 그대로)
+  position REAL,           -- 폴더 안 정렬 순서(작을수록 위)
   PRIMARY KEY(folder_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
@@ -122,6 +124,20 @@ def _mig_0005_folders(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_folder_items_folder ON folder_items(folder_id)")
 
 
+def _mig_0006_folder_item_alias_position(conn: sqlite3.Connection) -> None:
+    """folder_items 에 alias/position 추가(#201 후속).
+
+    alias = 폴더 안에서만 보이는 이름. 원본 턴/세션 제목은 건드리지 않는다 — 모아놓고 보기 좋게
+    내가 붙이는 라벨일 뿐이라, 같은 대화를 다른 폴더에서 다르게 불러도 된다.
+    position = 사용자가 정한 순서(작을수록 위). NULL 이면 added_at 순으로 밀려난다.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(folder_items)")}
+    if "alias" not in cols:
+        conn.execute("ALTER TABLE folder_items ADD COLUMN alias TEXT")
+    if "position" not in cols:
+        conn.execute("ALTER TABLE folder_items ADD COLUMN position REAL")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -129,6 +145,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0003_raw_cursors,
     _mig_0004_hidden_turns,
     _mig_0005_folders,
+    _mig_0006_folder_item_alias_position,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -562,9 +579,28 @@ class ArchiveDB:
         return len(ids)
 
     def add_to_folder(self, folder_id: int, kind: str, ref: str) -> None:
+        """새로 담기면 목록 맨 아래로(position = 현재 최대 + 1)."""
+        nxt = self.conn.execute(
+            "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM folder_items WHERE folder_id=?",
+            (folder_id,)).fetchone()["p"]
         self.conn.execute(
-            "INSERT OR IGNORE INTO folder_items(folder_id, kind, ref, added_at) VALUES(?,?,?,?)",
-            (folder_id, kind, ref, time.time()))
+            "INSERT OR IGNORE INTO folder_items(folder_id, kind, ref, added_at, position) VALUES(?,?,?,?,?)",
+            (folder_id, kind, ref, time.time(), nxt))
+        self.conn.commit()
+
+    def set_item_alias(self, folder_id: int, kind: str, ref: str, alias: str | None) -> None:
+        """이 폴더에서만 쓸 표시 이름. 원본 턴/세션 제목은 건드리지 않는다(빈 값이면 원래 제목으로)."""
+        self.conn.execute(
+            "UPDATE folder_items SET alias=? WHERE folder_id=? AND kind=? AND ref=?",
+            (alias or None, folder_id, kind, ref))
+        self.conn.commit()
+
+    def reorder_folder(self, folder_id: int, order: list[tuple[str, str]]) -> None:
+        """폴더 안 항목 순서를 통째로 다시 매긴다. order = [(kind, ref), …] 화면에 보이는 순서.
+        목록에 없는 항목(그 사이 다른 창에서 추가된 것 등)은 건드리지 않아 뒤쪽에 남는다."""
+        self.conn.executemany(
+            "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
+            [(i, folder_id, kind, ref) for i, (kind, ref) in enumerate(order, start=1)])
         self.conn.commit()
 
     def remove_from_folder(self, folder_id: int, kind: str, ref: str) -> None:
@@ -575,11 +611,14 @@ class ArchiveDB:
     def folder_items(self, folder_id: int) -> list[dict]:
         """폴더에 '직접' 담긴 항목(하위 폴더 제외). 표시용 헤드라인을 붙여 돌려준다."""
         rows = self.conn.execute(
-            "SELECT kind, ref, added_at FROM folder_items WHERE folder_id=? ORDER BY added_at DESC",
+            # 사용자가 정한 순서(position) 우선, 아직 없으면 담은 순. NULL 은 뒤로.
+            "SELECT kind, ref, added_at, alias, position FROM folder_items WHERE folder_id=? "
+            "ORDER BY (position IS NULL), position, added_at",
             (folder_id,)).fetchall()
         out = []
         for r in rows:
-            item = {"kind": r["kind"], "ref": r["ref"], "added_at": r["added_at"]}
+            item = {"kind": r["kind"], "ref": r["ref"], "added_at": r["added_at"],
+                    "alias": r["alias"], "position": r["position"]}
             if r["kind"] == "turn":
                 t = self.conn.execute(
                     "SELECT session_id, summary, question, timestamp FROM turns WHERE id=?",
@@ -597,6 +636,10 @@ class ArchiveDB:
                 item |= {"session_id": r["ref"], "count": t["n"] if t else 0,
                          "headline": ((head["summary"] or head["question"]) if head else "") or "",
                          "timestamp": t["ended"] if t else None}
+            # 폴더에서 붙인 이름이 있으면 그걸 제목으로(원본은 original_headline 으로 함께 내려줌).
+            item["original_headline"] = item["headline"]
+            if r["alias"]:
+                item["headline"] = r["alias"]
             out.append(item)
         return out
 
