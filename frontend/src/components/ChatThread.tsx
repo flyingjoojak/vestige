@@ -81,6 +81,14 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
 // 세션 전체를 채팅 스레드로 렌더. focusTurn이 있으면 그 턴을 강조+상단 스크롤.
 const PAD = 25   // 포커스 턴 위/아래로 이만큼만 먼저 렌더(큰 세션 로딩 지연 방지)
 
+// 포커스 턴 주변 렌더 창. data 를 받는 시점에 함께 확정해야 첫 렌더부터 최종 창으로 그려진다.
+function windowFor(d: Detail, focusTurn?: string) {
+  const n = d.turns.length
+  const fi = focusTurn ? d.turns.findIndex((t) => t.id === focusTurn) : 0
+  const c = fi >= 0 ? fi : 0
+  return { s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) }
+}
+
 export function ChatThread({ session, focusTurn }: { session: string; focusTurn?: string }) {
   const { t } = useTranslation()
   const [data, setData] = useState<Detail | null>(null)
@@ -89,8 +97,14 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   const [range, setRange] = useState<{ s: number; e: number }>({ s: 0, e: PAD * 2 })
   useEffect(() => {
     setData(null); setErr(""); setHideErr("")
-    getSession(session).then(setData).catch((e) => setErr(String(e)))
-  }, [session])
+    getSession(session).then((d) => {
+      // 렌더 창을 data 와 '같은 렌더'에 확정한다(두 setState 는 배치됨). 효과에서 뒤늦게 잡으면
+      // 첫 렌더가 기본 창(0~50)으로 그려지고, 그 사이 자식이 먼저 scrollIntoView 를 해버려
+      // 곧이어 창이 바뀌며(위쪽 턴이 빠지며) 지목한 턴이 엉뚱한 위치로 밀린다(26~49번째에서 발생).
+      setRange(windowFor(d, focusTurn))
+      setData(d)
+    }).catch((e) => setErr(String(e)))
+  }, [session, focusTurn])
 
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
@@ -118,14 +132,6 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
-  // 포커스 턴 주변으로 렌더 창을 잡는다(전부 렌더하면 500+턴에서 1초+ 걸림).
-  useEffect(() => {
-    if (!data) return
-    const n = data.turns.length
-    const fi = focusTurn ? data.turns.findIndex((t) => t.id === focusTurn) : 0
-    const c = fi >= 0 ? fi : 0
-    setRange({ s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) })
-  }, [data, focusTurn])
 
   const turns = data?.turns ?? []
   const foldedCount = turns.filter((x) => x.hidden).length
