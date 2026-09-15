@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChatThread } from "./ChatThread"
 import { SourceFilter } from "./SourceFilter"
+import { AddToFolder } from "./AddToFolder"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { getSources, hideTurn, search, unhideTurn, type SearchMode, type SourceOption } from "@/lib/api"
 import { fmtTime } from "@/lib/format"
@@ -234,11 +235,14 @@ export function SearchView() {
                   <span>{fmtTime(h.timestamp)}</span>
                   <span className="opacity-40">·</span>
                   <span>{t("search.session", { n: h.session })}</span>
-                  <button type="button" onClick={(e) => fold(h.id, true, e)}
-                    title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
-                    className="ml-auto inline-flex items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
-                    <ChevronsDownUp className="size-3.5" />
-                  </button>
+                  <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                    <AddToFolder target={{ turnId: h.id }} />
+                    <button type="button" onClick={(e) => fold(h.id, true, e)}
+                      title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
+                      className="inline-flex items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
+                      <ChevronsDownUp className="size-3.5" />
+                    </button>
+                  </span>
                 </div>
                 <div className="line-clamp-2 text-[13.5px] font-medium leading-snug text-balance">
                   {h.summary || h.question || t("search.untitled")}

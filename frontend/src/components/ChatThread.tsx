@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
 import { getSession, hideSession as apiHideSession, hideTurn, unhideTurn } from "@/lib/api"
+import { AddToFolder } from "./AddToFolder"
 import { errText } from "@/lib/errors"
 import { fmtTime, mdToHtml } from "@/lib/format"
 import type { SessionDetail as Detail, SessionTurn } from "@/lib/types"
@@ -48,10 +49,13 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
             <FileText className="mr-1 -mt-0.5 inline size-3 text-primary/70" />{t.summary}
           </span>
         )}
-        <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
-          className="ml-auto inline-flex shrink-0 items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
-          <ChevronsDownUp className="size-3.5" />
-        </button>
+        <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <AddToFolder target={{ turnId: t.id }} />
+          <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
+            className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
+            <ChevronsDownUp className="size-3.5" />
+          </button>
+        </span>
       </div>
       <div className="flex flex-col items-end">
         <span className="mb-1 mr-1 text-[10px] font-medium text-muted-foreground">{tr("chat.question")}</span>
@@ -143,6 +147,10 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
           {t("chat.sessionLabel", { id: session.slice(0, 8) })}{data ? ` · ${t("chat.turnCount", { count: data.count })}` : ""}
           {foldedCount > 0 && ` · ${t("chat.foldedCount", { count: foldedCount })}`}
         </span>
+        {data && turns.length > 0 && (
+          <AddToFolder target={{ sessionId: session }} showLabel
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted" />
+        )}
         {data && turns.length > 0 && (
           allFolded
             ? <button type="button" onClick={() => turns.forEach((x) => foldTurn(x.id, false))} title={t("chat.unfoldAll")}
