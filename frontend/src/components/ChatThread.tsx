@@ -8,13 +8,20 @@ import type { SessionDetail as Detail, SessionTurn } from "@/lib/types"
 
 // 접힌 턴(#128): 사라지지 않고 제자리에 한 줄로 남는다 → 맥락이 유지되고 바로 펼 수 있다.
 // (접힌 동안은 검색·지도에서만 빠진다)
-function FoldedTurn({ t, i, onUnhide }: { t: SessionTurn; i: number; onUnhide: (id: string) => void }) {
+function FoldedTurn({ t, i, highlight, onUnhide }: {
+  t: SessionTurn; i: number; highlight: boolean; onUnhide: (id: string) => void
+}) {
   const { t: tr } = useTranslation()
   const headline = t.summary || t.question || tr("chat.noQuestion")
+  // 접힌 턴도 지목해서 들어올 수 있다('접힘' 화면의 '세션 열기') → 펼친 턴과 똑같이 그 자리로 이동·강조.
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => { if (highlight) ref.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" }) }, [highlight])
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+    <div ref={ref} className={`flex scroll-mt-4 items-center gap-2 rounded-lg border border-dashed px-3 py-1.5 text-[11px] text-muted-foreground ${
+      highlight ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30" : "bg-muted/30"}`}>
       <span className="shrink-0 tabular-nums">#{i + 1}</span>
       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{tr("chat.folded")}</span>
+      {highlight && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{tr("chat.selected")}</span>}
       <span className="min-w-0 flex-1 truncate" title={headline}>{headline}</span>
       <button type="button" onClick={() => onUnhide(t.id)}
         className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
@@ -153,7 +160,7 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadPrev", { count: range.s })}</button>
           )}
           {turns.slice(range.s, range.e).map((turn, j) => (turn.hidden
-            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} onUnhide={(id) => foldTurn(id, false)} />
+            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onUnhide={(id) => foldTurn(id, false)} />
             : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onHide={(id) => foldTurn(id, true)} />))}
           {data && range.e < turns.length && (
             <button onClick={() => setRange((r) => ({ ...r, e: Math.min(turns.length, r.e + 50) }))}
