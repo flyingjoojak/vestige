@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import {
   createFolder, deleteFolder, getFolder, listFolders, removeFromFolder, renameFolder, search,
 } from "@/lib/api"
+import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
 import type { Folder, FolderDetail, Hit } from "@/lib/types"
@@ -72,6 +73,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle 
 
 export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string) => void }) {
   const { t } = useTranslation()
+  const { confirm, prompt } = useDialogs()
   const [folders, setFolders] = useState<Folder[] | null>(null)
   const [sel, setSel] = useState<number | null>(null)
   const [detail, setDetail] = useState<FolderDetail | null>(null)
@@ -101,23 +103,35 @@ export function FolderView({ onOpen }: { onOpen: (session: string, turn?: string
   }
 
   async function addFolder(parentId: number | null) {
-    const name = window.prompt(parentId == null ? t("folders.newPrompt") : t("folders.newChildPrompt"))
-    if (!name?.trim()) return
+    const name = await prompt({
+      title: parentId == null ? t("folders.new") : t("folders.newChild"),
+      description: parentId == null ? t("folders.newPrompt") : t("folders.newChildPrompt"),
+      confirmLabel: t("folders.create"),
+    })
+    if (!name) return
     try {
-      const r = await createFolder(name.trim(), parentId)
+      const r = await createFolder(name, parentId)
       loadFolders(); setSel(r.id)
     } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
   }
 
   async function rename(f: Folder) {
-    const name = window.prompt(t("folders.renamePrompt"), f.name)
-    if (!name?.trim() || name.trim() === f.name) return
-    try { await renameFolder(f.id, name.trim()); reload() }
+    const name = await prompt({
+      title: t("folders.rename"), description: t("folders.renamePrompt"),
+      defaultValue: f.name, confirmLabel: t("common.save"),
+    })
+    if (!name || name === f.name) return
+    try { await renameFolder(f.id, name); reload() }
     catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
   }
 
   async function remove(f: Folder) {
-    if (!window.confirm(t("folders.deleteConfirm", { name: f.name }))) return
+    const ok = await confirm({
+      title: t("folders.deleteTitle", { name: f.name }),
+      description: t("folders.deleteConfirm", { name: f.name }),
+      confirmLabel: t("folders.delete"), danger: true,
+    })
+    if (!ok) return
     try {
       await deleteFolder(f.id)
       setSel(null); loadFolders()

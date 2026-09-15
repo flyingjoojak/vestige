@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
 import { getSession, hideSession as apiHideSession, hideTurn, unhideTurn } from "@/lib/api"
 import { AddToFolder } from "./AddToFolder"
+import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime, mdToHtml } from "@/lib/format"
 import type { SessionDetail as Detail, SessionTurn } from "@/lib/types"
@@ -95,6 +96,7 @@ function windowFor(d: Detail, focusTurn?: string) {
 
 export function ChatThread({ session, focusTurn }: { session: string; focusTurn?: string }) {
   const { t } = useTranslation()
+  const { confirm } = useDialogs()
   const [data, setData] = useState<Detail | null>(null)
   const [err, setErr] = useState("")
   const [hideErr, setHideErr] = useState("")   // 접기/펼치기(#128) 실패 알림
@@ -126,7 +128,10 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   }
   // 세션 전체 접기 — 확인 후 이 세션의 모든 턴을 한 번에(목록에선 '접힘'으로 남는다).
   async function foldWholeSession() {
-    if (!window.confirm(t("chat.foldSessionConfirm"))) return
+    const ok = await confirm({
+      title: t("chat.foldSession"), description: t("chat.foldSessionConfirm"), confirmLabel: t("chat.foldSession"),
+    })
+    if (!ok) return
     const ids = new Set((data?.turns ?? []).map((x) => x.id))
     setFolded(ids, true)
     try {

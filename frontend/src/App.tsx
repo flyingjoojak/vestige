@@ -10,6 +10,7 @@ import { FoldedView } from "@/components/FoldedView"
 import { FolderView } from "@/components/FolderView"
 import { Onboarding } from "@/components/Onboarding"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
+import { DialogProvider } from "@/components/ui/dialogs"
 import { StatusBar } from "@/components/StatusBar"
 import { UpdateBanner } from "@/components/UpdateBanner"
 import { AlertTriangle } from "lucide-react"
@@ -136,6 +137,7 @@ export default function App() {
   }
 
   return (
+    <DialogProvider>
     <div className="grid h-full grid-cols-[60px_1fr] overflow-hidden pb-7">
       {/* 옵시디언식 좌측 아이콘 리본 */}
       <nav aria-label={t("nav.mainAria")} className="flex flex-col items-center gap-1 border-r bg-sidebar py-3">
@@ -225,5 +227,6 @@ export default function App() {
       {/* 하단 상태바 — 설정에 안 들어가도 저장소 현황·색인·동기화를 한눈에 */}
       <StatusBar />
     </div>
+    </DialogProvider>
   )
 }
