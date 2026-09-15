@@ -590,17 +590,19 @@ class ArchiveDB:
         return out
 
     def folder_turn_ids(self, folder_id: int, include_descendants: bool = True) -> set[str]:
-        """폴더가 가리키는 모든 턴 id(폴더 내 검색용). 세션 참조는 지금의 턴 전체로 펼친다."""
+        """폴더가 가리키는 모든 턴 id(폴더 내 검색용). 세션 참조는 지금의 턴 전체로 펼친다.
+
+        세션 참조를 파이썬으로 모아 IN(?,?,…) 으로 되묻지 않고 turns 와 직접 조인한다 —
+        담긴 세션이 수백~수천 개면 바인딩 변수 한도(구 SQLite 기본 999)를 넘겨 터지기 때문.
+        폴더 id 목록은 폴더 수에 묶여 있어 그대로 둔다.
+        """
         ids = self.folder_descendants(folder_id) if include_descendants else [folder_id]
         marks = ",".join("?" * len(ids))
-        rows = self.conn.execute(
-            f"SELECT kind, ref FROM folder_items WHERE folder_id IN ({marks})", ids).fetchall()
-        turn_ids = {r["ref"] for r in rows if r["kind"] == "turn"}
-        sessions = [r["ref"] for r in rows if r["kind"] == "session"]
-        if sessions:
-            smarks = ",".join("?" * len(sessions))
-            turn_ids |= {r["id"] for r in self.conn.execute(
-                f"SELECT id FROM turns WHERE session_id IN ({smarks})", sessions)}
+        turn_ids = {r["ref"] for r in self.conn.execute(
+            f"SELECT ref FROM folder_items WHERE folder_id IN ({marks}) AND kind='turn'", ids)}
+        turn_ids |= {r["id"] for r in self.conn.execute(
+            f"SELECT t.id FROM turns t JOIN folder_items i ON i.ref = t.session_id "
+            f"WHERE i.folder_id IN ({marks}) AND i.kind='session'", ids)}
         return turn_ids
 
     def folders_of(self, kind: str, ref: str) -> list[int]:

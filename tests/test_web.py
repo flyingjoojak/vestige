@@ -368,3 +368,25 @@ def test_search_scoped_to_folder(tmp_path, monkeypatch):
 
     W.api_search(q="아무거나", mode="keyword")
     assert captured["allow_ids"] is None            # 폴더 미지정이면 전체
+
+
+def test_folder_endpoints_reject_bad_input_and_unknown_folder(tmp_path, monkeypatch):
+    """잘못된 폴더 id 는 500(예상치 못한 오류)이 아니라 400, 없는 폴더는 404."""
+    import vestige.web as W
+
+    db = _seed_folder_db(tmp_path, monkeypatch)
+
+    for bad in (None, "abc"):
+        with pytest.raises(web.HTTPException) as ei:
+            web.api_folder_rename({"id": bad, "name": "x"})
+        assert ei.value.status_code == 400
+
+    # 검색에서 없는 폴더를 가리키면 조용한 0건이 아니라 404(지워진 폴더를 든 화면을 드러냄)
+    monkeypatch.setattr(W, "make_index", lambda *a, **k: None)
+    monkeypatch.setattr(W, "run_search", lambda *a, **kw: [])
+    with pytest.raises(web.HTTPException) as ei:
+        W.api_search(q="x", mode="keyword", folder=9999)
+    assert ei.value.status_code == 404
+
+    f = db.create_folder("빈 폴더")                      # 비어있는 건 정상 응답 0건
+    assert W.api_search(q="x", mode="keyword", folder=f)["count"] == 0
