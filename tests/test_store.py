@@ -231,8 +231,8 @@ def test_hide_session_hides_all_its_turns(tmp_path):
 def test_hide_turns_idempotent_and_empty_list(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(_turn("s1:u1")); db.commit()
-    db.hide_turns(["s1:u1"])
-    db.hide_turns(["s1:u1"])   # 재숨김 - 에러 없이 그대로
+    assert db.hide_turns(["s1:u1"]) == 1
+    assert db.hide_turns(["s1:u1"]) == 0   # 재숨김 - 실제로 새로 숨겨진 건 0개(정확한 카운트)
     assert db.hidden_turn_ids() == {"s1:u1"}
     assert db.hide_turns([]) == 0   # 빈 목록 no-op
 

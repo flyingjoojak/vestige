@@ -651,11 +651,14 @@ def api_hide(payload: dict):
     turn_id = (payload or {}).get("turn_id")
     session_id = (payload or {}).get("session_id")
     if turn_id:
+        if db.get_turn(turn_id) is None:   # 없는 id를 조용히 숨김목록에 넣는 유령 행 방지
+            raise HTTPException(status_code=404, detail={"code": "turn_not_found", "msg": "턴을 찾을 수 없음"})
         n = db.hide_turns([turn_id])
     elif session_id:
         n = db.hide_session(session_id)
     else:
         raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
+    _graph3d_invalidate()   # 지도 캐시가 숨긴 턴을 계속 보여주지 않도록 즉시 폐기
     return {"ok": True, "hidden": n}
 
 
@@ -671,6 +674,7 @@ def api_unhide(payload: dict):
         db.unhide_session(session_id)
     else:
         raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
+    _graph3d_invalidate()   # 지도 캐시가 복원된 턴을 계속 빼놓지 않도록 즉시 폐기
     return {"ok": True}
 
 

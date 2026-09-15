@@ -183,6 +183,20 @@ def test_api_hide_rejects_missing_target():
     assert ei.value.status_code == 400
 
 
+def test_api_hide_rejects_unknown_turn_id(tmp_path, monkeypatch):
+    """존재하지 않는 turn_id 는 유령 숨김 행을 만들지 않고 404."""
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_hide({"turn_id": "no-such-turn"})
+    assert ei.value.status_code == 404
+    assert web.api_hidden()["hidden"] == []
+
+
 def test_safe_resume_cwd_rejects_unc_and_missing(tmp_path):
     """세션 로그의 cwd(신뢰 불가)에서 UNC/네트워크·디바이스·없는 경로를 거부(강제 NTLM 인증 등 차단)."""
     from vestige.web import _safe_resume_cwd

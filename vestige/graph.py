@@ -130,14 +130,19 @@ def _succeed_cluster_ids(new_keys: dict[int, set], prev_members: list | None) ->
 
 
 def build_graph(vi, db, dims: int = 2, prev_members: list | None = None) -> dict:
+    hidden = db.hidden_turn_ids()   # 숨김(#128) - 투영·군집 계산에 들어가기 전에 빼야 다른 점에도 영향이 없다
     keys, mat = vi.all_vectors()
+    if hidden and len(keys):
+        keep = [i for i, k in enumerate(keys) if k.rsplit("#", 1)[0] not in hidden]
+        if len(keep) != len(keys):
+            keys = [keys[i] for i in keep]
+            mat = mat[keep]
     if len(keys) == 0:
         return {"points": [], "clusters": [], "paths": [], "method": None, "dims": dims, "_members": []}
 
     coords, method = _project(mat, dims)    # 표시용 3D 투영
     labels = _cluster(mat)                  # 군집화는 고차원 임베딩에서(표시와 분리)
 
-    hidden = db.hidden_turn_ids()   # 숨김(#128) - 지도/군집에서 완전히 제외(비파괴, 표시만)
     meta, tags = {}, {}
     for r in db.conn.execute("SELECT id, session_id, summary, question, tags, timestamp FROM turns").fetchall():
         if r["id"] in hidden:

@@ -293,15 +293,17 @@ class ArchiveDB:
     # 비파괴: 원문·청크·벡터는 그대로 두고 hidden_turns 에 있으면 검색/세션목록/지도에서만 제외.
     # 재색인·reconcile 은 turns 를 지우지 않으므로(append-only 갱신) 이 테이블만 별도로 두면 그대로 살아남는다.
     def hide_turns(self, turn_ids: list[str]) -> int:
+        """반환값 = 실제로 새로 숨겨진 개수(이미 숨겨져 있던 건 제외 - 멱등 재시도 시 정확한 카운트)."""
         if not turn_ids:
             return 0
         now = time.time()
-        self.conn.executemany(
-            "INSERT OR IGNORE INTO hidden_turns(turn_id, hidden_at) VALUES(?,?)",
-            [(tid, now) for tid in turn_ids],
-        )
+        inserted = 0
+        for tid in turn_ids:
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO hidden_turns(turn_id, hidden_at) VALUES(?,?)", (tid, now))
+            inserted += cur.rowcount
         self.conn.commit()
-        return len(turn_ids)
+        return inserted
 
     def hide_session(self, session_id: str) -> int:
         ids = [r["id"] for r in self.conn.execute(
