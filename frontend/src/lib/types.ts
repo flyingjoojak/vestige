@@ -31,6 +31,7 @@ export interface SessionTurn {
   actions: string[]
   summary: string | null
   tags: string[]
+  hidden?: boolean   // 접힘(#128) - 제자리에 한 줄로만 표시되고 검색·지도에선 빠짐
 }
 
 export type SessionSource = "claude-code" | "codex"
@@ -54,6 +55,7 @@ export interface SessionRow {
   started: string
   ended: string
   headline: string
+  hidden_count?: number        // 접힌 턴 수(count 와 같으면 세션 전체가 접힌 상태, #128)
   source?: SessionSource
   subagent?: boolean           // 배경(서브에이전트) 대화 여부
   parent?: string | null       // 파생된 부모 세션 id
@@ -64,13 +66,4 @@ export interface Stats {
   sessions: number
   vectors: number
   enriched: number
-}
-
-// 숨김(#128) - 비파괴, 검색·세션·지도에서만 제외. 설정 화면 '숨김' 목록/복원용.
-export interface HiddenItem {
-  turn_id: string
-  session_id: string | null
-  question: string | null
-  timestamp: string | null
-  hidden_at: number
 }

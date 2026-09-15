@@ -136,7 +136,7 @@ def test_api_session_export_400_for_invalid_id():
 
 
 def test_api_hide_unhide_turn_roundtrip(tmp_path, monkeypatch):
-    """턴 숨김/복원(#128) - 숨기면 세션/검색에서 빠지고, 복원하면 다시 보인다."""
+    """턴 접기/펼치기(#128) - 접어도 세션 뷰엔 hidden 표시로 남고(제자리 펼치기용), 펼치면 해제된다."""
     from vestige.models import Turn
     from vestige.store import ArchiveDB
 
@@ -150,17 +150,16 @@ def test_api_hide_unhide_turn_roundtrip(tmp_path, monkeypatch):
 
     r = web.api_hide({"turn_id": "s1:u1"})
     assert r["ok"] is True and r["hidden"] == 1
-    ids = [t["id"] for t in web.api_session(id="s1")["turns"]]
-    assert ids == ["s1:u2"]   # 숨긴 턴은 세션 뷰에서 제외
-    assert [h["turn_id"] for h in web.api_hidden()["hidden"]] == ["s1:u1"]
+    turns = web.api_session(id="s1")["turns"]
+    assert [t["id"] for t in turns] == ["s1:u1", "s1:u2"]        # 자리엔 그대로 남고
+    assert [t["hidden"] for t in turns] == [True, False]         # 접힘 표시만 붙는다
 
     web.api_unhide({"turn_id": "s1:u1"})
-    ids = [t["id"] for t in web.api_session(id="s1")["turns"]]
-    assert ids == ["s1:u1", "s1:u2"]   # 복원되어 다시 보임
-    assert web.api_hidden()["hidden"] == []
+    assert [t["hidden"] for t in web.api_session(id="s1")["turns"]] == [False, False]
 
 
-def test_api_hide_session_removes_it_from_sessions_list(tmp_path, monkeypatch):
+def test_api_hide_session_keeps_it_listed_as_folded(tmp_path, monkeypatch):
+    """세션 전체를 접어도 목록에선 사라지지 않는다 - 사라지면 다시 펼칠 길이 없어진다."""
     from vestige.models import Turn
     from vestige.store import ArchiveDB
 
@@ -173,8 +172,51 @@ def test_api_hide_session_removes_it_from_sessions_list(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
     web.api_hide({"session_id": "s1"})
-    sessions = [s["session"] for s in web.api_sessions()["sessions"]]
-    assert sessions == ["s2"]   # 전 턴이 숨겨진 세션은 목록에서 아예 빠짐
+    by = {r["session"]: r for r in web.api_sessions()["sessions"]}
+    assert set(by) == {"s1", "s2"}                                  # 둘 다 목록에 남고
+    assert by["s1"]["hidden_count"] == by["s1"]["count"] == 1       # s1 은 '전부 접힘'으로 구분
+    assert by["s2"]["hidden_count"] == 0
+
+
+def test_session_headline_prefers_unfolded_turn(tmp_path, monkeypatch):
+    """세션 대표 제목은 접히지 않은 턴에서 먼저 고른다 - 노이즈라 접은 첫 턴이 계속 제목이면 접은 의미가 없다."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을노이즈", answer="a", actions=()))
+    db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="진짜작업", answer="a", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    web.api_hide({"turn_id": "s1:u1"})   # 시간상 첫 턴을 접음
+    row = web.api_sessions()["sessions"][0]
+    assert row["headline"] == "진짜작업"          # 접힌 턴 대신 다음 턴이 제목
+    assert row["hidden_count"] == 1 and row["count"] == 2
+
+    web.api_hide({"turn_id": "s1:u2"})   # 전부 접히면 고를 게 없으니 접힌 턴에서라도 제목을 낸다
+    row = web.api_sessions()["sessions"][0]
+    assert row["headline"] == "접을노이즈" and row["hidden_count"] == 2
+
+
+def test_export_skips_folded_turns(tmp_path, monkeypatch):
+    """접힌 턴은 markdown 내보내기에서도 빠진다(검색·지도와 같은 기준)."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을질문", answer="a1", actions=()))
+    db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="남길질문", answer="a2", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    web.api_hide({"turn_id": "s1:u1"})
+    body = web.api_session_export(id="s1").body.decode("utf-8")
+    assert "남길질문" in body and "접을질문" not in body
 
 
 def test_api_hide_rejects_missing_target():
@@ -194,7 +236,7 @@ def test_api_hide_rejects_unknown_turn_id(tmp_path, monkeypatch):
     with pytest.raises(web.HTTPException) as ei:
         web.api_hide({"turn_id": "no-such-turn"})
     assert ei.value.status_code == 404
-    assert web.api_hidden()["hidden"] == []
+    assert db.hidden_turn_ids() == set()   # 유령 행이 생기지 않았다
 
 
 def test_safe_resume_cwd_rejects_unc_and_missing(tmp_path):
