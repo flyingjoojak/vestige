@@ -17,7 +17,8 @@
     "map": "지도",
     "settings": "설정",
     "mainAria": "기본 내비게이션",
-    "folded": "접힘"
+    "folded": "접힘",
+    "folders": "폴더"
   },
   "app": {
     "mapLoading": "3D 지도 불러오는 중…",
@@ -483,5 +484,29 @@
     "openSession": "세션 열기",
     "loadFailed": "접힌 항목을 불러오지 못했어요",
     "unfoldFailed": "펼치지 못했어요"
+  },
+  "folders": {
+    "title": "폴더",
+    "new": "새 폴더",
+    "newChild": "하위 폴더",
+    "newPrompt": "새 폴더 이름을 입력하세요",
+    "newChildPrompt": "하위 폴더 이름을 입력하세요",
+    "rename": "이름 변경",
+    "renamePrompt": "새 이름을 입력하세요",
+    "delete": "삭제",
+    "deleteConfirm": "'{{name}}' 폴더와 하위 폴더를 삭제할까요? 담긴 항목은 폴더에서만 빠지고 대화 원문은 그대로 남아요.",
+    "empty": "아직 폴더가 없어요. 위 + 버튼으로 만들어보세요.",
+    "emptyItems": "이 폴더에 담긴 게 없어요. 검색 결과나 대화에서 '폴더에 추가'로 담을 수 있어요.",
+    "pickPrompt": "왼쪽에서 폴더를 고르세요.",
+    "searchPlaceholder": "'{{name}}' 안에서 검색…",
+    "noResults": "이 폴더 안에는 결과가 없어요.",
+    "turnCount": "대화 {{count}}개 범위",
+    "sessionItem": "세션 · 대화 {{count}}개",
+    "turnItem": "대화 1개",
+    "removeItem": "폴더에서 빼기",
+    "untitled": "(제목 없음)",
+    "loadFailed": "폴더를 불러오지 못했어요",
+    "saveFailed": "저장하지 못했어요",
+    "searchFailed": "검색에 실패했어요"
   }
 }
