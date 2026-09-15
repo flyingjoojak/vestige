@@ -699,7 +699,10 @@ def api_sessions(limit: int = 500):
         "         SUM(h.turn_id IS NOT NULL) OVER (PARTITION BY t.session_id) AS n_hidden,"
         "         MIN(t.timestamp) OVER (PARTITION BY t.session_id) AS started,"
         "         MAX(t.timestamp) OVER (PARTITION BY t.session_id) AS ended,"
-        "         ROW_NUMBER() OVER (PARTITION BY t.session_id ORDER BY t.timestamp, t.id) AS rn"
+        # 대표 헤드라인은 '접히지 않은' 턴에서 먼저 고른다 — 노이즈라 접은 첫 턴이 계속 세션
+        # 제목으로 뜨면 접은 의미가 없다. 전부 접힌 세션만 접힌 턴에서 고르게 된다(그 외 대안 없음).
+        "         ROW_NUMBER() OVER (PARTITION BY t.session_id"
+        "           ORDER BY (h.turn_id IS NOT NULL), t.timestamp, t.id) AS rn"
         "  FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id"
         ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
     ).fetchall()

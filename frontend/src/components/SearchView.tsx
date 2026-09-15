@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { X, Blend, Brain, ChevronsDownUp, Type, SearchX, AlertTriangle } from "lucide-react"
+import { X, Blend, Brain, ChevronsDownUp, ChevronsUpDown, Type, SearchX, AlertTriangle } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChatThread } from "./ChatThread"
 import { SourceFilter } from "./SourceFilter"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
-import { getSources, hideTurn, search, type SearchMode, type SourceOption } from "@/lib/api"
+import { getSources, hideTurn, search, unhideTurn, type SearchMode, type SourceOption } from "@/lib/api"
 import { fmtTime } from "@/lib/format"
 import { sourceLabel } from "@/lib/source"
 import { errText } from "@/lib/errors"
@@ -41,19 +41,28 @@ export function SearchView() {
   const [srcOpts, setSrcOpts] = useState<SourceOption[]>([])
   const [srcSel, setSrcSel] = useState<Set<string>>(new Set())
   const [hideErr, setHideErr] = useState("")   // 접기(#128) 실패 알림(간단히 잠깐 표시)
+  // 이번 결과 목록에서 접은 턴들. 새 검색을 하면 비운다(서버가 이미 접힌 턴을 빼고 주므로).
+  const [folded, setFolded] = useState<Set<string>>(new Set())
   const reqId = useRef(0)   // 최신 요청만 반영(빠른 연속 검색 시 오래된 응답이 덮어쓰기 방지)
   const hideErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (hideErrTimer.current) clearTimeout(hideErrTimer.current) }, [])
 
-  // 검색 결과에서 턴 하나 접기(#128) - 접으면 검색 대상에서 빠지므로 결과 목록에서도 즉시 제거.
-  // 되돌리려면 그 세션을 열면 제자리에 '접힘' 한 줄로 남아 있다(설정에 별도 목록을 두지 않는 이유).
-  async function hide(id: string, e: React.MouseEvent) {
+  // 검색 결과에서 접기/펼치기(#128). 지금 목록에서 바로 치우지 않고 '접힘' 한 줄로 남긴다 —
+  // 방금 접은 걸 그 자리에서 되돌릴 수 있게. 실제로 빠지는 건 다음 검색부터(서버가 접힌 턴을 제외).
+  async function fold(id: string, folded: boolean, e: React.MouseEvent) {
     e.stopPropagation()
+    const mark = (on: boolean) => setFolded((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+    mark(folded)
+    if (folded) setSel((s) => (s?.turn === id ? null : s))   // 접은 턴을 오른쪽에 계속 띄워두지 않음
     try {
-      await hideTurn(id)
-      setHits((prev) => prev.filter((h) => h.id !== id))
-      setSel((s) => (s?.turn === id ? null : s))
+      await (folded ? hideTurn(id) : unhideTurn(id))
     } catch (err) {
+      mark(!folded)                                          // 서버가 거부하면 표시도 되돌린다
       setHideErr(errText(t, err, "search.foldFailed"))
       if (hideErrTimer.current) clearTimeout(hideErrTimer.current)
       hideErrTimer.current = setTimeout(() => setHideErr(""), 4000)
@@ -81,7 +90,7 @@ export function SearchView() {
 
   async function run(query = q, m: SearchMode = mode, selSet: Set<string> = srcSel) {
     const term = query.trim()
-    if (!term) { reqId.current++; setState("idle"); setHits([]); setSel(null); return }   // 진행 중 요청 무효화
+    if (!term) { reqId.current++; setState("idle"); setHits([]); setSel(null); setFolded(new Set()); return }   // 진행 중 요청 무효화
     const myId = ++reqId.current
     setState("loading")
     try {
@@ -91,7 +100,7 @@ export function SearchView() {
         setHits([]); setSearchErr(errText(t, r, "search.errorTitle")); setState("error"); setSel(null); return
       }
       const list = r.hits || []
-      setHits(list); setSearchErr(""); setState("done")
+      setHits(list); setSearchErr(""); setState("done"); setFolded(new Set())
       setSel(list.length ? { session: list[0].session_full, turn: list[0].id } : null)   // 첫 결과 자동 선택
     } catch {
       if (myId !== reqId.current) return
@@ -194,6 +203,20 @@ export function SearchView() {
 
           {state === "done" && hits.map((h) => {
             const active = sel?.turn === h.id
+            // 접은 결과는 목록에서 치우지 않고 한 줄로 남긴다 — 그 자리에서 되돌릴 수 있게.
+            // 실제로 검색에서 빠지는 건 다음 검색부터(서버가 접힌 턴을 빼고 준다).
+            if (folded.has(h.id)) {
+              return (
+                <div key={h.id} className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{t("browse.folded")}</span>
+                  <span className="min-w-0 flex-1 truncate" title={h.summary || h.question}>{h.summary || h.question || t("search.untitled")}</span>
+                  <button type="button" onClick={(e) => fold(h.id, false, e)}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
+                    <ChevronsUpDown className="size-3" />{t("chat.unfold")}
+                  </button>
+                </div>
+              )
+            }
             return (
               <div key={h.id} role="button" tabIndex={0}
                 onClick={() => setSel({ session: h.session_full, turn: h.id })}
@@ -211,7 +234,7 @@ export function SearchView() {
                   <span>{fmtTime(h.timestamp)}</span>
                   <span className="opacity-40">·</span>
                   <span>{t("search.session", { n: h.session })}</span>
-                  <button type="button" onClick={(e) => hide(h.id, e)}
+                  <button type="button" onClick={(e) => fold(h.id, true, e)}
                     title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
                     className="ml-auto inline-flex items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
                     <ChevronsDownUp className="size-3.5" />

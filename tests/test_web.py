@@ -178,6 +178,29 @@ def test_api_hide_session_keeps_it_listed_as_folded(tmp_path, monkeypatch):
     assert by["s2"]["hidden_count"] == 0
 
 
+def test_session_headline_prefers_unfolded_turn(tmp_path, monkeypatch):
+    """세션 대표 제목은 접히지 않은 턴에서 먼저 고른다 - 노이즈라 접은 첫 턴이 계속 제목이면 접은 의미가 없다."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을노이즈", answer="a", actions=()))
+    db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="진짜작업", answer="a", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    web.api_hide({"turn_id": "s1:u1"})   # 시간상 첫 턴을 접음
+    row = web.api_sessions()["sessions"][0]
+    assert row["headline"] == "진짜작업"          # 접힌 턴 대신 다음 턴이 제목
+    assert row["hidden_count"] == 1 and row["count"] == 2
+
+    web.api_hide({"turn_id": "s1:u2"})   # 전부 접히면 고를 게 없으니 접힌 턴에서라도 제목을 낸다
+    row = web.api_sessions()["sessions"][0]
+    assert row["headline"] == "접을노이즈" and row["hidden_count"] == 2
+
+
 def test_export_skips_folded_turns(tmp_path, monkeypatch):
     """접힌 턴은 markdown 내보내기에서도 빠진다(검색·지도와 같은 기준)."""
     from vestige.models import Turn
