@@ -84,8 +84,8 @@ function StatusChip({ tone, children }: { tone: "ok" | "warn" | "muted"; childre
 // 경로 설정 공용 행(로그 폴더·원본 보존소·CLI 경로): 평소엔 한 줄(이름 + 상태 + 「경로 변경」)만.
 // 「경로 변경」을 눌러야 입력칸이 펼쳐진다 → 화면 공간을 거의 안 쓰면서, 대부분(자동 감지된)
 // 사용자는 상태만 확인하면 된다. 경로 입력은 전부 이 컴포넌트를 쓴다(UI·동작 일관성).
-function FolderRow({ label, chip, path, onPathChange, onSave, saved, err, placeholder, help }: {
-  label: string; chip: React.ReactNode; path: string; onPathChange: (v: string) => void
+function FolderRow({ label, chip, resolved, path, onPathChange, onSave, saved, err, placeholder, help }: {
+  label: string; chip: React.ReactNode; resolved?: string; path: string; onPathChange: (v: string) => void
   onSave: () => void; saved: boolean; err?: string; placeholder: string; help: React.ReactNode
 }) {
   const { t } = useTranslation()
@@ -95,6 +95,10 @@ function FolderRow({ label, chip, path, onPathChange, onSave, saved, err, placeh
     <div className="border-b py-3 last:border-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-sm"><span className="font-medium">{label}</span>{chip}</span>
+        {/* 자동 탐색이든 직접 지정이든, 실제로 쓰이는 경로는 펼치지 않아도 항상 보이게(모든 경로 행 공통). */}
+        <code className="cm-inline min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={resolved || undefined}>
+          {resolved || "—"}
+        </code>
         <span className="flex items-center gap-2">
           {saved && <span className="inline-flex items-center gap-1 text-[12px] text-primary"><Check className="size-3.5" />{t("common.saved")}</span>}
           <Button variant="ghost" size="sm" onClick={() => setEditing((v) => !v)}
@@ -858,7 +862,7 @@ export function SettingsView() {
                         <span className="font-medium">{label}</span>
                         <span id={`src-status-${s.name}`}
                           className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${on ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{status}</span>
-                        <code className="cm-inline min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{s.root ?? "—"}</code>
+                        {/* 경로는 '로그 폴더' 섹션에서 한 곳으로 보여준다(여기 중복 표기하면 어디서 바꾸는지 헷갈림). */}
                         <button type="button" role="switch" aria-checked={enabled}
                           disabled={!s.exists} aria-disabled={busy || undefined} aria-busy={busy || undefined}
                           aria-label={t("settings.sourceToggleAria", { label, action: enabled ? t("sync.turnOff") : t("sync.turnOn") })}
@@ -905,7 +909,7 @@ export function SettingsView() {
                     : cfg.projects_exists
                       ? <StatusChip tone="ok"><Check className="size-3" />{t("settings.conversationsDetected", { count: cfg.jsonl_count })}</StatusChip>
                       : <StatusChip tone="warn"><AlertTriangle className="size-3" />{t("settings.folderMissing")}</StatusChip>}
-                  path={projectsDir} onPathChange={setProjectsDir} onSave={saveProjects} saved={projSaved} err={projErr}
+                  resolved={cfg?.projects_dir} path={projectsDir} onPathChange={setProjectsDir} onSave={saveProjects} saved={projSaved} err={projErr}
                   placeholder="~/.claude/projects"
                   help={t("settings.claudeFolderHelp")}
                 />
@@ -916,7 +920,7 @@ export function SettingsView() {
                     : cfg.codex_exists
                       ? <StatusChip tone="ok"><Check className="size-3" />{t("settings.conversationsDetected", { count: (cfg.sources ?? []).find((s) => s.name === "codex")?.count ?? 0 })}</StatusChip>
                       : <StatusChip tone="muted">{t("settings.notUsed")}</StatusChip>}
-                  path={codexDir} onPathChange={setCodexDir} onSave={saveCodex} saved={codexSaved} err={codexErr}
+                  resolved={cfg?.codex_dir} path={codexDir} onPathChange={setCodexDir} onSave={saveCodex} saved={codexSaved} err={codexErr}
                   placeholder="~/.codex/sessions"
                   help={t("settings.codexFolderHelp")}
                 />
@@ -928,7 +932,7 @@ export function SettingsView() {
                     : <StatusChip tone={cfg.raw_archive_exists ? "ok" : "muted"}>
                         {((cfg.raw_archive_bytes ?? 0) / 1024 / 1024).toFixed(1)} MB
                       </StatusChip>}
-                  path={rawDir} onPathChange={setRawDir} onSave={saveRawDir} saved={rawSaved} err={rawErr}
+                  resolved={cfg?.raw_archive_dir} path={rawDir} onPathChange={setRawDir} onSave={saveRawDir} saved={rawSaved} err={rawErr}
                   placeholder="~/vestige/data/raw"
                   help={t("settings.rawArchiveHelp")}
                 />
@@ -986,9 +990,9 @@ export function SettingsView() {
                   <FolderRow
                     label={t("settings.claudeBin")}
                     chip={cfg?.claude_found
-                      ? <StatusChip tone="ok"><Check className="size-3" />{t("settings.claudeBinFound", { path: cfg.claude_resolved })}</StatusChip>
+                      ? <StatusChip tone="ok"><Check className="size-3" />{t("settings.claudeBinFound")}</StatusChip>
                       : <StatusChip tone="warn"><AlertTriangle className="size-3" />{t("settings.claudeBinNotFound")}</StatusChip>}
-                    path={claudeBin} onPathChange={setClaudeBin} onSave={saveClaudeBin} saved={binSaved} err={binErr}
+                    resolved={cfg?.claude_resolved} path={claudeBin} onPathChange={setClaudeBin} onSave={saveClaudeBin} saved={binSaved} err={binErr}
                     placeholder={t("settings.claudeBinPlaceholder")}
                     help={t("settings.claudeBinHint")}
                   />

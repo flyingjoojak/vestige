@@ -172,7 +172,7 @@
     "ollamaHint": "⚠️ Ollama must be running, and the model above must be pulled beforehand: <code>ollama pull {{model}}</code>. Ollama manages the model file path, so you don't need to set it.",
     "claudeBin": "Claude CLI",
     "claudeBinPlaceholder": "auto-detect (leave empty)",
-    "claudeBinFound": "Found: {{path}}",
+    "claudeBinFound": "Found",
     "claudeBinNotFound": "claude CLI not found",
     "claudeBinHint": "If not found, set the full path (e.g. /opt/homebrew/bin/claude).",
     "enrichTime": "Summary time (daily)",
