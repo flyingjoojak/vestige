@@ -76,3 +76,31 @@ export interface HiddenItem {
   timestamp: string | null
   hidden_at: number
 }
+
+// 폴더(#201) - 사용자가 직접 만드는 수동 군집. 중첩 허용(parent_id), 담는 단위는 턴·세션.
+export interface Folder {
+  id: number
+  name: string
+  parent_id: number | null
+  created_at: number
+  items: number          // 이 폴더에 '직접' 담긴 항목 수(하위 폴더 제외)
+}
+
+export interface FolderItem {
+  kind: "turn" | "session"
+  ref: string            // turn id 또는 session id
+  added_at: number
+  session_id: string | null
+  headline: string
+  timestamp: string | null
+  count?: number         // kind=session 일 때 그 세션의 현재 턴 수
+}
+
+export interface FolderDetail {
+  folder: Folder
+  path: { id: number; name: string }[]   // 최상위 → 부모 순(빵부스러기)
+  children: Folder[]
+  items: FolderItem[]
+  turn_count: number     // 하위 폴더까지 포함한 검색 범위 턴 수
+}
+

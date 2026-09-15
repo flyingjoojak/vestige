@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from "react"
 import { useTranslation } from "react-i18next"
-import { MessagesSquare, Layers, Box, FoldVertical, Settings } from "lucide-react"
+import { MessagesSquare, Layers, Box, FoldVertical, FolderTree, Settings } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Loader2 } from "lucide-react"
 import { SearchView } from "@/components/SearchView"
 import { Browse3Pane } from "@/components/Browse3Pane"
 import { SettingsView } from "@/components/SettingsView"
 import { FoldedView } from "@/components/FoldedView"
+import { FolderView } from "@/components/FolderView"
 import { Onboarding } from "@/components/Onboarding"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { StatusBar } from "@/components/StatusBar"
@@ -20,13 +21,14 @@ import vestigeMark from "@/assets/vestige-mark.png"
 // three.js는 무거우니 3D 탭 열 때만 로드(초기 번들 경량).
 const GraphView3D = lazy(() => import("@/components/GraphView3D").then((m) => ({ default: m.GraphView3D })))
 
-type View = "search" | "sessions" | "clusters" | "graph3d" | "folded" | "settings"
+type View = "search" | "sessions" | "clusters" | "graph3d" | "folders" | "folded" | "settings"
 
 const NAV: { v: View; icon: React.ReactNode; labelKey: string }[] = [
   { v: "search", icon: <Magnifier className="size-[18px]" />, labelKey: "nav.search" },
   { v: "sessions", icon: <MessagesSquare className="size-[18px]" />, labelKey: "nav.sessions" },
   { v: "clusters", icon: <Layers className="size-[18px]" />, labelKey: "nav.clusters" },
   { v: "graph3d", icon: <Box className="size-[18px]" />, labelKey: "nav.map" },
+  { v: "folders", icon: <FolderTree className="size-[18px]" />, labelKey: "nav.folders" },
   { v: "folded", icon: <FoldVertical className="size-[18px]" />, labelKey: "nav.folded" },
   { v: "settings", icon: <Settings className="size-[18px]" />, labelKey: "nav.settings" },
 ]
@@ -207,6 +209,10 @@ export default function App() {
             <Suspense fallback={<div className="grid h-full place-items-center text-muted-foreground">{t("app.mapLoading")}</div>}>
               <GraphView3D onOpenTurn={openTurn} />
             </Suspense>
+          )}
+          {view === "folders" && (
+            /* 폴더 항목은 턴이면 그 턴으로, 세션이면 세션만 열어 목록에서 고르게 한다. */
+            <FolderView onOpen={(session, turn) => openTurn("sessions", session, turn ?? "", session)} />
           )}
           {view === "folded" && (
             <FoldedView onChanged={refreshFolded}

@@ -1,4 +1,4 @@
-import type { HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
+import type { Folder, FolderDetail, HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -31,6 +31,7 @@ export interface SearchParams {
   until?: string
   session?: string
   sources?: string[]   // 비거나 전체면 생략(=모든 출처). 부분집합일 때만 전달
+  folder?: number      // 이 폴더(+하위) 안에서만 검색(#201)
 }
 
 export function search(p: SearchParams): Promise<SearchResult> {
@@ -40,6 +41,7 @@ export function search(p: SearchParams): Promise<SearchResult> {
   if (p.until) usp.set("until", p.until)
   if (p.session) usp.set("session", p.session)
   if (p.sources && p.sources.length) usp.set("sources", p.sources.join(","))
+  if (p.folder != null) usp.set("folder", String(p.folder))
   return getJSON<SearchResult>(`/api/search?${usp}`)
 }
 
@@ -101,6 +103,31 @@ export const hideSession = (sessionId: string) => postHide("/api/hide", { sessio
 export const unhideTurn = (turnId: string) => postHide("/api/unhide", { turnId })
 export const unhideSession = (sessionId: string) => postHide("/api/unhide", { sessionId })
 // limit=0 이면 개수만 받는다(좌측 메뉴 배지용 가벼운 호출).
+// 폴더(#201). 담기/빼기는 turn_id 또는 session_id 중 하나로 대상을 지정한다.
+export const listFolders = () => getJSON<{ folders: Folder[] }>(`/api/folders`)
+export const getFolder = (id: number) => getJSON<FolderDetail>(`/api/folder?id=${id}`)
+async function postFolder<T>(url: string, body: Record<string, unknown>): Promise<T> {
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  })
+  if (!r.ok) return failure(r)
+  return r.json()
+}
+export const createFolder = (name: string, parentId?: number | null) =>
+  postFolder<{ ok: boolean; id: number }>("/api/folders/create", { name, parent_id: parentId ?? null })
+export const renameFolder = (id: number, name: string) =>
+  postFolder<{ ok: boolean }>("/api/folders/rename", { id, name })
+export const moveFolder = (id: number, parentId: number | null) =>
+  postFolder<{ ok: boolean }>("/api/folders/move", { id, parent_id: parentId })
+export const deleteFolder = (id: number) =>
+  postFolder<{ ok: boolean; deleted: number }>("/api/folders/delete", { id })
+export type FolderTarget = { turnId?: string; sessionId?: string }
+const targetBody = (t: FolderTarget) => (t.turnId ? { turn_id: t.turnId } : { session_id: t.sessionId })
+export const addToFolder = (folderId: number, t: FolderTarget) =>
+  postFolder<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
+export const removeFromFolder = (folderId: number, t: FolderTarget) =>
+  postFolder<{ ok: boolean }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
+
 export const listHidden = (limit = 200) =>
   getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)
 

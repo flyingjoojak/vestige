@@ -17,7 +17,8 @@
     "map": "Map",
     "settings": "Settings",
     "mainAria": "Primary navigation",
-    "folded": "Folded"
+    "folded": "Folded",
+    "folders": "Folders"
   },
   "app": {
     "mapLoading": "Loading 3D map…",
@@ -483,5 +484,29 @@
     "openSession": "Open session",
     "loadFailed": "Couldn't load folded items",
     "unfoldFailed": "Couldn't unfold"
+  },
+  "folders": {
+    "title": "Folders",
+    "new": "New folder",
+    "newChild": "Subfolder",
+    "newPrompt": "Name for the new folder",
+    "newChildPrompt": "Name for the subfolder",
+    "rename": "Rename",
+    "renamePrompt": "New name",
+    "delete": "Delete",
+    "deleteConfirm": "Delete '{{name}}' and its subfolders? Items are only removed from the folder - the conversations themselves stay.",
+    "empty": "No folders yet. Create one with the + button above.",
+    "emptyItems": "Nothing in this folder yet. Add items from search results or conversations.",
+    "pickPrompt": "Pick a folder on the left.",
+    "searchPlaceholder": "Search inside '{{name}}'…",
+    "noResults": "No results in this folder.",
+    "turnCount": "{{count}} conversations in scope",
+    "sessionItem": "Session · {{count}} conversations",
+    "turnItem": "1 conversation",
+    "removeItem": "Remove from folder",
+    "untitled": "(untitled)",
+    "loadFailed": "Couldn't load folders",
+    "saveFailed": "Couldn't save",
+    "searchFailed": "Search failed"
   }
 }
