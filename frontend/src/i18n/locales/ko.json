@@ -172,7 +172,7 @@
     "ollamaHint": "⚠️ Ollama가 실행 중이어야 하고, 위 모델을 미리 받아둬야 해요: <code>ollama pull {{model}}</code> 모델 파일 경로는 Ollama가 알아서 관리하니 따로 지정하지 않아도 돼요.",
     "claudeBin": "Claude CLI",
     "claudeBinPlaceholder": "자동 탐색 (비워두기)",
-    "claudeBinFound": "찾음: {{path}}",
+    "claudeBinFound": "찾음",
     "claudeBinNotFound": "claude CLI를 찾지 못했습니다",
     "claudeBinHint": "못 찾으면 전체 경로를 지정하세요 (예: /opt/homebrew/bin/claude).",
     "enrichTime": "요약 시각 (매일)",
