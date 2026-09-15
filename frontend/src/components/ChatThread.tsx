@@ -1,10 +1,28 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { ChevronRight, EyeOff, FileText, Loader2 } from "lucide-react"
-import { getSession, hideSession as apiHideSession, hideTurn } from "@/lib/api"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
+import { getSession, hideSession as apiHideSession, hideTurn, unhideTurn } from "@/lib/api"
 import { errText } from "@/lib/errors"
 import { fmtTime, mdToHtml } from "@/lib/format"
 import type { SessionDetail as Detail, SessionTurn } from "@/lib/types"
+
+// 접힌 턴(#128): 사라지지 않고 제자리에 한 줄로 남는다 → 맥락이 유지되고 바로 펼 수 있다.
+// (접힌 동안은 검색·지도에서만 빠진다)
+function FoldedTurn({ t, i, onUnhide }: { t: SessionTurn; i: number; onUnhide: (id: string) => void }) {
+  const { t: tr } = useTranslation()
+  const headline = t.summary || t.question || tr("chat.noQuestion")
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+      <span className="shrink-0 tabular-nums">#{i + 1}</span>
+      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{tr("chat.folded")}</span>
+      <span className="min-w-0 flex-1 truncate" title={headline}>{headline}</span>
+      <button type="button" onClick={() => onUnhide(t.id)}
+        className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
+        <ChevronsUpDown className="size-3" />{tr("chat.unfold")}
+      </button>
+    </div>
+  )
+}
 
 // 한 턴을 채팅 말풍선(질문 우 / 답변 좌)으로. 접고 펴는 것 없이 항상 펼쳐 보여줌.
 function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highlight: boolean; onHide: (id: string) => void }) {
@@ -23,9 +41,9 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
             <FileText className="mr-1 -mt-0.5 inline size-3 text-primary/70" />{t.summary}
           </span>
         )}
-        <button type="button" onClick={() => onHide(t.id)} title={tr("chat.hideTurn")} aria-label={tr("chat.hideTurn")}
+        <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
           className="ml-auto inline-flex shrink-0 items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
-          <EyeOff className="size-3.5" />
+          <ChevronsDownUp className="size-3.5" />
         </button>
       </div>
       <div className="flex flex-col items-end">
@@ -60,30 +78,37 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   const { t } = useTranslation()
   const [data, setData] = useState<Detail | null>(null)
   const [err, setErr] = useState("")
-  const [hideErr, setHideErr] = useState("")   // 숨김(#128) 실패 알림
+  const [hideErr, setHideErr] = useState("")   // 접기/펼치기(#128) 실패 알림
   const [range, setRange] = useState<{ s: number; e: number }>({ s: 0, e: PAD * 2 })
   useEffect(() => {
     setData(null); setErr(""); setHideErr("")
     getSession(session).then(setData).catch((e) => setErr(String(e)))
   }, [session])
 
-  // 턴 하나 숨김(#128) - 비파괴, 이 화면 목록에서만 즉시 제거.
-  async function hideOneTurn(id: string) {
+  // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
+  function setFolded(ids: Set<string>, folded: boolean) {
+    setData((d) => (d ? { ...d, turns: d.turns.map((x) => (ids.has(x.id) ? { ...x, hidden: folded } : x)) } : d))
+  }
+  async function foldTurn(id: string, folded: boolean) {
+    const prev = folded   // 실패 시 되돌릴 값
+    setFolded(new Set([id]), folded)   // 낙관적 반영(클릭 즉시 접힘/펼침)
     try {
-      await hideTurn(id)
-      setData((d) => (d ? { ...d, turns: d.turns.filter((x) => x.id !== id), count: d.count - 1 } : d))
+      await (folded ? hideTurn(id) : unhideTurn(id))
     } catch (e) {
-      setHideErr(errText(t, e, "chat.hideFailed"))
+      setFolded(new Set([id]), !prev)  // 서버가 거부하면 화면도 되돌린다
+      setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
-  // 세션 전체 숨김(#128) - 확인 후 이 세션의 모든 턴을 한 번에.
-  async function hideWholeSession() {
-    if (!window.confirm(t("chat.hideSessionConfirm"))) return
+  // 세션 전체 접기 — 확인 후 이 세션의 모든 턴을 한 번에(목록에선 '접힘'으로 남는다).
+  async function foldWholeSession() {
+    if (!window.confirm(t("chat.foldSessionConfirm"))) return
+    const ids = new Set((data?.turns ?? []).map((x) => x.id))
+    setFolded(ids, true)
     try {
       await apiHideSession(session)
-      setData((d) => (d ? { ...d, turns: [], count: 0 } : d))
     } catch (e) {
-      setHideErr(errText(t, e, "chat.hideFailed"))
+      setFolded(ids, false)
+      setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
   // 포커스 턴 주변으로 렌더 창을 잡는다(전부 렌더하면 500+턴에서 1초+ 걸림).
@@ -96,17 +121,25 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   }, [data, focusTurn])
 
   const turns = data?.turns ?? []
+  const foldedCount = turns.filter((x) => x.hidden).length
+  const allFolded = turns.length > 0 && foldedCount === turns.length
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-5 py-3 text-[13px] text-muted-foreground tabular-nums">
         <span className="min-w-0 flex-1 truncate">
           {t("chat.sessionLabel", { id: session.slice(0, 8) })}{data ? ` · ${t("chat.turnCount", { count: data.count })}` : ""}
+          {foldedCount > 0 && ` · ${t("chat.foldedCount", { count: foldedCount })}`}
         </span>
-        {data && data.turns.length > 0 && (
-          <button type="button" onClick={hideWholeSession} title={t("chat.hideSession")}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
-            <EyeOff className="size-3.5" />{t("chat.hideSession")}
-          </button>
+        {data && turns.length > 0 && (
+          allFolded
+            ? <button type="button" onClick={() => turns.forEach((x) => foldTurn(x.id, false))} title={t("chat.unfoldAll")}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
+                <ChevronsUpDown className="size-3.5" />{t("chat.unfoldAll")}
+              </button>
+            : <button type="button" onClick={foldWholeSession} title={t("chat.foldSession")}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
+                <ChevronsDownUp className="size-3.5" />{t("chat.foldSession")}
+              </button>
         )}
       </div>
       {hideErr && <div className="shrink-0 px-5 pt-2 text-[11px] text-destructive">{hideErr}</div>}
@@ -119,7 +152,9 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
             <button onClick={() => setRange((r) => ({ ...r, s: Math.max(0, r.s - 50) }))}
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadPrev", { count: range.s })}</button>
           )}
-          {turns.slice(range.s, range.e).map((turn, j) => <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onHide={hideOneTurn} />)}
+          {turns.slice(range.s, range.e).map((turn, j) => (turn.hidden
+            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} onUnhide={(id) => foldTurn(id, false)} />
+            : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onHide={(id) => foldTurn(id, true)} />))}
           {data && range.e < turns.length && (
             <button onClick={() => setRange((r) => ({ ...r, e: Math.min(turns.length, r.e + 50) }))}
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadNext", { count: turns.length - range.e })}</button>

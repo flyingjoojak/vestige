@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { SchemaReportSection } from "@/components/SchemaReportSection"
-import { HiddenPanel } from "@/components/HiddenPanel"
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -948,10 +947,6 @@ export function SettingsView() {
                   <Button size="sm" variant="outline" onClick={() => commitIndex({ VESTIGE_RAW_ARCHIVE_MAX_MB: rawMaxMb.trim() })}>{t("common.save")}</Button>
                   {intervalSaved && <span className="inline-flex items-center gap-1 text-[12px] text-primary"><Check className="size-3.5" />{t("common.saved")}</span>}
                 </Row>
-              </Section>
-
-              <Section title={t("settings.hiddenTitle")}>
-                <HiddenPanel />
               </Section>
 
               <SchemaReportSection />

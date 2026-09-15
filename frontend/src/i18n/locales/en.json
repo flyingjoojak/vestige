@@ -144,12 +144,6 @@
     "rawArchiveHelp": "Where original logs are kept so cleaned-up sessions can be restored. It can grow large, so you can move it to another disk - changing the path does not move already-archived files, so move them yourself if needed. Oldest ones are removed first if the cap below is exceeded.",
     "skipSdkCountOn": "Excluding {{sessions}} automation sessions · {{turns}} turns",
     "skipSdkCountOff": "Including {{sessions}} automation sessions · {{turns}} turns",
-    "hiddenTitle": "Hidden",
-    "hiddenEmpty": "No hidden turns.",
-    "hiddenUntitled": "(untitled)",
-    "hiddenRestore": "Restore",
-    "hiddenLoadFailed": "Couldn't load the hidden list",
-    "hiddenRestoreFailed": "Couldn't restore",
     "backend": "Summary AI",
     "backendAria": "Summary AI",
     "backendClaude": "Claude Code subscription",
@@ -242,10 +236,14 @@
     "error": "Error: {{err}}",
     "loadPrev": "Show {{count}} earlier",
     "loadNext": "Show {{count}} more",
-    "hideTurn": "Hide this turn",
-    "hideSession": "Hide entire session",
-    "hideFailed": "Couldn't hide",
-    "hideSessionConfirm": "Hide every turn in this session? You can restore them anytime from the 'Hidden' list in Settings."
+    "folded": "Folded",
+    "unfold": "Unfold",
+    "unfoldAll": "Unfold all",
+    "foldTurn": "Fold this turn",
+    "foldSession": "Fold entire session",
+    "foldedCount": "{{count}} folded",
+    "foldFailed": "Couldn't fold",
+    "foldSessionConfirm": "Fold every turn in this session? Folded turns drop out of search and the map, and you can unfold them anytime by opening the session."
   },
   "graph": {
     "title": "3D Semantic Map",
@@ -295,13 +293,13 @@
     "srcKeyword": "keyword",
     "session": "Session {{n}}",
     "untitled": "(untitled)",
-    "hideTurn": "Hide this turn",
-    "hideFailed": "Couldn't hide",
     "detailPlaceholder": "Select a result on the left to view the full conversation.",
     "sourceLabel": "Sources:",
     "sourceAll": "All",
     "sourceCount": "{{n}}",
-    "sourceFilterAria": "Search sources"
+    "sourceFilterAria": "Search sources",
+    "foldTurn": "Fold this turn (remove from search)",
+    "foldFailed": "Couldn't fold"
   },
   "onboarding": {
     "title": "Choose an embedding model",
@@ -361,7 +359,8 @@
     "keywordMatch": "Keyword",
     "sessionId": "Session {{id}}",
     "selectPrompt": "Select a conversation on the left.",
-    "groupListTitle": "{{title}} list"
+    "groupListTitle": "{{title}} list",
+    "folded": "Folded"
   },
   "mcp": {
     "sectionTitle": "MCP integration",

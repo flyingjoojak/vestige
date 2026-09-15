@@ -1,4 +1,4 @@
-import type { HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
+import type { SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -100,7 +100,6 @@ export const hideTurn = (turnId: string) => postHide("/api/hide", { turnId })
 export const hideSession = (sessionId: string) => postHide("/api/hide", { sessionId })
 export const unhideTurn = (turnId: string) => postHide("/api/unhide", { turnId })
 export const unhideSession = (sessionId: string) => postHide("/api/unhide", { sessionId })
-export const listHidden = () => getJSON<{ hidden: HiddenItem[] }>(`/api/hidden`)
 
 // 세션 동기화 감시(Syncthing 충돌 해소) 상태·토글.
 export interface SyncStatus {

@@ -573,10 +573,13 @@ def api_sources_toggle(payload: dict):
 def api_session(id: str = Query(...), limit: int = 2000):
     """한 세션의 모든 턴을 시간순으로 → 그 대화 전체 작업 내역."""
     db = ArchiveDB()
+    # 접힌 턴(#128)도 빼지 않고 hidden 플래그만 달아 내려준다 — 화면에서 제자리에 '접힘' 한 줄로
+    # 남겨 바로 펼칠 수 있게(검색·지도에서만 빠진다). 빼버리면 되돌릴 길이 멀어진다.
     rows = db.conn.execute(
-        "SELECT id,timestamp,question,answer,actions,summary,tags FROM turns "
-        "WHERE session_id=? AND id NOT IN (SELECT turn_id FROM hidden_turns) "   # 숨김(#128) 제외
-        "ORDER BY timestamp, id LIMIT ?", (id, limit)
+        "SELECT t.id,t.timestamp,t.question,t.answer,t.actions,t.summary,t.tags,"
+        "       (h.turn_id IS NOT NULL) AS hidden "
+        "FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id "
+        "WHERE t.session_id=? ORDER BY t.timestamp, t.id LIMIT ?", (id, limit)
     ).fetchall()
     turns = []
     for r in rows:
@@ -586,6 +589,7 @@ def api_session(id: str = Query(...), limit: int = 2000):
             "actions": [a.render() for a in _actions_from_json(r["actions"])],
             "summary": r["summary"],
             "tags": json.loads(r["tags"]) if r["tags"] else [],
+            "hidden": bool(r["hidden"]),   # 접힘 — 화면에선 한 줄로, 검색·지도에선 제외
         })
     info = db.session_source(id)
     source = info[0] if info else "claude-code"
@@ -638,7 +642,9 @@ def api_session_export(id: str = Query(...)):
     data = api_session(id=id)   # 기존 turns/project 조회 로직 재사용(중복 없음)
     if not data["turns"]:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
-    md = _turns_to_markdown(id, data["project"], data["turns"])
+    # 접힌 턴은 내보내기에서도 뺀다(검색·지도와 같은 기준 — '접었다=결과물에서 빼둔다').
+    turns = [t for t in data["turns"] if not t.get("hidden")]
+    md = _turns_to_markdown(id, data["project"], turns)
     return Response(content=md, media_type="text/markdown; charset=utf-8",
                      headers={"Content-Disposition": f'attachment; filename="{id}.md"'})
 
@@ -678,27 +684,23 @@ def api_unhide(payload: dict):
     return {"ok": True}
 
 
-@app.get("/api/hidden")
-def api_hidden(limit: int = 500):
-    """숨김 목록(설정 화면 '숨김' 뷰 - 복원용)."""
-    db = ArchiveDB()
-    return {"hidden": db.list_hidden(limit)}
-
-
 @app.get("/api/sessions")
 def api_sessions(limit: int = 500):
     """세션 목록(최근순): id·턴수·시작/끝 시각·대표 헤드라인(첫 정제/질문)."""
     db = ArchiveDB()
     # 세션별 집계(턴수·시작/끝)와 대표 첫 턴(제목·소스)을 윈도우 함수로 단일 쿼리에서 산출(N+1 제거).
     # (기존: 집계 1회 + 세션마다 헤드라인 1회 = 최대 limit+1 왕복 → mcp_server._recent_sessions 와 동일 패턴으로 통일)
+    # 접힌 턴(#128)도 집계에 남긴다 — 전부 접힌 세션까지 목록에서 사라지면 다시 펼칠 길이 없다.
+    # 대신 hidden_count 를 같이 내려, 전부 접힌 세션은 화면에서 흐리게 '접힘'으로 구분한다.
     rows = db.conn.execute(
-        "SELECT session_id, summary, question, source, source_file, n, started, ended FROM ("
-        "  SELECT session_id, summary, question, source, source_file,"
-        "         COUNT(*) OVER (PARTITION BY session_id) AS n,"
-        "         MIN(timestamp) OVER (PARTITION BY session_id) AS started,"
-        "         MAX(timestamp) OVER (PARTITION BY session_id) AS ended,"
-        "         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp, id) AS rn"
-        "  FROM turns WHERE id NOT IN (SELECT turn_id FROM hidden_turns)"   # 숨김(#128) 제외
+        "SELECT session_id, summary, question, source, source_file, n, n_hidden, started, ended FROM ("
+        "  SELECT t.session_id, t.summary, t.question, t.source, t.source_file,"
+        "         COUNT(*) OVER (PARTITION BY t.session_id) AS n,"
+        "         SUM(h.turn_id IS NOT NULL) OVER (PARTITION BY t.session_id) AS n_hidden,"
+        "         MIN(t.timestamp) OVER (PARTITION BY t.session_id) AS started,"
+        "         MAX(t.timestamp) OVER (PARTITION BY t.session_id) AS ended,"
+        "         ROW_NUMBER() OVER (PARTITION BY t.session_id ORDER BY t.timestamp, t.id) AS rn"
+        "  FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id"
         ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
     ).fetchall()
     out = []
@@ -706,6 +708,7 @@ def api_sessions(limit: int = 500):
         is_sub, parent = _subagent_info(r["source_file"])
         out.append({
             "session": r["session_id"], "count": r["n"],
+            "hidden_count": r["n_hidden"] or 0,   # == count 면 세션 전체가 접힌 상태
             "started": r["started"], "ended": r["ended"],
             "headline": r["summary"] or r["question"] or "",
             "source": r["source"] or "claude-code",

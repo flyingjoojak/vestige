@@ -26,7 +26,7 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
   try { el.showPicker?.() } catch { /* 미지원 */ }
 }
 
-type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean }
+type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean }
 type Conv = { t: string; s: string; h: string }
 
 // 세션/군집 공통 3분할 브라우저. 초기=목록(가운데), 선택 후=[검색+대화목록 | 채팅 | 목록].
@@ -154,6 +154,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         id: s.session, label: s.headline || t("browse.untitled"), count: s.count,
         sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
         subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
+        // 전 턴이 접힌 세션(#128): 목록에서 빼지 않고 흐리게 '접힘'으로 구분 — 빼버리면 펼칠 길이 없다.
+        folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
       })))).catch(() => setGroupsErr(true))
     } else {
       getGraph3D().then((g) => {
@@ -242,19 +244,21 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         <button key={g.id} onClick={() => pickGroup(g.id)}
           className={`cm-cv-row flex w-full items-center gap-2.5 rounded-lg border p-3 text-left transition-colors ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
           {groupIcon(g)}
-          <span className="min-w-0 flex-1">
+          <span className={`min-w-0 flex-1 ${g.folded ? "opacity-55" : ""}`}>
             <span className="block truncate text-sm font-medium">{g.label}</span>
             <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{g.sub}</span>
           </span>
+          {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
         </button>
       ) : (
         <button key={g.id} onClick={() => pickGroup(g.id)}
           className="cm-cv-row group flex w-full items-center gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-px hover:shadow-md">
           {groupIcon(g)}
-          <div className="min-w-0 flex-1">
+          <div className={`min-w-0 flex-1 ${g.folded ? "opacity-55" : ""}`}>
             <div className="truncate text-sm font-medium">{g.label}</div>
             <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground tabular-nums">{g.sub}</div>
           </div>
+          {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
           <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
         </button>
       ))}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { X, Blend, Brain, EyeOff, Type, SearchX, AlertTriangle } from "lucide-react"
+import { X, Blend, Brain, ChevronsDownUp, Type, SearchX, AlertTriangle } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -40,12 +40,13 @@ export function SearchView() {
   // 검색 소스 필터: 데이터 있는 출처만 목록에 뜬다(1종뿐이면 필터 자체를 숨김).
   const [srcOpts, setSrcOpts] = useState<SourceOption[]>([])
   const [srcSel, setSrcSel] = useState<Set<string>>(new Set())
-  const [hideErr, setHideErr] = useState("")   // 숨김(#128) 실패 알림(간단히 잠깐 표시)
+  const [hideErr, setHideErr] = useState("")   // 접기(#128) 실패 알림(간단히 잠깐 표시)
   const reqId = useRef(0)   // 최신 요청만 반영(빠른 연속 검색 시 오래된 응답이 덮어쓰기 방지)
   const hideErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (hideErrTimer.current) clearTimeout(hideErrTimer.current) }, [])
 
-  // 검색 결과에서 턴 하나 숨김(#128) - 비파괴, 리스트에서만 즉시 제거. 실패하면 되돌리지 않고 알림만.
+  // 검색 결과에서 턴 하나 접기(#128) - 접으면 검색 대상에서 빠지므로 결과 목록에서도 즉시 제거.
+  // 되돌리려면 그 세션을 열면 제자리에 '접힘' 한 줄로 남아 있다(설정에 별도 목록을 두지 않는 이유).
   async function hide(id: string, e: React.MouseEvent) {
     e.stopPropagation()
     try {
@@ -53,7 +54,7 @@ export function SearchView() {
       setHits((prev) => prev.filter((h) => h.id !== id))
       setSel((s) => (s?.turn === id ? null : s))
     } catch (err) {
-      setHideErr(errText(t, err, "search.hideFailed"))
+      setHideErr(errText(t, err, "search.foldFailed"))
       if (hideErrTimer.current) clearTimeout(hideErrTimer.current)
       hideErrTimer.current = setTimeout(() => setHideErr(""), 4000)
     }
@@ -211,9 +212,9 @@ export function SearchView() {
                   <span className="opacity-40">·</span>
                   <span>{t("search.session", { n: h.session })}</span>
                   <button type="button" onClick={(e) => hide(h.id, e)}
-                    title={t("search.hideTurn")} aria-label={t("search.hideTurn")}
+                    title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
                     className="ml-auto inline-flex items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
-                    <EyeOff className="size-3.5" />
+                    <ChevronsDownUp className="size-3.5" />
                   </button>
                 </div>
                 <div className="line-clamp-2 text-[13.5px] font-medium leading-snug text-balance">

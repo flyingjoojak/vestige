@@ -237,17 +237,11 @@ def test_hide_turns_idempotent_and_empty_list(tmp_path):
     assert db.hide_turns([]) == 0   # 빈 목록 no-op
 
 
-def test_list_hidden_orders_recent_first_and_joins_turn_info(tmp_path):
+def test_hidden_turns_survive_reupsert(tmp_path):
+    """접힘 상태는 turns 재기록(재색인)과 무관한 별도 테이블 — 다시 색인돼도 접힌 채로 남는다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="첫질문")); db.upsert_turn(_turn("s1:u2", q="둘째질문"))
-    db.commit()
+    db.upsert_turn(_turn("s1:u1", q="첫질문")); db.commit()
     db.hide_turns(["s1:u1"])
-    db.hide_turns(["s1:u2"])
-    # time.time() 해상도 차이로 순서가 불안정할 수 있어 hidden_at 을 직접 벌려 결정론적으로.
-    db.conn.execute("UPDATE hidden_turns SET hidden_at=100 WHERE turn_id='s1:u1'")
-    db.conn.execute("UPDATE hidden_turns SET hidden_at=200 WHERE turn_id='s1:u2'")
-    db.commit()
 
-    out = db.list_hidden()
-    assert [h["turn_id"] for h in out] == ["s1:u2", "s1:u1"]
-    assert out[0]["question"] == "둘째질문" and out[0]["session_id"] == "s1"
+    db.upsert_turn(_turn("s1:u1", q="첫질문 더 길어진 재파싱본")); db.commit()
+    assert db.hidden_turn_ids() == {"s1:u1"}

@@ -326,17 +326,6 @@ class ArchiveDB:
         """읽을 때 필터용 전체 숨김 turn id 집합(검색·지도 등에서 공유)."""
         return {r["turn_id"] for r in self.conn.execute("SELECT turn_id FROM hidden_turns")}
 
-    def list_hidden(self, limit: int = 500) -> list[dict]:
-        """설정 화면의 '숨김 목록'(복원용): 최근 숨긴 순."""
-        rows = self.conn.execute(
-            "SELECT h.turn_id, h.hidden_at, t.session_id, t.question, t.timestamp "
-            "FROM hidden_turns h LEFT JOIN turns t ON t.id = h.turn_id "
-            "ORDER BY h.hidden_at DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [{
-            "turn_id": r["turn_id"], "session_id": r["session_id"],
-            "question": r["question"], "timestamp": r["timestamp"], "hidden_at": r["hidden_at"],
-        } for r in rows]
 
     def distinct_sources(self) -> list[tuple[str, int]]:
         """색인된 턴이 있는 출처와 개수(검색 필터 옵션용). NULL(레거시)은 claude-code로 취급."""
