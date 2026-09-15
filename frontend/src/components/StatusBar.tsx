@@ -59,7 +59,7 @@ export function StatusBar() {
       getSyncthingStatus().then((r) => alive && setSt(r)).catch(dbg)
     }
     load()
-    const id = window.setInterval(load, 5000)
+    const id = window.setInterval(load, 1000)   // 전부 로컬(SQLite·벡터 파일·localhost REST)이라 1초 폴링도 부담 없음
     return () => { alive = false; window.clearInterval(id) }
   }, [])
 
