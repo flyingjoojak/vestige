@@ -684,6 +684,13 @@ def api_unhide(payload: dict):
     return {"ok": True}
 
 
+@app.get("/api/hidden")
+def api_hidden(limit: int = 200):
+    """접힌 턴 모아보기(#128). limit=0 이면 개수만(좌측 메뉴 배지용 가벼운 호출)."""
+    db = ArchiveDB()
+    return {"hidden": db.list_hidden(limit) if limit > 0 else [], "count": db.hidden_count()}
+
+
 @app.get("/api/sessions")
 def api_sessions(limit: int = 500):
     """세션 목록(최근순): id·턴수·시작/끝 시각·대표 헤드라인(첫 정제/질문)."""

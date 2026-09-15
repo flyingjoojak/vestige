@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from "react"
 import { useTranslation } from "react-i18next"
-import { MessagesSquare, Layers, Box, Settings } from "lucide-react"
+import { MessagesSquare, Layers, Box, FoldVertical, Settings } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Loader2 } from "lucide-react"
 import { SearchView } from "@/components/SearchView"
 import { Browse3Pane } from "@/components/Browse3Pane"
 import { SettingsView } from "@/components/SettingsView"
+import { FoldedView } from "@/components/FoldedView"
 import { Onboarding } from "@/components/Onboarding"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { StatusBar } from "@/components/StatusBar"
 import { UpdateBanner } from "@/components/UpdateBanner"
 import { AlertTriangle } from "lucide-react"
-import { getOnboarding, getSchemaReport, getSystem, getStats, getIndexStatus, type SchemaSource } from "@/lib/api"
+import { getOnboarding, getSchemaReport, getSystem, getStats, getIndexStatus, listHidden, type SchemaSource } from "@/lib/api"
 import { buildIssueUrl, copyText } from "@/lib/report"
 import { applyTheme } from "@/lib/theme"
 import vestigeMark from "@/assets/vestige-mark.png"
@@ -19,13 +20,14 @@ import vestigeMark from "@/assets/vestige-mark.png"
 // three.js는 무거우니 3D 탭 열 때만 로드(초기 번들 경량).
 const GraphView3D = lazy(() => import("@/components/GraphView3D").then((m) => ({ default: m.GraphView3D })))
 
-type View = "search" | "sessions" | "clusters" | "graph3d" | "settings"
+type View = "search" | "sessions" | "clusters" | "graph3d" | "folded" | "settings"
 
 const NAV: { v: View; icon: React.ReactNode; labelKey: string }[] = [
   { v: "search", icon: <Magnifier className="size-[18px]" />, labelKey: "nav.search" },
   { v: "sessions", icon: <MessagesSquare className="size-[18px]" />, labelKey: "nav.sessions" },
   { v: "clusters", icon: <Layers className="size-[18px]" />, labelKey: "nav.clusters" },
   { v: "graph3d", icon: <Box className="size-[18px]" />, labelKey: "nav.map" },
+  { v: "folded", icon: <FoldVertical className="size-[18px]" />, labelKey: "nav.folded" },
   { v: "settings", icon: <Settings className="size-[18px]" />, labelKey: "nav.settings" },
 ]
 
@@ -44,6 +46,16 @@ export default function App() {
   const openTurn = (kind: "sessions" | "clusters", id: string, turn: string, session: string) => {
     setJump({ kind, id, turn, session }); setView(kind); setNonce((k) => k + 1)
   }
+  // 좌측 메뉴 '접힘' 배지 개수. 검색·세션 어디서 접든 반영돼야 해서 가볍게 폴링한다(COUNT만).
+  const [foldedCount, setFoldedCount] = useState(0)
+  const refreshFolded = useCallback(() => {
+    listHidden(0).then((r) => setFoldedCount(r.count)).catch(() => { /* 배지일 뿐이라 조용히 무시 */ })
+  }, [])
+  useEffect(() => {
+    refreshFolded()
+    const id = window.setInterval(refreshFolded, 5000)
+    return () => window.clearInterval(id)
+  }, [refreshFolded])
   // 첫 실행이면(프리즈 exe·모델 미선택) 모델 선택 화면을 먼저. null=확인중.
   const [onboard, setOnboard] = useState<boolean | null>(null)
   const [backendDown, setBackendDown] = useState(false)
@@ -132,11 +144,16 @@ export default function App() {
             onClick={() => onNav(n.v)}
             title={t(n.labelKey)}
             aria-label={t(n.labelKey)}
-            className={`grid size-10 place-items-center rounded-lg transition-colors ${
+            className={`relative grid size-10 place-items-center rounded-lg transition-colors ${
               view === n.v ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             {n.icon}
+            {n.v === "folded" && foldedCount > 0 && (
+              <span aria-hidden className="absolute right-0.5 top-0.5 min-w-[15px] rounded-full bg-muted px-1 text-[9px] font-medium leading-[15px] text-muted-foreground tabular-nums">
+                {foldedCount > 99 ? "99+" : foldedCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>
@@ -190,6 +207,10 @@ export default function App() {
             <Suspense fallback={<div className="grid h-full place-items-center text-muted-foreground">{t("app.mapLoading")}</div>}>
               <GraphView3D onOpenTurn={openTurn} />
             </Suspense>
+          )}
+          {view === "folded" && (
+            <FoldedView onChanged={refreshFolded}
+              onOpenTurn={(session, turn) => openTurn("sessions", session, turn, session)} />
           )}
           {view === "settings" && <SettingsView />}
         </ErrorBoundary>

@@ -67,3 +67,12 @@ export interface Stats {
   vectors: number
   enriched: number
 }
+
+// 접힌 턴 모아보기(#128) - 검색에서 접으면 어느 세션이었는지 잊기 쉬워 한곳에서 다시 찾는다.
+export interface HiddenItem {
+  turn_id: string
+  session_id: string | null
+  headline: string
+  timestamp: string | null
+  hidden_at: number
+}
