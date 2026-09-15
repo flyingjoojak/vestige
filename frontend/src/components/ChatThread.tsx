@@ -8,13 +8,20 @@ import type { SessionDetail as Detail, SessionTurn } from "@/lib/types"
 
 // 접힌 턴(#128): 사라지지 않고 제자리에 한 줄로 남는다 → 맥락이 유지되고 바로 펼 수 있다.
 // (접힌 동안은 검색·지도에서만 빠진다)
-function FoldedTurn({ t, i, onUnhide }: { t: SessionTurn; i: number; onUnhide: (id: string) => void }) {
+function FoldedTurn({ t, i, highlight, onUnhide }: {
+  t: SessionTurn; i: number; highlight: boolean; onUnhide: (id: string) => void
+}) {
   const { t: tr } = useTranslation()
   const headline = t.summary || t.question || tr("chat.noQuestion")
+  // 접힌 턴도 지목해서 들어올 수 있다('접힘' 화면의 '세션 열기') → 펼친 턴과 똑같이 그 자리로 이동·강조.
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => { if (highlight) ref.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" }) }, [highlight])
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+    <div ref={ref} className={`flex scroll-mt-4 items-center gap-2 rounded-lg border border-dashed px-3 py-1.5 text-[11px] text-muted-foreground ${
+      highlight ? "border-primary/50 bg-primary/5 ring-1 ring-primary/30" : "bg-muted/30"}`}>
       <span className="shrink-0 tabular-nums">#{i + 1}</span>
       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{tr("chat.folded")}</span>
+      {highlight && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{tr("chat.selected")}</span>}
       <span className="min-w-0 flex-1 truncate" title={headline}>{headline}</span>
       <button type="button" onClick={() => onUnhide(t.id)}
         className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
@@ -74,6 +81,14 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
 // 세션 전체를 채팅 스레드로 렌더. focusTurn이 있으면 그 턴을 강조+상단 스크롤.
 const PAD = 25   // 포커스 턴 위/아래로 이만큼만 먼저 렌더(큰 세션 로딩 지연 방지)
 
+// 포커스 턴 주변 렌더 창. data 를 받는 시점에 함께 확정해야 첫 렌더부터 최종 창으로 그려진다.
+function windowFor(d: Detail, focusTurn?: string) {
+  const n = d.turns.length
+  const fi = focusTurn ? d.turns.findIndex((t) => t.id === focusTurn) : 0
+  const c = fi >= 0 ? fi : 0
+  return { s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) }
+}
+
 export function ChatThread({ session, focusTurn }: { session: string; focusTurn?: string }) {
   const { t } = useTranslation()
   const [data, setData] = useState<Detail | null>(null)
@@ -82,8 +97,14 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   const [range, setRange] = useState<{ s: number; e: number }>({ s: 0, e: PAD * 2 })
   useEffect(() => {
     setData(null); setErr(""); setHideErr("")
-    getSession(session).then(setData).catch((e) => setErr(String(e)))
-  }, [session])
+    getSession(session).then((d) => {
+      // 렌더 창을 data 와 '같은 렌더'에 확정한다(두 setState 는 배치됨). 효과에서 뒤늦게 잡으면
+      // 첫 렌더가 기본 창(0~50)으로 그려지고, 그 사이 자식이 먼저 scrollIntoView 를 해버려
+      // 곧이어 창이 바뀌며(위쪽 턴이 빠지며) 지목한 턴이 엉뚱한 위치로 밀린다(26~49번째에서 발생).
+      setRange(windowFor(d, focusTurn))
+      setData(d)
+    }).catch((e) => setErr(String(e)))
+  }, [session, focusTurn])
 
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
@@ -111,14 +132,6 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
-  // 포커스 턴 주변으로 렌더 창을 잡는다(전부 렌더하면 500+턴에서 1초+ 걸림).
-  useEffect(() => {
-    if (!data) return
-    const n = data.turns.length
-    const fi = focusTurn ? data.turns.findIndex((t) => t.id === focusTurn) : 0
-    const c = fi >= 0 ? fi : 0
-    setRange({ s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) })
-  }, [data, focusTurn])
 
   const turns = data?.turns ?? []
   const foldedCount = turns.filter((x) => x.hidden).length
@@ -153,7 +166,7 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadPrev", { count: range.s })}</button>
           )}
           {turns.slice(range.s, range.e).map((turn, j) => (turn.hidden
-            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} onUnhide={(id) => foldTurn(id, false)} />
+            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onUnhide={(id) => foldTurn(id, false)} />
             : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onHide={(id) => foldTurn(id, true)} />))}
           {data && range.e < turns.length && (
             <button onClick={() => setRange((r) => ({ ...r, e: Math.min(turns.length, r.e + 50) }))}
