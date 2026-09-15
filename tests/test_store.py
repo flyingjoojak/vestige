@@ -245,3 +245,74 @@ def test_hidden_turns_survive_reupsert(tmp_path):
 
     db.upsert_turn(_turn("s1:u1", q="첫질문 더 길어진 재파싱본")); db.commit()
     assert db.hidden_turn_ids() == {"s1:u1"}
+
+
+# --- 폴더(#201) ----------------------------------------------------------
+def test_folder_create_nest_and_move_rejects_cycle(tmp_path):
+    """중첩 폴더: 자기 자신/자기 하위로 옮기는 건 거부해야 트리가 순환하지 않는다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    root = db.create_folder("Vestige")
+    child = db.create_folder("배포 삽질", parent_id=root)
+    grand = db.create_folder("gzip", parent_id=child)
+    other = db.create_folder("회사 일")
+
+    assert set(db.folder_descendants(root)) == {root, child, grand}
+    assert db.move_folder(root, grand) is False                 # 자기 하위(손자)로는 거부
+    assert db.move_folder(root, root) is False                  # 자기 자신도 거부
+    assert db.get_folder(root)["parent_id"] is None             # 거부됐으니 그대로
+    assert db.move_folder(child, other) is True                 # 다른 가지로 이동은 OK
+    assert db.get_folder(child)["parent_id"] == other
+    assert set(db.folder_descendants(root)) == {root}            # 손자까지 같이 따라갔다
+
+
+def test_folder_turn_ids_expands_session_dynamically(tmp_path):
+    """세션은 참조만 담기므로, 담은 뒤 그 대화가 이어져도 새 턴이 자동 포함된다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", session="s1")); db.upsert_turn(_turn("s2:u1", session="s2"))
+    db.commit()
+    f = db.create_folder("모음")
+    db.add_to_folder(f, "session", "s1")
+    db.add_to_folder(f, "turn", "s2:u1")
+    assert db.folder_turn_ids(f) == {"s1:u1", "s2:u1"}
+
+    db.upsert_turn(_turn("s1:u2", session="s1")); db.commit()   # 세션이 이어짐
+    assert db.folder_turn_ids(f) == {"s1:u1", "s1:u2", "s2:u1"}
+
+
+def test_folder_turn_ids_includes_descendants(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.upsert_turn(_turn("s2:u1", session="s2")); db.commit()
+    parent = db.create_folder("부모")
+    child = db.create_folder("자식", parent_id=parent)
+    db.add_to_folder(parent, "turn", "s1:u1")
+    db.add_to_folder(child, "turn", "s2:u1")
+
+    assert db.folder_turn_ids(parent) == {"s1:u1", "s2:u1"}                      # 하위 포함
+    assert db.folder_turn_ids(parent, include_descendants=False) == {"s1:u1"}    # 직접만
+
+
+def test_delete_folder_removes_subtree_but_keeps_turns(tmp_path):
+    """폴더 삭제는 '참조'만 지운다 - 대화 원문은 그대로(비파괴)."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    parent = db.create_folder("부모")
+    child = db.create_folder("자식", parent_id=parent)
+    db.add_to_folder(child, "turn", "s1:u1")
+
+    assert db.delete_folder(parent) == 2          # 부모 + 자식
+    assert db.list_folders() == []
+    assert db.get_turn("s1:u1") is not None       # 턴은 살아있다
+
+
+def test_add_to_folder_idempotent_and_multi_folder(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    a, b = db.create_folder("A"), db.create_folder("B")
+    db.add_to_folder(a, "turn", "s1:u1")
+    db.add_to_folder(a, "turn", "s1:u1")          # 재추가 - 에러 없이 그대로
+    db.add_to_folder(b, "turn", "s1:u1")          # 같은 항목을 여러 폴더에
+
+    assert len(db.folder_items(a)) == 1
+    assert sorted(db.folders_of("turn", "s1:u1")) == sorted([a, b])
+    db.remove_from_folder(a, "turn", "s1:u1")
+    assert db.folders_of("turn", "s1:u1") == [b]

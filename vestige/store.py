@@ -41,9 +41,22 @@ CREATE TABLE IF NOT EXISTS raw_cursors(
 CREATE TABLE IF NOT EXISTS hidden_turns(
   turn_id TEXT PRIMARY KEY, hidden_at REAL
 );
+CREATE TABLE IF NOT EXISTS folders(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES folders(id), created_at REAL
+);
+CREATE TABLE IF NOT EXISTS folder_items(
+  folder_id INTEGER NOT NULL REFERENCES folders(id),
+  kind TEXT NOT NULL,      -- 'turn' | 'session'
+  ref TEXT NOT NULL,       -- turn id 또는 session id
+  added_at REAL,
+  PRIMARY KEY(folder_id, kind, ref)
+);
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp);
 CREATE INDEX IF NOT EXISTS idx_chunks_turn ON chunks(turn_id);
+CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
+CREATE INDEX IF NOT EXISTS idx_folder_items_folder ON folder_items(folder_id);
 """
 
 # 스키마 버전 = 아래 _MIGRATIONS 길이. 새 DB는 _SCHEMA(최신 형태)로 만든 뒤 곧장 이 번호로 스탬프하고,
@@ -89,12 +102,33 @@ def _mig_0004_hidden_turns(conn: sqlite3.Connection) -> None:
     )""")
 
 
+def _mig_0005_folders(conn: sqlite3.Connection) -> None:
+    """folders/folder_items 추가(#201: 사용자가 직접 만드는 폴더 = 수동 군집).
+
+    자동 군집(의미 기반)과 달리 사용자가 원하는 것만 모은다. 중첩 허용(parent_id).
+    담는 단위는 턴과 세션 두 가지 — 세션은 참조만 두고 읽을 때 펼쳐, 그 대화가
+    이어져 턴이 늘어도 폴더에 자동 포함된다.
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS folders(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      parent_id INTEGER REFERENCES folders(id), created_at REAL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_items(
+      folder_id INTEGER NOT NULL REFERENCES folders(id),
+      kind TEXT NOT NULL, ref TEXT NOT NULL, added_at REAL,
+      PRIMARY KEY(folder_id, kind, ref)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_folder_items_folder ON folder_items(folder_id)")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
     _mig_0002_cursor_hold_offset,
     _mig_0003_raw_cursors,
     _mig_0004_hidden_turns,
+    _mig_0005_folders,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -453,6 +487,126 @@ class ArchiveDB:
                  source=excluded.source, updated_at=excluded.updated_at""",
             (file_path, mirrored_offset, session_id, source, time.time()),
         )
+
+    # --- 폴더(#201) ------------------------------------------------------
+    # 사용자가 직접 만드는 수동 군집. 자동 군집(의미 기반)과 달리 원하는 것만 모은다.
+    # 세션은 참조만 담아 읽을 때 펼친다 → 그 대화가 이어져 턴이 늘어도 폴더에 자동 포함된다.
+    def create_folder(self, name: str, parent_id: int | None = None) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)",
+            (name, parent_id, time.time()))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def list_folders(self) -> list[dict]:
+        """전체 폴더(트리 구성은 호출부에서). 각 폴더의 '직접' 담긴 항목 수를 함께."""
+        rows = self.conn.execute(
+            "SELECT f.id, f.name, f.parent_id, f.created_at,"
+            "       (SELECT COUNT(*) FROM folder_items i WHERE i.folder_id = f.id) AS n_items "
+            "FROM folders f ORDER BY f.name, f.id"
+        ).fetchall()
+        return [{"id": r["id"], "name": r["name"], "parent_id": r["parent_id"],
+                 "created_at": r["created_at"], "items": r["n_items"]} for r in rows]
+
+    def get_folder(self, folder_id: int) -> dict | None:
+        r = self.conn.execute(
+            "SELECT id, name, parent_id, created_at FROM folders WHERE id=?", (folder_id,)).fetchone()
+        return None if r is None else {"id": r["id"], "name": r["name"],
+                                       "parent_id": r["parent_id"], "created_at": r["created_at"]}
+
+    def folder_descendants(self, folder_id: int) -> list[int]:
+        """자신 + 모든 하위 폴더 id. 중첩 폴더의 내용을 한 번에 훑을 때 쓴다."""
+        out, stack = [], [folder_id]
+        seen = set()
+        while stack:
+            fid = stack.pop()
+            if fid in seen:      # 혹시 모를 순환에도 멈추도록(생성 시 막지만 방어적으로)
+                continue
+            seen.add(fid)
+            out.append(fid)
+            stack += [r["id"] for r in self.conn.execute(
+                "SELECT id FROM folders WHERE parent_id=?", (fid,))]
+        return out
+
+    def rename_folder(self, folder_id: int, name: str) -> None:
+        self.conn.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
+        self.conn.commit()
+
+    def move_folder(self, folder_id: int, parent_id: int | None) -> bool:
+        """폴더를 다른 폴더 밑으로. 자기 자신/자기 하위로는 못 옮긴다(순환 방지). 성공 여부 반환."""
+        if parent_id is not None and parent_id in self.folder_descendants(folder_id):
+            return False
+        self.conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (parent_id, folder_id))
+        self.conn.commit()
+        return True
+
+    def delete_folder(self, folder_id: int) -> int:
+        """폴더와 그 하위 폴더를 통째로 삭제. 담긴 항목의 '참조'만 지우며 원문·턴은 그대로.
+        반환: 삭제된 폴더 수."""
+        ids = self.folder_descendants(folder_id)
+        marks = ",".join("?" * len(ids))
+        self.conn.execute(f"DELETE FROM folder_items WHERE folder_id IN ({marks})", ids)
+        self.conn.execute(f"DELETE FROM folders WHERE id IN ({marks})", ids)
+        self.conn.commit()
+        return len(ids)
+
+    def add_to_folder(self, folder_id: int, kind: str, ref: str) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO folder_items(folder_id, kind, ref, added_at) VALUES(?,?,?,?)",
+            (folder_id, kind, ref, time.time()))
+        self.conn.commit()
+
+    def remove_from_folder(self, folder_id: int, kind: str, ref: str) -> None:
+        self.conn.execute(
+            "DELETE FROM folder_items WHERE folder_id=? AND kind=? AND ref=?", (folder_id, kind, ref))
+        self.conn.commit()
+
+    def folder_items(self, folder_id: int) -> list[dict]:
+        """폴더에 '직접' 담긴 항목(하위 폴더 제외). 표시용 헤드라인을 붙여 돌려준다."""
+        rows = self.conn.execute(
+            "SELECT kind, ref, added_at FROM folder_items WHERE folder_id=? ORDER BY added_at DESC",
+            (folder_id,)).fetchall()
+        out = []
+        for r in rows:
+            item = {"kind": r["kind"], "ref": r["ref"], "added_at": r["added_at"]}
+            if r["kind"] == "turn":
+                t = self.conn.execute(
+                    "SELECT session_id, summary, question, timestamp FROM turns WHERE id=?",
+                    (r["ref"],)).fetchone()
+                item |= {"session_id": t["session_id"] if t else None,
+                         "headline": ((t["summary"] or t["question"]) if t else "") or "",
+                         "timestamp": t["timestamp"] if t else None}
+            else:   # session — 담긴 건 참조뿐이라 현재 기준으로 개수·대표 제목을 매번 계산
+                t = self.conn.execute(
+                    "SELECT COUNT(*) n, MIN(timestamp) started, MAX(timestamp) ended FROM turns "
+                    "WHERE session_id=?", (r["ref"],)).fetchone()
+                head = self.conn.execute(
+                    "SELECT summary, question FROM turns WHERE session_id=? ORDER BY timestamp, id LIMIT 1",
+                    (r["ref"],)).fetchone()
+                item |= {"session_id": r["ref"], "count": t["n"] if t else 0,
+                         "headline": ((head["summary"] or head["question"]) if head else "") or "",
+                         "timestamp": t["ended"] if t else None}
+            out.append(item)
+        return out
+
+    def folder_turn_ids(self, folder_id: int, include_descendants: bool = True) -> set[str]:
+        """폴더가 가리키는 모든 턴 id(폴더 내 검색용). 세션 참조는 지금의 턴 전체로 펼친다."""
+        ids = self.folder_descendants(folder_id) if include_descendants else [folder_id]
+        marks = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT kind, ref FROM folder_items WHERE folder_id IN ({marks})", ids).fetchall()
+        turn_ids = {r["ref"] for r in rows if r["kind"] == "turn"}
+        sessions = [r["ref"] for r in rows if r["kind"] == "session"]
+        if sessions:
+            smarks = ",".join("?" * len(sessions))
+            turn_ids |= {r["id"] for r in self.conn.execute(
+                f"SELECT id FROM turns WHERE session_id IN ({smarks})", sessions)}
+        return turn_ids
+
+    def folders_of(self, kind: str, ref: str) -> list[int]:
+        """이 항목이 담긴 폴더 id들(같은 항목을 여러 폴더에 담을 수 있다)."""
+        return [r["folder_id"] for r in self.conn.execute(
+            "SELECT folder_id FROM folder_items WHERE kind=? AND ref=?", (kind, ref))]
 
     # --- 메타 -----------------------------------------------------------
     def get_meta(self, key: str) -> str | None:

@@ -518,6 +518,7 @@ def api_search(
     until: str | None = None,
     mode: str = "hybrid",          # hybrid | semantic | keyword
     sources: str | None = None,    # 쉼표 목록(claude-code,codex). 비면 전체 소스
+    folder: int | None = None,     # 폴더 안에서만 검색(#201). 하위 폴더까지 포함
     semantic_only: bool = False,   # (구버전 호환)
 ):
     if semantic_only:
@@ -534,9 +535,12 @@ def api_search(
         embedder = get_embedder()   # 지연 로드 — 유휴 후 첫 검색은 로딩에 몇 초 걸릴 수 있음
     db = ArchiveDB()
     vi = make_index()
+    # 폴더 스코프: 그 폴더(+하위)가 가리키는 턴만. 빈 폴더면 빈 집합이라 결과도 0건이 맞다.
+    allow_ids = db.folder_turn_ids(folder) if folder is not None else None
     hits = run_search(q, db, vi, embedder, k=k, session=session or None,
                       since=since or None, until=until or None,
-                      keyword=want_kw, semantic=want_sem, tool_sources=tool_sources)
+                      keyword=want_kw, semantic=want_sem, tool_sources=tool_sources,
+                      allow_ids=allow_ids)
     return {"query": q, "count": len(hits), "hits": [_hit_to_dict(h) for h in hits]}
 
 
@@ -682,6 +686,121 @@ def api_unhide(payload: dict):
         raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
     _graph3d_invalidate()   # 지도 캐시가 복원된 턴을 계속 빼놓지 않도록 즉시 폐기
     return {"ok": True}
+
+
+# --- 폴더(#201): 사용자가 직접 만드는 수동 군집 -------------------------------
+def _folder_or_404(db, folder_id: int) -> dict:
+    f = db.get_folder(folder_id)
+    if f is None:
+        raise HTTPException(status_code=404, detail={"code": "folder_not_found", "msg": "폴더를 찾을 수 없음"})
+    return f
+
+
+def _folder_target(payload: dict) -> tuple[str, str]:
+    """payload 의 {turn_id} 또는 {session_id} → (kind, ref). 둘 다 없으면 400."""
+    turn_id = (payload or {}).get("turn_id")
+    session_id = (payload or {}).get("session_id")
+    if turn_id:
+        return "turn", str(turn_id)
+    if session_id:
+        return "session", str(session_id)
+    raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
+
+
+@app.get("/api/folders")
+def api_folders():
+    """전체 폴더 목록(트리 구성은 프론트에서). 각 폴더의 직접 항목 수 포함."""
+    return {"folders": ArchiveDB().list_folders()}
+
+
+@app.post("/api/folders/create")
+def api_folder_create(payload: dict):
+    name = str((payload or {}).get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail={"code": "empty_name", "msg": "폴더 이름이 필요합니다"})
+    db = ArchiveDB()
+    parent_id = (payload or {}).get("parent_id")
+    if parent_id is not None:
+        _folder_or_404(db, int(parent_id))
+    return {"ok": True, "id": db.create_folder(name, int(parent_id) if parent_id is not None else None)}
+
+
+@app.post("/api/folders/rename")
+def api_folder_rename(payload: dict):
+    name = str((payload or {}).get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail={"code": "empty_name", "msg": "폴더 이름이 필요합니다"})
+    db = ArchiveDB()
+    fid = int((payload or {}).get("id", 0))
+    _folder_or_404(db, fid)
+    db.rename_folder(fid, name)
+    return {"ok": True}
+
+
+@app.post("/api/folders/move")
+def api_folder_move(payload: dict):
+    """폴더를 다른 폴더 밑으로(parent_id=null 이면 최상위). 자기 하위로는 못 옮긴다."""
+    db = ArchiveDB()
+    fid = int((payload or {}).get("id", 0))
+    _folder_or_404(db, fid)
+    parent_id = (payload or {}).get("parent_id")
+    if parent_id is not None:
+        _folder_or_404(db, int(parent_id))
+    if not db.move_folder(fid, int(parent_id) if parent_id is not None else None):
+        raise HTTPException(status_code=400, detail={"code": "folder_cycle", "msg": "폴더를 자기 하위로 옮길 수 없습니다"})
+    return {"ok": True}
+
+
+@app.post("/api/folders/delete")
+def api_folder_delete(payload: dict):
+    """폴더와 하위 폴더를 삭제. 담긴 항목의 참조만 지우며 대화 원문은 그대로 남는다."""
+    db = ArchiveDB()
+    fid = int((payload or {}).get("id", 0))
+    _folder_or_404(db, fid)
+    return {"ok": True, "deleted": db.delete_folder(fid)}
+
+
+@app.post("/api/folders/add")
+def api_folder_add(payload: dict):
+    """폴더에 담기. payload: {folder_id, turn_id | session_id}."""
+    db = ArchiveDB()
+    fid = int((payload or {}).get("folder_id", 0))
+    _folder_or_404(db, fid)
+    kind, ref = _folder_target(payload)
+    if kind == "turn" and db.get_turn(ref) is None:   # 없는 턴을 담아 유령 항목이 생기지 않게
+        raise HTTPException(status_code=404, detail={"code": "turn_not_found", "msg": "턴을 찾을 수 없음"})
+    db.add_to_folder(fid, kind, ref)
+    return {"ok": True}
+
+
+@app.post("/api/folders/remove")
+def api_folder_remove(payload: dict):
+    db = ArchiveDB()
+    fid = int((payload or {}).get("folder_id", 0))
+    _folder_or_404(db, fid)
+    kind, ref = _folder_target(payload)
+    db.remove_from_folder(fid, kind, ref)
+    return {"ok": True}
+
+
+@app.get("/api/folder")
+def api_folder(id: int = Query(...)):
+    """폴더 하나: 이름·상위 경로·하위 폴더·담긴 항목."""
+    db = ArchiveDB()
+    f = _folder_or_404(db, id)
+    all_folders = db.list_folders()
+    by_id = {x["id"]: x for x in all_folders}
+    path, cur = [], f["parent_id"]           # 최상위까지의 경로(빵부스러기용)
+    while cur is not None and cur in by_id:
+        path.append({"id": by_id[cur]["id"], "name": by_id[cur]["name"]})
+        cur = by_id[cur]["parent_id"]
+    return {
+        "folder": f,
+        "path": list(reversed(path)),
+        "children": [x for x in all_folders if x["parent_id"] == id],
+        "items": db.folder_items(id),
+        "turn_count": len(db.folder_turn_ids(id)),   # 하위까지 포함한 실제 턴 수(검색 범위)
+    }
 
 
 @app.get("/api/hidden")

@@ -82,9 +82,10 @@ def search(
     keyword: bool = True,
     semantic: bool = True,
     tool_sources: set[str] | None = None,   # None=전체, 아니면 이 출처(claude-code/codex)만
+    allow_ids: set[str] | None = None,      # None=전체, 아니면 이 턴들만(폴더 안에서 검색, #201)
 ) -> list[SearchHit]:
-    # 세션 스코프면 후보를 크게 잡아 그 세션 턴이 전역 상위 밖이어도 표면화되게 함.
-    depth = max(k * 8, 1000) if session else k * 8
+    # 세션·폴더 스코프면 후보를 크게 잡아 그 안의 턴이 전역 상위 밖이어도 표면화되게 함.
+    depth = max(k * 8, 1000) if (session or allow_ids is not None) else k * 8
     # 의미 끄면(키워드 전용) 임베더 불필요.
     sem_order, cosine = _semantic_turn_ranks(query, db, vi, embedder, depth) if semantic else ([], {})
     kw_order = [tid for tid, _ in db.keyword_search(query, limit=depth)] if keyword else []
@@ -110,6 +111,8 @@ def search(
     seen_questions: set[str] = set()
     for tid in ranked:
         if tid in hidden:
+            continue
+        if allow_ids is not None and tid not in allow_ids:   # 폴더 스코프(#201)
             continue
         turn = db.get_turn(tid)
         if turn is None:
