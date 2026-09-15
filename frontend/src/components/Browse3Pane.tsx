@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, type SearchMode } from "@/lib/api"
+import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
 import type { Hit, SessionDetail } from "@/lib/types"
@@ -36,6 +37,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   kind: "sessions" | "clusters"; initialSel?: string | null; initialTurn?: { turn: string; session: string } | null
 }) {
   const { t } = useTranslation()
+  const { confirm } = useDialogs()
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
   const [pointsByCluster, setPointsByCluster] = useState<Map<number, Conv[]>>(new Map())
@@ -103,7 +105,11 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     try {
       let r = await resumeSession(sel)
       if (!r.ok && r.active) {   // 최근 수정됨 → 확인 후 강제 재개
-        const go = window.confirm(`${errText(t, r, "browse.resumeActiveWarning")}\n\n${t("browse.resumeConfirm")}`)
+        const go = await confirm({
+          title: t("browse.resumeConfirmTitle"),
+          description: `${errText(t, r, "browse.resumeActiveWarning")} ${t("browse.resumeConfirm")}`,
+          confirmLabel: t("browse.open"),
+        })
         if (!go) return
         r = await resumeSession(sel, true)
       }

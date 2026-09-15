@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Check, FolderPlus, Loader2 } from "lucide-react"
 import { addToFolder, createFolder, listFolders, type FolderTarget } from "@/lib/api"
+import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import type { Folder } from "@/lib/types"
 
@@ -12,6 +13,7 @@ export function AddToFolder({ target, className, showLabel }: {
   target: FolderTarget; className?: string; showLabel?: boolean   // showLabel: 아이콘 옆에 글자도(헤더용)
 }) {
   const { t } = useTranslation()
+  const { prompt } = useDialogs()
   const [open, setOpen] = useState(false)
   const [folders, setFolders] = useState<Folder[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -50,15 +52,17 @@ export function AddToFolder({ target, className, showLabel }: {
   }
 
   async function addToNew() {
-    const name = window.prompt(t("folders.newPrompt"))
-    if (!name?.trim()) return
+    setOpen(false)   // 모달이 뜨는 동안 드롭다운은 닫아둔다
+    const name = await prompt({
+      title: t("folders.newAndAdd"), description: t("folders.newPrompt"), confirmLabel: t("folders.create"),
+    })
+    if (!name) return
     setBusy(true)
     try {
-      const r = await createFolder(name.trim())
+      const r = await createFolder(name)
       await addToFolder(r.id, target)
       setFolders(null)          // 다음에 열 때 새 목록으로
-      setOpen(false)
-      flashDone(name.trim())
+      flashDone(name)
     } catch (e) {
       setErr(errText(t, e, "folders.saveFailed"))
     } finally {

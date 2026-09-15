@@ -8,7 +8,8 @@
     "loading": "불러오는 중…",
     "later": "나중에",
     "on": "켜짐",
-    "off": "꺼짐"
+    "off": "꺼짐",
+    "confirm": "확인"
   },
   "nav": {
     "search": "검색",
@@ -362,7 +363,8 @@
     "sessionId": "세션 {{id}}",
     "selectPrompt": "왼쪽 대화를 클릭하세요.",
     "groupListTitle": "{{title}} 목록",
-    "folded": "접힘"
+    "folded": "접힘",
+    "resumeConfirmTitle": "세션이 사용 중일 수 있어요"
   },
   "mcp": {
     "sectionTitle": "MCP 연동",
@@ -510,6 +512,8 @@
     "searchFailed": "검색에 실패했어요",
     "addTo": "폴더에 추가",
     "addedTo": "'{{name}}'에 담음",
-    "newAndAdd": "새 폴더 만들어 담기"
+    "newAndAdd": "새 폴더 만들어 담기",
+    "create": "만들기",
+    "deleteTitle": "'{{name}}' 삭제"
   }
 }

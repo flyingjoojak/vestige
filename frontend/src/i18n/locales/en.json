@@ -8,7 +8,8 @@
     "loading": "Loading…",
     "later": "Later",
     "on": "On",
-    "off": "Off"
+    "off": "Off",
+    "confirm": "Confirm"
   },
   "nav": {
     "search": "Search",
@@ -362,7 +363,8 @@
     "sessionId": "Session {{id}}",
     "selectPrompt": "Select a conversation on the left.",
     "groupListTitle": "{{title}} list",
-    "folded": "Folded"
+    "folded": "Folded",
+    "resumeConfirmTitle": "This session may be in use"
   },
   "mcp": {
     "sectionTitle": "MCP integration",
@@ -510,6 +512,8 @@
     "searchFailed": "Search failed",
     "addTo": "Add to folder",
     "addedTo": "Added to '{{name}}'",
-    "newAndAdd": "New folder and add"
+    "newAndAdd": "New folder and add",
+    "create": "Create",
+    "deleteTitle": "Delete '{{name}}'"
   }
 }
