@@ -507,6 +507,9 @@
     "untitled": "(제목 없음)",
     "loadFailed": "폴더를 불러오지 못했어요",
     "saveFailed": "저장하지 못했어요",
-    "searchFailed": "검색에 실패했어요"
+    "searchFailed": "검색에 실패했어요",
+    "addTo": "폴더에 추가",
+    "addedTo": "'{{name}}'에 담음",
+    "newAndAdd": "새 폴더 만들어 담기"
   }
 }

@@ -507,6 +507,9 @@
     "untitled": "(untitled)",
     "loadFailed": "Couldn't load folders",
     "saveFailed": "Couldn't save",
-    "searchFailed": "Search failed"
+    "searchFailed": "Search failed",
+    "addTo": "Add to folder",
+    "addedTo": "Added to '{{name}}'",
+    "newAndAdd": "New folder and add"
   }
 }
