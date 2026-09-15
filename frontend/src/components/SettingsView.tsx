@@ -81,8 +81,9 @@ function StatusChip({ tone, children }: { tone: "ok" | "warn" | "muted"; childre
   return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${cls}`}>{children}</span>
 }
 
-// 로그 폴더 지정: 평소엔 한 줄(이름 + 상태 + 「변경」)만. 「변경」을 눌러야 입력칸이 펼쳐진다
-// → 화면 공간을 거의 안 쓰면서, 대부분(자동 감지된) 사용자는 상태만 확인하면 된다.
+// 경로 설정 공용 행(로그 폴더·원본 보존소·CLI 경로): 평소엔 한 줄(이름 + 상태 + 「경로 변경」)만.
+// 「경로 변경」을 눌러야 입력칸이 펼쳐진다 → 화면 공간을 거의 안 쓰면서, 대부분(자동 감지된)
+// 사용자는 상태만 확인하면 된다. 경로 입력은 전부 이 컴포넌트를 쓴다(UI·동작 일관성).
 function FolderRow({ label, chip, path, onPathChange, onSave, saved, err, placeholder, help }: {
   label: string; chip: React.ReactNode; path: string; onPathChange: (v: string) => void
   onSave: () => void; saved: boolean; err?: string; placeholder: string; help: React.ReactNode
@@ -529,6 +530,11 @@ export function SettingsView() {
   const [codexDir, setCodexDir] = useState("")
   const [codexSaved, setCodexSaved] = useState(false)
   const [codexErr, setCodexErr] = useState("")
+  const [rawDir, setRawDir] = useState("")          // 원본 로그 보존소 경로(#163)
+  const [rawSaved, setRawSaved] = useState(false)
+  const [rawErr, setRawErr] = useState("")
+  const [binSaved, setBinSaved] = useState(false)   // claude CLI 경로 저장 표시
+  const [binErr, setBinErr] = useState("")
   const [tab, setTab] = useState<TabKey>("general")
   const [intervalSaved, setIntervalSaved] = useState(false)
   const [indexErr, setIndexErr] = useState("")
@@ -628,7 +634,7 @@ export function SettingsView() {
       setClaudeBin(c.claude_bin ?? "")
       setSkipSdk(!!c.skip_sdk)
       setIndexMode((c.index_mode as IndexMode) || "interval"); setIndexTime(c.index_time || "03:00")
-      setRawMaxMb(c.raw_archive_max_mb || "")
+      setRawMaxMb(c.raw_archive_max_mb || ""); setRawDir(c.raw_archive_dir || "")
       const cur = c.models[c.enrich_backend] ?? ""
       const opts = BACKENDS.find((b) => b.v === c.enrich_backend)?.models ?? []
       setModel(cur); setCustomModel(!!cur && !(opts as readonly string[]).includes(cur))
@@ -710,25 +716,21 @@ export function SettingsView() {
     if (await runTest()) await commitSave()
   }
 
-  async function saveProjects() {
-    setProjErr("")
+  // 경로 계열 설정(로그 폴더·보존소·CLI)은 저장 흐름이 같다 — 한 곳으로 모아 동작을 일치시킨다.
+  async function savePath(key: string, value: string,
+                          setSaved: (v: boolean) => void, setErr: (v: string) => void) {
+    setErr("")
     try {
-      const r = await putConfig({ CLAUDE_PROJECTS_DIR: projectsDir })
-      if (!r.ok) { setProjErr(errText(t, r, "settings.saveFailed")); return }
-    } catch (e) { setProjErr(errText(t, e, "settings.saveFailed")); return }
-    setProjSaved(true); setTimeout(() => setProjSaved(false), 1800)
+      const r = await putConfig({ [key]: value.trim() })
+      if (!r.ok) { setErr(errText(t, r, "settings.saveFailed")); return }
+    } catch (e) { setErr(errText(t, e, "settings.saveFailed")); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
     getConfig().then(setCfg).catch(() => {})
   }
-
-  async function saveCodex() {
-    setCodexErr("")
-    try {
-      const r = await putConfig({ CODEX_SESSIONS_DIR: codexDir })
-      if (!r.ok) { setCodexErr(errText(t, r, "settings.saveFailed")); return }
-    } catch (e) { setCodexErr(errText(t, e, "settings.saveFailed")); return }
-    setCodexSaved(true); setTimeout(() => setCodexSaved(false), 1800)
-    getConfig().then(setCfg).catch(() => {})
-  }
+  const saveProjects = () => savePath("CLAUDE_PROJECTS_DIR", projectsDir, setProjSaved, setProjErr)
+  const saveCodex = () => savePath("CODEX_SESSIONS_DIR", codexDir, setCodexSaved, setCodexErr)
+  const saveRawDir = () => savePath("VESTIGE_RAW_ARCHIVE_DIR", rawDir, setRawSaved, setRawErr)
+  const saveClaudeBin = () => savePath("VESTIGE_CLAUDE_BIN", claudeBin, setBinSaved, setBinErr)
 
   // 저장 실패 시 서버 진실로 되돌림(낙관적으로 바꾼 indexMode가 미저장 상태로 남지 않게).
   function resyncIndex() {
@@ -890,22 +892,6 @@ export function SettingsView() {
                       {t(skipSdk ? "settings.skipSdkCountOn" : "settings.skipSdkCountOff", { sessions: skipSdkStats.sessions.toLocaleString(), turns: skipSdkStats.turns.toLocaleString() })}
                     </p>
                   )}
-                  {/* 원본 로그 보존소(#163): 정리로 사라져도 복구 가능하게 별도 보관 중인 원본의 용량·상한 */}
-                  <div className="mt-1 flex flex-wrap items-center gap-2 border-t pt-2.5 text-sm">
-                    <span className="font-medium">{t("settings.rawArchive")}</span>
-                    <span className="text-[11px] tabular-nums text-muted-foreground">
-                      {((cfg?.raw_archive_bytes ?? 0) / 1024 / 1024).toFixed(1)} MB
-                    </span>
-                    <Input type="number" min={0} placeholder={t("settings.rawArchiveUnlimited")}
-                      value={rawMaxMb} onChange={(e) => setRawMaxMb(e.target.value)}
-                      aria-label={t("settings.rawArchiveMaxMb")}
-                      onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                      className="ml-auto h-8 w-24 tabular-nums" />
-                    <span className="text-[11px] text-muted-foreground">MB</span>
-                    <Button size="sm" variant="outline" onClick={() => commitIndex({ VESTIGE_RAW_ARCHIVE_MAX_MB: rawMaxMb.trim() })}>{t("common.save")}</Button>
-                    {intervalSaved && <span className="inline-flex items-center gap-1 text-sm text-primary"><Check className="size-4" />{t("common.saved")}</span>}
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">{t("settings.rawArchiveHelp")}</p>
                 </div>
               </Section>
 
@@ -932,6 +918,28 @@ export function SettingsView() {
                   placeholder="~/.codex/sessions"
                   help={t("settings.codexFolderHelp")}
                 />
+                {/* 원본 보존소(#163): 위 두 폴더에서 읽은 원본을 보관하는 곳 — 같은 '경로' 설정이라 여기 둔다. */}
+                <FolderRow
+                  label={t("settings.rawArchive")}
+                  chip={!cfg
+                    ? <StatusChip tone="muted"><Loader2 className="size-3 animate-spin" />{t("settings.checking")}</StatusChip>
+                    : <StatusChip tone={cfg.raw_archive_exists ? "ok" : "muted"}>
+                        {((cfg.raw_archive_bytes ?? 0) / 1024 / 1024).toFixed(1)} MB
+                      </StatusChip>}
+                  path={rawDir} onPathChange={setRawDir} onSave={saveRawDir} saved={rawSaved} err={rawErr}
+                  placeholder="~/vestige/data/raw"
+                  help={t("settings.rawArchiveHelp")}
+                />
+                <Row label={t("settings.rawArchiveMaxMb")}>
+                  <Input type="number" min={0} placeholder={t("settings.rawArchiveUnlimited")}
+                    value={rawMaxMb} onChange={(e) => setRawMaxMb(e.target.value)}
+                    aria-label={t("settings.rawArchiveMaxMb")}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                    className="h-8 w-24 tabular-nums" />
+                  <span className="text-[11px] text-muted-foreground">MB</span>
+                  <Button size="sm" variant="outline" onClick={() => commitIndex({ VESTIGE_RAW_ARCHIVE_MAX_MB: rawMaxMb.trim() })}>{t("common.save")}</Button>
+                  {intervalSaved && <span className="inline-flex items-center gap-1 text-[12px] text-primary"><Check className="size-3.5" />{t("common.saved")}</span>}
+                </Row>
               </Section>
 
               <Section title={t("settings.hiddenTitle")}>
@@ -972,18 +980,16 @@ export function SettingsView() {
                   </Row>
                 )}
                 {backend === "claude" && (
-                  <>
-                    <Row label={t("settings.claudeBin")}>
-                      <Input value={claudeBin} onChange={(e) => setClaudeBin(e.target.value)} aria-label={t("settings.claudeBin")}
-                        className="h-8 w-72" placeholder={t("settings.claudeBinPlaceholder")} />
-                    </Row>
-                    <div className="border-b py-2 text-xs last:border-0">
-                      {cfg?.claude_found
-                        ? <span className="inline-flex items-center gap-1 text-primary"><Check className="size-3" />{t("settings.claudeBinFound", { path: cfg.claude_resolved })}</span>
-                        : <span className="inline-flex items-center gap-1 text-destructive"><AlertTriangle className="size-3" />{t("settings.claudeBinNotFound")}</span>}
-                      <div className="mt-1 text-muted-foreground">{t("settings.claudeBinHint")}</div>
-                    </div>
-                  </>
+                  /* 로그 폴더·보존소와 같은 경로 입력 UI(FolderRow)로 통일 — 상태 칩 + '경로 변경' + 저장. */
+                  <FolderRow
+                    label={t("settings.claudeBin")}
+                    chip={cfg?.claude_found
+                      ? <StatusChip tone="ok"><Check className="size-3" />{t("settings.claudeBinFound", { path: cfg.claude_resolved })}</StatusChip>
+                      : <StatusChip tone="warn"><AlertTriangle className="size-3" />{t("settings.claudeBinNotFound")}</StatusChip>}
+                    path={claudeBin} onPathChange={setClaudeBin} onSave={saveClaudeBin} saved={binSaved} err={binErr}
+                    placeholder={t("settings.claudeBinPlaceholder")}
+                    help={t("settings.claudeBinHint")}
+                  />
                 )}
                 {backend === "ollama" && (
                   <>

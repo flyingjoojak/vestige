@@ -28,15 +28,32 @@ def test_session_id_for_falls_back_to_stem_without_uuid():
 
 
 def test_raw_path_sanitizes_traversal_chars(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     p = R.raw_path("../../etc", "../../passwd")
     assert p.is_relative_to(tmp_path / "raw")
     assert ".." not in p.name and ".." not in p.parent.name
 
 
+def test_raw_dir_follows_config_at_call_time(tmp_path, monkeypatch):
+    """보존소 경로는 호출 시점에 설정을 본다 - 설정 화면에서 바꾸면(재시작 없이) 새 경로로 쌓인다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "old")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    assert (tmp_path / "old" / "claude-code" / f"{sid}.jsonl.gz").exists()
+
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "new")   # 설정 변경
+    f.write_bytes(b'{"a":1}\n{"b":2}\n')
+    R.mirror_file(db, f, "claude-code")
+    assert (tmp_path / "new" / "claude-code" / f"{sid}.jsonl.gz").exists()   # 새 경로에 쌓임
+    assert R.raw_dir() == tmp_path / "new"
+
+
 # ── mirror_file ───────────────────────────────────────────────
 def test_mirror_file_copies_new_bytes(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -49,7 +66,7 @@ def test_mirror_file_copies_new_bytes(tmp_path, monkeypatch):
 
 
 def test_mirror_file_is_idempotent_with_no_new_bytes(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -60,7 +77,7 @@ def test_mirror_file_is_idempotent_with_no_new_bytes(tmp_path, monkeypatch):
 
 def test_mirror_file_appends_only_new_bytes_across_calls(tmp_path, monkeypatch):
     # 멀티멤버 gzip: 두 번에 걸쳐 append 한 내용이 이어서 온전히 복원돼야 함.
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -76,7 +93,7 @@ def test_mirror_file_appends_only_new_bytes_across_calls(tmp_path, monkeypatch):
 def test_mirror_file_recovers_from_rotation_truncation(tmp_path, monkeypatch):
     # 파일이 줄어들면(회전/절단) 커서가 파일 크기보다 커지므로 0부터 다시 미러링.
     # 기존 보존분은 지우지 않고 새 멤버로 이어 씀(안전 쪽).
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -89,7 +106,7 @@ def test_mirror_file_recovers_from_rotation_truncation(tmp_path, monkeypatch):
 
 
 def test_mirror_file_creates_no_output_for_empty_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -99,13 +116,13 @@ def test_mirror_file_creates_no_output_for_empty_file(tmp_path, monkeypatch):
 
 
 def test_read_mirror_missing_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     assert R.read_mirror("claude-code", "no-such-session") is None
 
 
 def test_mirror_file_groups_by_source(tmp_path, monkeypatch):
     # 같은 세션 id라도 source 가 다르면 별개 경로(사실상 발생 안 하지만 경계 확인).
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -116,7 +133,7 @@ def test_mirror_file_groups_by_source(tmp_path, monkeypatch):
 
 
 def test_mirror_size_bytes_sums_all_sources(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     assert R.mirror_size_bytes() == 0   # 디렉터리 없음 → 0
     db = _db(tmp_path)
     f1 = tmp_path / "019e80dc-1754-7422-b72f-2d176635efb2.jsonl"
@@ -137,7 +154,7 @@ def _seed_mirror(tmp_path, db, sid: str, size: int, random_bytes: bool = False):
 
 
 def test_enforce_quota_noop_when_disabled(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 1000)
     assert R.enforce_quota(0) == 0   # 0 이하=무제한 취급, 아무것도 안 지움
@@ -145,7 +162,7 @@ def test_enforce_quota_noop_when_disabled(tmp_path, monkeypatch):
 
 
 def test_enforce_quota_noop_when_under_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     p = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 100)
     assert R.enforce_quota(10_000_000) == 0
@@ -155,7 +172,7 @@ def test_enforce_quota_noop_when_under_limit(tmp_path, monkeypatch):
 def test_enforce_quota_deletes_oldest_first(tmp_path, monkeypatch):
     # 반복 바이트는 gzip이 거의 다 압축해버려 크기 예측이 어려우니, 파일마다 다른 내용을 채워
     # 압축 후에도 실제 용량이 남게 한다.
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     old = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 2000, random_bytes=True)
     os.utime(old, (1_000_000_000, 1_000_000_000))   # 더 오래됨
@@ -177,7 +194,7 @@ class _FakeEmbedder:
 
 def test_index_all_mirrors_raw_bytes_alongside_indexing(monkeypatch, tmp_path):
     """index_all 이 턴 색인과 별개로 원본 바이트도 보존하는지(#163 훅 배선 확인)."""
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     claude_root = tmp_path / "claude"
     monkeypatch.setattr(config, "PROJECTS_DIR", claude_root)
     monkeypatch.setattr(config, "CODEX_SESSIONS_DIR", tmp_path / "codex_unused")
@@ -271,7 +288,7 @@ def test_first_cwd_skips_bad_json_lines():
 
 
 def test_restore_claude_code_writes_to_encoded_project_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
@@ -289,7 +306,7 @@ def test_restore_claude_code_writes_to_encoded_project_dir(tmp_path, monkeypatch
 
 
 def test_restore_does_not_overwrite_existing_original(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
@@ -308,7 +325,7 @@ def test_restore_does_not_overwrite_existing_original(tmp_path, monkeypatch):
 
 
 def test_restore_claude_code_without_cwd_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
@@ -319,7 +336,7 @@ def test_restore_claude_code_without_cwd_returns_none(tmp_path, monkeypatch):
 
 
 def test_restore_codex_writes_under_restored_subdir(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     monkeypatch.setattr(config, "CODEX_SESSIONS_DIR", tmp_path / "codex_sessions")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
@@ -334,7 +351,7 @@ def test_restore_codex_writes_under_restored_subdir(tmp_path, monkeypatch):
 
 
 def test_restore_unsupported_source_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     db = _db(tmp_path)
     sid = "019e80dc-1754-7422-b72f-2d176635efb2"
     f = tmp_path / f"{sid}.jsonl"
@@ -344,7 +361,7 @@ def test_restore_unsupported_source_returns_none(tmp_path, monkeypatch):
 
 
 def test_restore_no_mirror_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     assert R.restore("claude-code", "no-such-session") is None
 

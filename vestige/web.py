@@ -1164,6 +1164,9 @@ def api_config():
         "embed_model": C.EMBED_MODEL,
         "raw_archive_max_mb": C.RAW_ARCHIVE_MAX_MB,   # 빈값=무제한
         "raw_archive_bytes": raw_archive.mirror_size_bytes(),
+        # 원본 보존소 경로(직접 지정 가능 — 용량이 커서 외장/별도 디스크로 뺄 수 있게).
+        "raw_archive_dir": str(C.RAW_ARCHIVE_DIR),
+        "raw_archive_exists": C.RAW_ARCHIVE_DIR.exists(),
         "keys": {k: bool(os.environ.get(k)) for k in
                  ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")},
         "config_path": str(C.CONFIG_PATH),

@@ -264,6 +264,8 @@ export interface Config {
   embed_model: string
   raw_archive_max_mb: string   // 원본 로그 보존소 상한(MB). 빈값=무제한(#163)
   raw_archive_bytes: number    // 현재 보존소 용량(바이트)
+  raw_archive_dir: string      // 보존소 경로(직접 지정 가능)
+  raw_archive_exists: boolean
   keys: Record<string, boolean>
   config_path: string
   projects_dir: string
