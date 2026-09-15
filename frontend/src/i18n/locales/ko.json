@@ -514,6 +514,12 @@
     "addedTo": "'{{name}}'에 담음",
     "newAndAdd": "새 폴더 만들어 담기",
     "create": "만들기",
-    "deleteTitle": "'{{name}}' 삭제"
+    "deleteTitle": "'{{name}}' 삭제",
+    "itemRename": "이 폴더에서 이름 바꾸기",
+    "itemRenameHint": "이 폴더에서만 보이는 이름이에요. 원본 제목({{original}})은 바뀌지 않아요. 비우면 원래 제목으로 돌아가요.",
+    "aliasBadge": "폴더에서 바꾼 이름",
+    "moveUp": "위로",
+    "moveDown": "아래로",
+    "pickItemPrompt": "가운데에서 항목을 고르면 대화가 여기 열려요."
   }
 }

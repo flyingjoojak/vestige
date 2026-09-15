@@ -514,6 +514,12 @@
     "addedTo": "Added to '{{name}}'",
     "newAndAdd": "New folder and add",
     "create": "Create",
-    "deleteTitle": "Delete '{{name}}'"
+    "deleteTitle": "Delete '{{name}}'",
+    "itemRename": "Rename in this folder",
+    "itemRenameHint": "A name used only in this folder. The original title ({{original}}) stays unchanged. Leave empty to restore it.",
+    "aliasBadge": "Renamed in folder",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "pickItemPrompt": "Pick an item in the middle to read it here."
   }
 }

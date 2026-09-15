@@ -127,6 +127,11 @@ export const addToFolder = (folderId: number, t: FolderTarget) =>
   postFolder<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
 export const removeFromFolder = (folderId: number, t: FolderTarget) =>
   postFolder<{ ok: boolean }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
+// 폴더 안에서만 쓰는 표시 이름(원본 제목은 그대로). 빈 문자열이면 원래 제목으로 되돌린다.
+export const renameFolderItem = (folderId: number, t: FolderTarget, alias: string) =>
+  postFolder<{ ok: boolean }>("/api/folders/item/rename", { folder_id: folderId, ...targetBody(t), alias })
+export const reorderFolder = (folderId: number, order: { kind: "turn" | "session"; ref: string }[]) =>
+  postFolder<{ ok: boolean; count: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
 
 export const listHidden = (limit = 200) =>
   getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)

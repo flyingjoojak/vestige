@@ -390,3 +390,38 @@ def test_folder_endpoints_reject_bad_input_and_unknown_folder(tmp_path, monkeypa
 
     f = db.create_folder("빈 폴더")                      # 비어있는 건 정상 응답 0건
     assert W.api_search(q="x", mode="keyword", folder=f)["count"] == 0
+
+
+def test_folder_item_alias_and_reorder(tmp_path, monkeypatch):
+    """폴더 별칭은 그 폴더 안에서만 제목을 바꾸고(원본 불변), 순서는 지정한 대로 유지된다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    f = web.api_folder_create({"name": "F"})["id"]
+    web.api_folder_add({"folder_id": f, "turn_id": "s1:u1"})
+    web.api_folder_add({"folder_id": f, "turn_id": "s2:u1"})
+
+    assert [i["ref"] for i in web.api_folder(id=f)["items"]] == ["s1:u1", "s2:u1"]   # 담은 순
+
+    web.api_folder_item_reorder({"folder_id": f, "order": [
+        {"kind": "turn", "ref": "s2:u1"}, {"kind": "turn", "ref": "s1:u1"}]})
+    assert [i["ref"] for i in web.api_folder(id=f)["items"]] == ["s2:u1", "s1:u1"]   # 바꾼 순서
+
+    web.api_folder_item_rename({"folder_id": f, "turn_id": "s1:u1", "alias": "내가 붙인 이름"})
+    it = next(i for i in web.api_folder(id=f)["items"] if i["ref"] == "s1:u1")
+    assert it["headline"] == "내가 붙인 이름"
+    assert it["original_headline"] == "q1"                       # 원본 제목은 그대로
+    assert web.api_session(id="s1")["turns"][0]["question"] == "q1"   # 대화 자체도 불변
+
+    web.api_folder_item_rename({"folder_id": f, "turn_id": "s1:u1", "alias": ""})   # 비우면 원복
+    it = next(i for i in web.api_folder(id=f)["items"] if i["ref"] == "s1:u1")
+    assert it["headline"] == "q1"
+
+
+def test_folder_reorder_rejects_bad_payload(tmp_path, monkeypatch):
+    _seed_folder_db(tmp_path, monkeypatch)
+    f = web.api_folder_create({"name": "F"})["id"]
+    for bad in ({"folder_id": f, "order": "nope"},
+                {"folder_id": f, "order": [{"kind": "bogus", "ref": "x"}]},
+                {"folder_id": f, "order": [{"kind": "turn"}]}):
+        with pytest.raises(web.HTTPException) as ei:
+            web.api_folder_item_reorder(bad)
+        assert ei.value.status_code == 400

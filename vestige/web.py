@@ -795,6 +795,38 @@ def api_folder_remove(payload: dict):
     return {"ok": True}
 
 
+@app.post("/api/folders/item/rename")
+def api_folder_item_rename(payload: dict):
+    """폴더 안에서만 쓰는 표시 이름(별칭). 원본 턴/세션 제목은 바뀌지 않는다.
+    payload: {folder_id, turn_id|session_id, alias}. alias 가 비면 원래 제목으로 되돌린다."""
+    db = ArchiveDB()
+    fid = _folder_id_arg(payload, "folder_id")
+    _folder_or_404(db, fid)
+    kind, ref = _folder_target(payload)
+    alias = str((payload or {}).get("alias", "")).strip()
+    db.set_item_alias(fid, kind, ref, alias or None)
+    return {"ok": True}
+
+
+@app.post("/api/folders/item/reorder")
+def api_folder_item_reorder(payload: dict):
+    """폴더 안 항목 순서 저장. payload: {folder_id, order: [{kind, ref}, …]} (보이는 순서 그대로)."""
+    db = ArchiveDB()
+    fid = _folder_id_arg(payload, "folder_id")
+    _folder_or_404(db, fid)
+    raw = (payload or {}).get("order")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail={"code": "invalid_order", "msg": "order 목록이 필요합니다"})
+    order = []
+    for it in raw:
+        kind, ref = (it or {}).get("kind"), (it or {}).get("ref")
+        if kind not in ("turn", "session") or not isinstance(ref, str) or not ref:
+            raise HTTPException(status_code=400, detail={"code": "invalid_order", "msg": "잘못된 항목이 있습니다"})
+        order.append((kind, ref))
+    db.reorder_folder(fid, order)
+    return {"ok": True, "count": len(order)}
+
+
 @app.get("/api/folder")
 def api_folder(id: int = Query(...)):
     """폴더 하나: 이름·상위 경로·하위 폴더·담긴 항목."""

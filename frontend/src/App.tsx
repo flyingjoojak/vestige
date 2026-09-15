@@ -213,8 +213,8 @@ export default function App() {
             </Suspense>
           )}
           {view === "folders" && (
-            /* 폴더 항목은 턴이면 그 턴으로, 세션이면 세션만 열어 목록에서 고르게 한다. */
-            <FolderView onOpen={(session, turn) => openTurn("sessions", session, turn ?? "", session)} />
+            /* 폴더 화면은 대화를 그 안에서 직접 연다(세션 탭으로 넘어가지 않음). */
+            <FolderView />
           )}
           {view === "folded" && (
             <FoldedView onChanged={refreshFolded}
