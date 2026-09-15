@@ -16,7 +16,8 @@
     "clusters": "Clusters",
     "map": "Map",
     "settings": "Settings",
-    "mainAria": "Primary navigation"
+    "mainAria": "Primary navigation",
+    "folded": "Folded"
   },
   "app": {
     "mapLoading": "Loading 3D map…",
@@ -473,5 +474,14 @@
     "unknown_model": "Unknown model.",
     "reindex_already_running": "Indexing is already running.",
     "invalid_config_value": "Some settings had invalid values and weren't saved."
+  },
+  "folded": {
+    "title": "Folded items",
+    "note": "Folded turns are left out of search and the map. Unfold them here, or open the original session.",
+    "empty": "Nothing folded.",
+    "untitled": "(untitled)",
+    "openSession": "Open session",
+    "loadFailed": "Couldn't load folded items",
+    "unfoldFailed": "Couldn't unfold"
   }
 }

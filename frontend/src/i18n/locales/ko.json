@@ -16,7 +16,8 @@
     "clusters": "군집",
     "map": "지도",
     "settings": "설정",
-    "mainAria": "기본 내비게이션"
+    "mainAria": "기본 내비게이션",
+    "folded": "접힘"
   },
   "app": {
     "mapLoading": "3D 지도 불러오는 중…",
@@ -473,5 +474,14 @@
     "unknown_model": "알 수 없는 모델이에요.",
     "reindex_already_running": "이미 색인 중이에요.",
     "invalid_config_value": "일부 설정 값이 올바르지 않아 저장하지 않았어요."
+  },
+  "folded": {
+    "title": "접힌 항목",
+    "note": "접은 대화는 검색·지도에서 빠져 있어요. 여기서 다시 펼치거나 원본 세션을 열 수 있어요.",
+    "empty": "접은 항목이 없어요.",
+    "untitled": "(제목 없음)",
+    "openSession": "세션 열기",
+    "loadFailed": "접힌 항목을 불러오지 못했어요",
+    "unfoldFailed": "펼치지 못했어요"
   }
 }

@@ -219,6 +219,35 @@ def test_export_skips_folded_turns(tmp_path, monkeypatch):
     assert "남길질문" in body and "접을질문" not in body
 
 
+def test_api_hidden_lists_recent_first_with_count(tmp_path, monkeypatch):
+    """접힌 턴 모아보기(#128): 최근 접은 순 + 배지용 count. limit=0 이면 개수만."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    for i, q in ((1, "먼저접음"), (2, "나중접음")):
+        db.upsert_turn(Turn(id=f"s1:u{i}", session_id="s1", uuid=f"u{i}", parent_uuid=None,
+                             timestamp=f"2026-07-24T0{i}:00:00Z", project="p", question=q, answer="a", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    web.api_hide({"turn_id": "s1:u1"}); web.api_hide({"turn_id": "s1:u2"})
+    # time.time() 해상도로 순서가 흔들리지 않게 접은 시각을 벌려둔다.
+    db.conn.execute("UPDATE hidden_turns SET hidden_at=100 WHERE turn_id='s1:u1'")
+    db.conn.execute("UPDATE hidden_turns SET hidden_at=200 WHERE turn_id='s1:u2'")
+    db.commit()
+
+    r = web.api_hidden()
+    assert r["count"] == 2
+    assert [h["turn_id"] for h in r["hidden"]] == ["s1:u2", "s1:u1"]   # 최근 접은 순
+    assert r["hidden"][0]["headline"] == "나중접음" and r["hidden"][0]["session_id"] == "s1"
+
+    assert web.api_hidden(limit=0) == {"hidden": [], "count": 2}       # 배지용 경량 호출
+
+    web.api_unhide({"turn_id": "s1:u2"})
+    assert web.api_hidden()["count"] == 1
+
+
 def test_api_hide_rejects_missing_target():
     with pytest.raises(web.HTTPException) as ei:
         web.api_hide({})

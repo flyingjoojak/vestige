@@ -326,6 +326,24 @@ class ArchiveDB:
         """읽을 때 필터용 전체 숨김 turn id 집합(검색·지도 등에서 공유)."""
         return {r["turn_id"] for r in self.conn.execute("SELECT turn_id FROM hidden_turns")}
 
+    def hidden_count(self) -> int:
+        """접힌 턴 수(좌측 메뉴 배지용 — 목록 전체를 실어 나르지 않으려고 따로 둠)."""
+        return self.conn.execute("SELECT COUNT(*) c FROM hidden_turns").fetchone()["c"]
+
+    def list_hidden(self, limit: int = 200) -> list[dict]:
+        """접힌 턴 모아보기(#128): 최근 접은 순. 검색에서 접으면 어느 세션이었는지 잊기 쉬워
+        한곳에서 다시 찾아 펼칠 수 있어야 한다. turns 가 사라진 고아 행은 내용이 None 으로 온다."""
+        rows = self.conn.execute(
+            "SELECT h.turn_id, h.hidden_at, t.session_id, t.question, t.summary, t.timestamp "
+            "FROM hidden_turns h LEFT JOIN turns t ON t.id = h.turn_id "
+            "ORDER BY h.hidden_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [{
+            "turn_id": r["turn_id"], "session_id": r["session_id"],
+            "headline": r["summary"] or r["question"] or "",
+            "timestamp": r["timestamp"], "hidden_at": r["hidden_at"],
+        } for r in rows]
+
 
     def distinct_sources(self) -> list[tuple[str, int]]:
         """색인된 턴이 있는 출처와 개수(검색 필터 옵션용). NULL(레거시)은 claude-code로 취급."""
