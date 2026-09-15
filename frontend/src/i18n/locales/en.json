@@ -342,6 +342,7 @@
     "restoreHint": "Bring back the preserved original that cleanup removed.",
     "restoreDone": "Restored - you can open it now",
     "restoreFailed": "Couldn't restore",
+    "exportMarkdown": "Export as markdown",
     "loadFailed": "Couldn't load the list",
     "appMayBeStarting": "The app may still be starting up.",
     "noResults": "No results",

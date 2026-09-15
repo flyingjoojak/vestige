@@ -342,6 +342,7 @@
     "restoreHint": "정리로 사라진 원문을 보존해둔 원본으로 되살려요.",
     "restoreDone": "원문을 복구했어요 - 이제 열 수 있어요",
     "restoreFailed": "복구할 수 없어요",
+    "exportMarkdown": "markdown으로 내보내기",
     "loadFailed": "목록을 불러오지 못했어요",
     "appMayBeStarting": "앱이 준비 중일 수 있어요.",
     "noResults": "결과 없음",
