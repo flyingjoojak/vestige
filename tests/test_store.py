@@ -198,3 +198,56 @@ def test_reconcile_removes_orphan_vectors(tmp_path):
     assert vi.keys() == ["s1:u1#0"]
     # 정리할 게 없으면 0
     assert reconcile(db, vi, log_fn=lambda m: None) == 0
+
+
+# --- 숨김(#128) ----------------------------------------------------------
+def test_hide_unhide_turns(tmp_path):
+    """턴 단위 숨김/복원 - 비파괴(turns 는 그대로, hidden_turn_ids 에만 반영)."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.upsert_turn(_turn("s1:u2")); db.commit()
+
+    assert db.hidden_turn_ids() == set()
+    db.hide_turns(["s1:u1"])
+    assert db.hidden_turn_ids() == {"s1:u1"}
+    assert db.get_turn("s1:u1") is not None   # 원문은 그대로
+
+    db.unhide_turns(["s1:u1"])
+    assert db.hidden_turn_ids() == set()
+
+
+def test_hide_session_hides_all_its_turns(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", session="s1")); db.upsert_turn(_turn("s1:u2", session="s1"))
+    db.upsert_turn(_turn("s2:u1", session="s2")); db.commit()
+
+    n = db.hide_session("s1")
+    assert n == 2
+    assert db.hidden_turn_ids() == {"s1:u1", "s1:u2"}
+
+    db.unhide_session("s1")
+    assert db.hidden_turn_ids() == set()
+
+
+def test_hide_turns_idempotent_and_empty_list(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    assert db.hide_turns(["s1:u1"]) == 1
+    assert db.hide_turns(["s1:u1"]) == 0   # 재숨김 - 실제로 새로 숨겨진 건 0개(정확한 카운트)
+    assert db.hidden_turn_ids() == {"s1:u1"}
+    assert db.hide_turns([]) == 0   # 빈 목록 no-op
+
+
+def test_list_hidden_orders_recent_first_and_joins_turn_info(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", q="첫질문")); db.upsert_turn(_turn("s1:u2", q="둘째질문"))
+    db.commit()
+    db.hide_turns(["s1:u1"])
+    db.hide_turns(["s1:u2"])
+    # time.time() 해상도 차이로 순서가 불안정할 수 있어 hidden_at 을 직접 벌려 결정론적으로.
+    db.conn.execute("UPDATE hidden_turns SET hidden_at=100 WHERE turn_id='s1:u1'")
+    db.conn.execute("UPDATE hidden_turns SET hidden_at=200 WHERE turn_id='s1:u2'")
+    db.commit()
+
+    out = db.list_hidden()
+    assert [h["turn_id"] for h in out] == ["s1:u2", "s1:u1"]
+    assert out[0]["question"] == "둘째질문" and out[0]["session_id"] == "s1"

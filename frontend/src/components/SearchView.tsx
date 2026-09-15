@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { X, Blend, Brain, Type, SearchX, AlertTriangle } from "lucide-react"
+import { X, Blend, Brain, EyeOff, Type, SearchX, AlertTriangle } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChatThread } from "./ChatThread"
 import { SourceFilter } from "./SourceFilter"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
-import { getSources, search, type SearchMode, type SourceOption } from "@/lib/api"
+import { getSources, hideTurn, search, type SearchMode, type SourceOption } from "@/lib/api"
 import { fmtTime } from "@/lib/format"
 import { sourceLabel } from "@/lib/source"
 import { errText } from "@/lib/errors"
@@ -40,7 +40,24 @@ export function SearchView() {
   // 검색 소스 필터: 데이터 있는 출처만 목록에 뜬다(1종뿐이면 필터 자체를 숨김).
   const [srcOpts, setSrcOpts] = useState<SourceOption[]>([])
   const [srcSel, setSrcSel] = useState<Set<string>>(new Set())
+  const [hideErr, setHideErr] = useState("")   // 숨김(#128) 실패 알림(간단히 잠깐 표시)
   const reqId = useRef(0)   // 최신 요청만 반영(빠른 연속 검색 시 오래된 응답이 덮어쓰기 방지)
+  const hideErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (hideErrTimer.current) clearTimeout(hideErrTimer.current) }, [])
+
+  // 검색 결과에서 턴 하나 숨김(#128) - 비파괴, 리스트에서만 즉시 제거. 실패하면 되돌리지 않고 알림만.
+  async function hide(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    try {
+      await hideTurn(id)
+      setHits((prev) => prev.filter((h) => h.id !== id))
+      setSel((s) => (s?.turn === id ? null : s))
+    } catch (err) {
+      setHideErr(errText(t, err, "search.hideFailed"))
+      if (hideErrTimer.current) clearTimeout(hideErrTimer.current)
+      hideErrTimer.current = setTimeout(() => setHideErr(""), 4000)
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -126,6 +143,7 @@ export function SearchView() {
           {state === "done" && (
             <div className="mt-2 text-xs text-muted-foreground tabular-nums">{t("search.resultsPrefix")}<b className="text-foreground">{hits.length}</b>{t("search.resultsSuffix")}</div>
           )}
+          {hideErr && <div className="mt-1 text-[10.5px] text-destructive">{hideErr}</div>}
           {/* 스크린리더용 상태 안내(비시각 사용자에 검색 진행/결과 알림) */}
           <div className="sr-only" role="status" aria-live="polite">
             {state === "loading" ? t("search.srSearching") : state === "done" ? t("search.srResults", { n: hits.length }) : state === "error" ? t("search.srFailed") : ""}
@@ -176,8 +194,10 @@ export function SearchView() {
           {state === "done" && hits.map((h) => {
             const active = sel?.turn === h.id
             return (
-              <button key={h.id} onClick={() => setSel({ session: h.session_full, turn: h.id })}
-                className={`w-full rounded-lg border p-3 text-left transition-colors ${active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+              <div key={h.id} role="button" tabIndex={0}
+                onClick={() => setSel({ session: h.session_full, turn: h.id })}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSel({ session: h.session_full, turn: h.id }) } }}
+                className={`group w-full cursor-pointer rounded-lg border p-3 text-left transition-colors ${active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                 <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
                   {hasMultipleSources && h.source && (
                     <span className="rounded bg-muted px-1 py-0.5 text-[9.5px] font-medium text-foreground/70">{sourceLabel(h.source)}</span>
@@ -190,11 +210,16 @@ export function SearchView() {
                   <span>{fmtTime(h.timestamp)}</span>
                   <span className="opacity-40">·</span>
                   <span>{t("search.session", { n: h.session })}</span>
+                  <button type="button" onClick={(e) => hide(h.id, e)}
+                    title={t("search.hideTurn")} aria-label={t("search.hideTurn")}
+                    className="ml-auto inline-flex items-center rounded p-0.5 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
+                    <EyeOff className="size-3.5" />
+                  </button>
                 </div>
                 <div className="line-clamp-2 text-[13.5px] font-medium leading-snug text-balance">
                   {h.summary || h.question || t("search.untitled")}
                 </div>
-              </button>
+              </div>
             )
           })}
         </div>

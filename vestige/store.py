@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS raw_cursors(
   file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL
 );
+CREATE TABLE IF NOT EXISTS hidden_turns(
+  turn_id TEXT PRIMARY KEY, hidden_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp);
 CREATE INDEX IF NOT EXISTS idx_chunks_turn ON chunks(turn_id);
@@ -79,11 +82,19 @@ def _mig_0003_raw_cursors(conn: sqlite3.Connection) -> None:
     )""")
 
 
+def _mig_0004_hidden_turns(conn: sqlite3.Connection) -> None:
+    """hidden_turns 테이블 추가(#128: 숨김 처리 - 비파괴, 원문·벡터는 그대로 두고 표시만 제외)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS hidden_turns(
+      turn_id TEXT PRIMARY KEY, hidden_at REAL
+    )""")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
     _mig_0002_cursor_hold_offset,
     _mig_0003_raw_cursors,
+    _mig_0004_hidden_turns,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -277,6 +288,55 @@ class ArchiveDB:
     def get_turn(self, turn_id: str) -> Turn | None:
         row = self.conn.execute("SELECT * FROM turns WHERE id=?", (turn_id,)).fetchone()
         return _row_to_turn(row) if row else None
+
+    # --- 숨김(#128) --------------------------------------------------
+    # 비파괴: 원문·청크·벡터는 그대로 두고 hidden_turns 에 있으면 검색/세션목록/지도에서만 제외.
+    # 재색인·reconcile 은 turns 를 지우지 않으므로(append-only 갱신) 이 테이블만 별도로 두면 그대로 살아남는다.
+    def hide_turns(self, turn_ids: list[str]) -> int:
+        """반환값 = 실제로 새로 숨겨진 개수(이미 숨겨져 있던 건 제외 - 멱등 재시도 시 정확한 카운트)."""
+        if not turn_ids:
+            return 0
+        now = time.time()
+        inserted = 0
+        for tid in turn_ids:
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO hidden_turns(turn_id, hidden_at) VALUES(?,?)", (tid, now))
+            inserted += cur.rowcount
+        self.conn.commit()
+        return inserted
+
+    def hide_session(self, session_id: str) -> int:
+        ids = [r["id"] for r in self.conn.execute(
+            "SELECT id FROM turns WHERE session_id=?", (session_id,))]
+        return self.hide_turns(ids)
+
+    def unhide_turns(self, turn_ids: list[str]) -> None:
+        if not turn_ids:
+            return
+        self.conn.executemany(
+            "DELETE FROM hidden_turns WHERE turn_id=?", [(tid,) for tid in turn_ids])
+        self.conn.commit()
+
+    def unhide_session(self, session_id: str) -> None:
+        ids = [r["id"] for r in self.conn.execute(
+            "SELECT id FROM turns WHERE session_id=?", (session_id,))]
+        self.unhide_turns(ids)
+
+    def hidden_turn_ids(self) -> set[str]:
+        """읽을 때 필터용 전체 숨김 turn id 집합(검색·지도 등에서 공유)."""
+        return {r["turn_id"] for r in self.conn.execute("SELECT turn_id FROM hidden_turns")}
+
+    def list_hidden(self, limit: int = 500) -> list[dict]:
+        """설정 화면의 '숨김 목록'(복원용): 최근 숨긴 순."""
+        rows = self.conn.execute(
+            "SELECT h.turn_id, h.hidden_at, t.session_id, t.question, t.timestamp "
+            "FROM hidden_turns h LEFT JOIN turns t ON t.id = h.turn_id "
+            "ORDER BY h.hidden_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [{
+            "turn_id": r["turn_id"], "session_id": r["session_id"],
+            "question": r["question"], "timestamp": r["timestamp"], "hidden_at": r["hidden_at"],
+        } for r in rows]
 
     def distinct_sources(self) -> list[tuple[str, int]]:
         """색인된 턴이 있는 출처와 개수(검색 필터 옵션용). NULL(레거시)은 claude-code로 취급."""

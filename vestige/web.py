@@ -575,7 +575,8 @@ def api_session(id: str = Query(...), limit: int = 2000):
     db = ArchiveDB()
     rows = db.conn.execute(
         "SELECT id,timestamp,question,answer,actions,summary,tags FROM turns "
-        "WHERE session_id=? ORDER BY timestamp, id LIMIT ?", (id, limit)
+        "WHERE session_id=? AND id NOT IN (SELECT turn_id FROM hidden_turns) "   # 숨김(#128) 제외
+        "ORDER BY timestamp, id LIMIT ?", (id, limit)
     ).fetchall()
     turns = []
     for r in rows:
@@ -642,6 +643,48 @@ def api_session_export(id: str = Query(...)):
                      headers={"Content-Disposition": f'attachment; filename="{id}.md"'})
 
 
+@app.post("/api/hide")
+def api_hide(payload: dict):
+    """턴 또는 세션을 숨김(#128) - 비파괴, 원문·벡터는 그대로 두고 검색·세션목록·지도에서만 제외.
+    payload: {turn_id} 또는 {session_id}(그 세션의 전 턴을 숨김)."""
+    db = ArchiveDB()
+    turn_id = (payload or {}).get("turn_id")
+    session_id = (payload or {}).get("session_id")
+    if turn_id:
+        if db.get_turn(turn_id) is None:   # 없는 id를 조용히 숨김목록에 넣는 유령 행 방지
+            raise HTTPException(status_code=404, detail={"code": "turn_not_found", "msg": "턴을 찾을 수 없음"})
+        n = db.hide_turns([turn_id])
+    elif session_id:
+        n = db.hide_session(session_id)
+    else:
+        raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
+    _graph3d_invalidate()   # 지도 캐시가 숨긴 턴을 계속 보여주지 않도록 즉시 폐기
+    return {"ok": True, "hidden": n}
+
+
+@app.post("/api/unhide")
+def api_unhide(payload: dict):
+    """숨김 해제(복원). payload: {turn_id} 또는 {session_id}."""
+    db = ArchiveDB()
+    turn_id = (payload or {}).get("turn_id")
+    session_id = (payload or {}).get("session_id")
+    if turn_id:
+        db.unhide_turns([turn_id])
+    elif session_id:
+        db.unhide_session(session_id)
+    else:
+        raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
+    _graph3d_invalidate()   # 지도 캐시가 복원된 턴을 계속 빼놓지 않도록 즉시 폐기
+    return {"ok": True}
+
+
+@app.get("/api/hidden")
+def api_hidden(limit: int = 500):
+    """숨김 목록(설정 화면 '숨김' 뷰 - 복원용)."""
+    db = ArchiveDB()
+    return {"hidden": db.list_hidden(limit)}
+
+
 @app.get("/api/sessions")
 def api_sessions(limit: int = 500):
     """세션 목록(최근순): id·턴수·시작/끝 시각·대표 헤드라인(첫 정제/질문)."""
@@ -655,7 +698,7 @@ def api_sessions(limit: int = 500):
         "         MIN(timestamp) OVER (PARTITION BY session_id) AS started,"
         "         MAX(timestamp) OVER (PARTITION BY session_id) AS ended,"
         "         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp, id) AS rn"
-        "  FROM turns"
+        "  FROM turns WHERE id NOT IN (SELECT turn_id FROM hidden_turns)"   # 숨김(#128) 제외
         ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
     ).fetchall()
     out = []

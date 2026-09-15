@@ -109,3 +109,18 @@ def test_semantic_only_flag_disables_keyword(tmp_path):
     hits = search("8088", db, vi, e, k=5, keyword=False)
     # 키워드 끄면 소스에 'keyword' 없음.
     assert all("keyword" not in h.sources for h in hits)
+
+
+def test_hidden_turn_excluded_from_results(tmp_path):
+    """숨김(#128) 처리된 턴은 의미·키워드 어느 경로로도 결과에 나오지 않는다(비파괴 - turns 는 그대로)."""
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "i.json")
+    _seed(db, vi, [
+        _turn("s1:u1", "STAGE1 숨길 턴", "포트 8088 관련"),
+        _turn("s1:u2", "STAGE1 남는 턴", "다른 내용"),
+    ])
+    db.hide_turns(["s1:u1"])
+    e = FakeEmbedder()
+    ids = {h.turn.id for h in search("STAGE1", db, vi, e, k=10)}
+    assert ids == {"s1:u2"}
+    assert db.get_turn("s1:u1") is not None   # 원문은 그대로 남아있음(비파괴)

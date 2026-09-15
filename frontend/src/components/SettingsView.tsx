@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { SchemaReportSection } from "@/components/SchemaReportSection"
+import { HiddenPanel } from "@/components/HiddenPanel"
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -931,6 +932,10 @@ export function SettingsView() {
                   placeholder="~/.codex/sessions"
                   help={t("settings.codexFolderHelp")}
                 />
+              </Section>
+
+              <Section title={t("settings.hiddenTitle")}>
+                <HiddenPanel />
               </Section>
 
               <SchemaReportSection />

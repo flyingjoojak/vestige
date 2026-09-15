@@ -135,6 +135,68 @@ def test_api_session_export_400_for_invalid_id():
     assert ei.value.status_code == 400
 
 
+def test_api_hide_unhide_turn_roundtrip(tmp_path, monkeypatch):
+    """턴 숨김/복원(#128) - 숨기면 세션/검색에서 빠지고, 복원하면 다시 보인다."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+    db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="q2", answer="a2", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    r = web.api_hide({"turn_id": "s1:u1"})
+    assert r["ok"] is True and r["hidden"] == 1
+    ids = [t["id"] for t in web.api_session(id="s1")["turns"]]
+    assert ids == ["s1:u2"]   # 숨긴 턴은 세션 뷰에서 제외
+    assert [h["turn_id"] for h in web.api_hidden()["hidden"]] == ["s1:u1"]
+
+    web.api_unhide({"turn_id": "s1:u1"})
+    ids = [t["id"] for t in web.api_session(id="s1")["turns"]]
+    assert ids == ["s1:u1", "s1:u2"]   # 복원되어 다시 보임
+    assert web.api_hidden()["hidden"] == []
+
+
+def test_api_hide_session_removes_it_from_sessions_list(tmp_path, monkeypatch):
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+    db.upsert_turn(Turn(id="s2:u1", session_id="s2", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q2", answer="a2", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    web.api_hide({"session_id": "s1"})
+    sessions = [s["session"] for s in web.api_sessions()["sessions"]]
+    assert sessions == ["s2"]   # 전 턴이 숨겨진 세션은 목록에서 아예 빠짐
+
+
+def test_api_hide_rejects_missing_target():
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_hide({})
+    assert ei.value.status_code == 400
+
+
+def test_api_hide_rejects_unknown_turn_id(tmp_path, monkeypatch):
+    """존재하지 않는 turn_id 는 유령 숨김 행을 만들지 않고 404."""
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_hide({"turn_id": "no-such-turn"})
+    assert ei.value.status_code == 404
+    assert web.api_hidden()["hidden"] == []
+
+
 def test_safe_resume_cwd_rejects_unc_and_missing(tmp_path):
     """세션 로그의 cwd(신뢰 불가)에서 UNC/네트워크·디바이스·없는 경로를 거부(강제 NTLM 인증 등 차단)."""
     from vestige.web import _safe_resume_cwd

@@ -88,6 +88,7 @@ def search(
     # 의미 끄면(키워드 전용) 임베더 불필요.
     sem_order, cosine = _semantic_turn_ranks(query, db, vi, embedder, depth) if semantic else ([], {})
     kw_order = [tid for tid, _ in db.keyword_search(query, limit=depth)] if keyword else []
+    hidden = db.hidden_turn_ids()   # 숨김(#128) - 검색 결과에서 완전히 제외(비파괴, 표시만)
 
     # RRF 융합
     fused: dict[str, float] = {}
@@ -108,6 +109,8 @@ def search(
     hits: list[SearchHit] = []
     seen_questions: set[str] = set()
     for tid in ranked:
+        if tid in hidden:
+            continue
         turn = db.get_turn(tid)
         if turn is None:
             continue

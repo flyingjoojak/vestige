@@ -65,3 +65,12 @@ export interface Stats {
   vectors: number
   enriched: number
 }
+
+// 숨김(#128) - 비파괴, 검색·세션·지도에서만 제외. 설정 화면 '숨김' 목록/복원용.
+export interface HiddenItem {
+  turn_id: string
+  session_id: string | null
+  question: string | null
+  timestamp: string | null
+  hidden_at: number
+}
