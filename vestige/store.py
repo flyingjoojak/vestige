@@ -133,6 +133,17 @@ _MIGRATIONS: tuple[_Migration, ...] = (
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
 
+# 폴더 하위 트리(자신 + 모든 하위 폴더 id)를 SQL 안에서 훑는 재귀 CTE(#201).
+# 파이썬에서 id 목록을 만들어 IN(?,?,…) 으로 넘기지 않으려는 것 — 바인딩 변수 한도를 타지 않고,
+# 쿼리 문자열이 전부 정적이라 값이 끼어들 자리가 없다. 바인딩 파라미터는 폴더 id 하나뿐.
+_SUBTREE_CTE = (
+    "WITH RECURSIVE sub(id) AS ("
+    "  SELECT id FROM folders WHERE id=?"
+    "  UNION SELECT f.id FROM folders f JOIN sub ON f.parent_id = sub.id"
+    ") "
+)
+
+
 def _actions_to_json(actions: tuple[Action, ...]) -> str:
     return json.dumps([{"tool": a.tool, "detail": a.detail} for a in actions], ensure_ascii=False)
 
@@ -490,6 +501,7 @@ class ArchiveDB:
 
     # --- 폴더(#201) ------------------------------------------------------
     # 사용자가 직접 만드는 수동 군집. 자동 군집(의미 기반)과 달리 원하는 것만 모은다.
+    # (_SUBTREE_CTE = 자신+하위 폴더 id 집합 'sub'. 아래 조회들이 공통으로 앞에 붙여 쓴다)
     # 세션은 참조만 담아 읽을 때 펼친다 → 그 대화가 이어져 턴이 늘어도 폴더에 자동 포함된다.
     def create_folder(self, name: str, parent_id: int | None = None) -> int:
         cur = self.conn.execute(
@@ -542,11 +554,10 @@ class ArchiveDB:
 
     def delete_folder(self, folder_id: int) -> int:
         """폴더와 그 하위 폴더를 통째로 삭제. 담긴 항목의 '참조'만 지우며 원문·턴은 그대로.
-        반환: 삭제된 폴더 수."""
-        ids = self.folder_descendants(folder_id)
-        marks = ",".join("?" * len(ids))
-        self.conn.execute(f"DELETE FROM folder_items WHERE folder_id IN ({marks})", ids)
-        self.conn.execute(f"DELETE FROM folders WHERE id IN ({marks})", ids)
+        반환: 삭제된 폴더 수. (폴더 수는 적어 한 건씩 지워도 충분 — SQL 조립을 피한다)"""
+        ids = [(i,) for i in self.folder_descendants(folder_id)]
+        self.conn.executemany("DELETE FROM folder_items WHERE folder_id=?", ids)
+        self.conn.executemany("DELETE FROM folders WHERE id=?", ids)
         self.conn.commit()
         return len(ids)
 
@@ -592,17 +603,22 @@ class ArchiveDB:
     def folder_turn_ids(self, folder_id: int, include_descendants: bool = True) -> set[str]:
         """폴더가 가리키는 모든 턴 id(폴더 내 검색용). 세션 참조는 지금의 턴 전체로 펼친다.
 
-        세션 참조를 파이썬으로 모아 IN(?,?,…) 으로 되묻지 않고 turns 와 직접 조인한다 —
-        담긴 세션이 수백~수천 개면 바인딩 변수 한도(구 SQLite 기본 999)를 넘겨 터지기 때문.
-        폴더 id 목록은 폴더 수에 묶여 있어 그대로 둔다.
+        하위 폴더는 재귀 CTE로, 세션 참조는 turns 조인으로 훑는다 — id 목록을 파이썬에서
+        만들어 IN(?,?,…) 으로 넘기지 않으므로 (a) 바인딩 변수 한도(구 SQLite 기본 999)와
+        무관하고 (b) SQL 문자열이 전부 정적이라 값이 끼어들 자리가 없다.
         """
-        ids = self.folder_descendants(folder_id) if include_descendants else [folder_id]
-        marks = ",".join("?" * len(ids))
-        turn_ids = {r["ref"] for r in self.conn.execute(
-            f"SELECT ref FROM folder_items WHERE folder_id IN ({marks}) AND kind='turn'", ids)}
-        turn_ids |= {r["id"] for r in self.conn.execute(
-            f"SELECT t.id FROM turns t JOIN folder_items i ON i.ref = t.session_id "
-            f"WHERE i.folder_id IN ({marks}) AND i.kind='session'", ids)}
+        turn_q, sess_q = (
+            (_SUBTREE_CTE + "SELECT ref FROM folder_items "
+                            "WHERE folder_id IN (SELECT id FROM sub) AND kind='turn'",
+             _SUBTREE_CTE + "SELECT t.id FROM turns t JOIN folder_items i ON i.ref = t.session_id "
+                            "WHERE i.folder_id IN (SELECT id FROM sub) AND i.kind='session'")
+            if include_descendants else
+            ("SELECT ref FROM folder_items WHERE folder_id=? AND kind='turn'",
+             "SELECT t.id FROM turns t JOIN folder_items i ON i.ref = t.session_id "
+             "WHERE i.folder_id=? AND i.kind='session'")
+        )
+        turn_ids = {r["ref"] for r in self.conn.execute(turn_q, (folder_id,))}
+        turn_ids |= {r["id"] for r in self.conn.execute(sess_q, (folder_id,))}
         return turn_ids
 
     def folders_of(self, kind: str, ref: str) -> list[int]:
