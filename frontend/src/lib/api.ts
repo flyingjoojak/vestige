@@ -1,4 +1,4 @@
-import type { SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
+import type { HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -86,6 +86,21 @@ export async function restoreSession(id: string): Promise<RestoreResult> {
   if (!r.ok) return failure(r)
   return r.json()
 }
+
+// 숨김(#128) - 비파괴. turn_id 또는 session_id 중 하나로 대상 지정(세션이면 그 전 턴을 숨김).
+async function postHide(url: string, target: { turnId?: string; sessionId?: string }): Promise<{ ok: boolean }> {
+  const body = target.turnId ? { turn_id: target.turnId } : { session_id: target.sessionId }
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  })
+  if (!r.ok) return failure(r)
+  return r.json()
+}
+export const hideTurn = (turnId: string) => postHide("/api/hide", { turnId })
+export const hideSession = (sessionId: string) => postHide("/api/hide", { sessionId })
+export const unhideTurn = (turnId: string) => postHide("/api/unhide", { turnId })
+export const unhideSession = (sessionId: string) => postHide("/api/unhide", { sessionId })
+export const listHidden = () => getJSON<{ hidden: HiddenItem[] }>(`/api/hidden`)
 
 // 세션 동기화 감시(Syncthing 충돌 해소) 상태·토글.
 export interface SyncStatus {

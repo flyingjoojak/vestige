@@ -137,8 +137,11 @@ def build_graph(vi, db, dims: int = 2, prev_members: list | None = None) -> dict
     coords, method = _project(mat, dims)    # 표시용 3D 투영
     labels = _cluster(mat)                  # 군집화는 고차원 임베딩에서(표시와 분리)
 
+    hidden = db.hidden_turn_ids()   # 숨김(#128) - 지도/군집에서 완전히 제외(비파괴, 표시만)
     meta, tags = {}, {}
     for r in db.conn.execute("SELECT id, session_id, summary, question, tags, timestamp FROM turns").fetchall():
+        if r["id"] in hidden:
+            continue
         meta[r["id"]] = (r["session_id"], (r["summary"] or r["question"] or ""), r["timestamp"] or "")
         tags[r["id"]] = json.loads(r["tags"]) if r["tags"] else []
 
