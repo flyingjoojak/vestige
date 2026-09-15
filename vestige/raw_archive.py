@@ -28,7 +28,12 @@ from . import config as C
 
 logger = logging.getLogger(__name__)
 
-RAW_DIR = C.DATA_DIR / "raw"
+
+def raw_dir() -> Path:
+    """보존소 루트. 호출 시점에 설정을 조회한다 — 설정 화면에서 경로를 바꾸면(config reload)
+    재시작 없이 바로 새 경로에 쌓인다. 경로를 바꿔도 기존 보존분을 옮기지는 않는다."""
+    return C.RAW_ARCHIVE_DIR
+
 
 # 세션 id는 두 소스 다 파일명에 UUID로 박혀 있다(claude-code: <sid>.jsonl,
 # codex: rollout-...-<sid>.jsonl) — 어댑터별 파싱 없이 파일명만으로 뽑아 파싱 의존을 없앤다.
@@ -56,7 +61,7 @@ def _sanitize(s: str) -> str:
 def raw_path(source: str, session_id: str) -> Path:
     """이 세션의 압축 원본 경로. source/session_id 는 파일명·UUID에서만 나와 경로이탈 위험이
     없지만, 방어적으로 한 번 더 sanitize."""
-    return RAW_DIR / _sanitize(source) / f"{_sanitize(session_id)}.jsonl.gz"
+    return raw_dir() / _sanitize(source) / f"{_sanitize(session_id)}.jsonl.gz"
 
 
 def mirror_file(db, path: str | Path, source: str) -> int:
@@ -106,17 +111,19 @@ def read_mirror(source: str, session_id: str) -> bytes | None:
 
 def mirror_size_bytes() -> int:
     """보존소 전체 용량(압축 상태 기준, 설정 UI 표시용)."""
-    if not RAW_DIR.exists():
+    root = raw_dir()
+    if not root.exists():
         return 0
-    return sum(p.stat().st_size for p in RAW_DIR.rglob("*.jsonl.gz") if p.is_file())
+    return sum(p.stat().st_size for p in root.rglob("*.jsonl.gz") if p.is_file())
 
 
 def enforce_quota(max_bytes: int) -> int:
     """보존소가 max_bytes 를 넘으면 오래된 세션(mtime 기준)부터 지워 상한 아래로.
     기본은 무제한(설정 UI에서 켤 때만 호출됨). 반환: 삭제한 파일 수."""
-    if max_bytes <= 0 or not RAW_DIR.exists():
+    root = raw_dir()
+    if max_bytes <= 0 or not root.exists():
         return 0
-    files = sorted(RAW_DIR.rglob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
+    files = sorted(root.rglob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
     total = sum(p.stat().st_size for p in files)
     removed = 0
     for p in files:

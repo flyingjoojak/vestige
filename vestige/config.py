@@ -96,6 +96,7 @@ CONFIG_TEMPLATE = """# vestige 설정 파일 (KEY=VALUE, 환경변수가 우선)
 # ── 경로 (기본값이면 안 적어도 됨) ──
 #VESTIGE_DATA_DIR=~/vestige/data
 #CLAUDE_PROJECTS_DIR=~/.claude/projects
+#VESTIGE_RAW_ARCHIVE_DIR=~/vestige/data/raw
 
 # ── 임베딩 모델 (변경 시 전체 재색인 필요) ──
 # 기본=int8 e5-large(fp32 수준 품질·색인 약 2배 빠름). 저사양 기기는 아래 MiniLM 옵션.
@@ -128,6 +129,10 @@ SOURCES_ENV = os.environ.get("VESTIGE_SOURCES", "").strip()
 
 # 우리 데이터(아카이브 SQLite + 벡터 npy + 커서)를 두는 곳.
 DATA_DIR = Path(os.environ.get("VESTIGE_DATA_DIR", Path.home() / "vestige" / "data"))
+# 원본 로그 보존소(#163) 루트. 기본은 데이터 폴더 아래지만, 용량이 큰 편이라 외장/별도 디스크로
+# 뺄 수 있게 따로 지정 가능(경로를 바꿔도 기존 보존분은 옮기지 않는다 — 필요하면 수동 이동).
+_raw_archive_env = os.environ.get("VESTIGE_RAW_ARCHIVE_DIR", "").strip()
+RAW_ARCHIVE_DIR = Path(_raw_archive_env).expanduser() if _raw_archive_env else DATA_DIR / "raw"
 DB_PATH = DATA_DIR / "archive.db"
 VECTORS_PATH = DATA_DIR / "vectors.npy"
 VECTOR_IDS_PATH = DATA_DIR / "vector_ids.json"
