@@ -279,3 +279,114 @@ def test_safe_resume_cwd_rejects_unc_and_missing(tmp_path):
     assert _safe_resume_cwd("") is None and _safe_resume_cwd(None) is None
     # 실재하는 로컬 폴더만 허용
     assert _safe_resume_cwd(str(tmp_path)) == str(tmp_path)
+
+
+# --- 폴더(#201) ----------------------------------------------------------
+def _seed_folder_db(tmp_path, monkeypatch):
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+    db.upsert_turn(Turn(id="s2:u1", session_id="s2", uuid="u1", parent_uuid=None,
+                         timestamp="2026-07-24T01:00:00Z", project="p", question="q2", answer="a2", actions=()))
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+    return db
+
+
+def test_folder_crud_and_detail(tmp_path, monkeypatch):
+    """폴더 생성·중첩·담기 후 상세 조회에 경로/하위/항목이 제대로 실린다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    root = web.api_folder_create({"name": "Vestige"})["id"]
+    child = web.api_folder_create({"name": "배포", "parent_id": root})["id"]
+
+    web.api_folder_add({"folder_id": child, "turn_id": "s1:u1"})
+    web.api_folder_add({"folder_id": child, "session_id": "s2"})
+
+    d = web.api_folder(id=child)
+    assert d["folder"]["name"] == "배포"
+    assert [p["id"] for p in d["path"]] == [root]                  # 빵부스러기
+    assert {i["kind"] for i in d["items"]} == {"turn", "session"}
+    assert d["turn_count"] == 2                                    # 턴 1 + 세션 s2 의 턴 1
+
+    assert [f["id"] for f in web.api_folder(id=root)["children"]] == [child]
+    web.api_folder_rename({"id": child, "name": "배포 삽질"})
+    assert web.api_folder(id=child)["folder"]["name"] == "배포 삽질"
+
+
+def test_folder_move_rejects_cycle_and_delete_removes_subtree(tmp_path, monkeypatch):
+    _seed_folder_db(tmp_path, monkeypatch)
+    root = web.api_folder_create({"name": "부모"})["id"]
+    child = web.api_folder_create({"name": "자식", "parent_id": root})["id"]
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_folder_move({"id": root, "parent_id": child})      # 자기 하위로 이동
+    assert ei.value.status_code == 400
+
+    assert web.api_folder_delete({"id": root})["deleted"] == 2     # 하위까지 통째로
+    assert web.api_folders()["folders"] == []
+
+
+def test_folder_add_rejects_unknown_turn_and_missing_folder(tmp_path, monkeypatch):
+    _seed_folder_db(tmp_path, monkeypatch)
+    f = web.api_folder_create({"name": "F"})["id"]
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_folder_add({"folder_id": f, "turn_id": "no-such-turn"})
+    assert ei.value.status_code == 404                              # 유령 항목 방지
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_folder_add({"folder_id": 9999, "turn_id": "s1:u1"})
+    assert ei.value.status_code == 404                              # 없는 폴더
+
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_folder_add({"folder_id": f})                        # 대상 미지정
+    assert ei.value.status_code == 400
+
+
+def test_search_scoped_to_folder(tmp_path, monkeypatch):
+    """폴더 안에서 검색: 그 폴더가 가리키는 턴만 결과에 나온다."""
+    import vestige.web as W
+
+    db = _seed_folder_db(tmp_path, monkeypatch)
+    f = db.create_folder("모음")
+    db.add_to_folder(f, "turn", "s1:u1")
+
+    captured = {}
+
+    def fake_search(*a, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(W, "run_search", fake_search)
+    monkeypatch.setattr(W, "make_index", lambda *a, **k: None)
+
+    W.api_search(q="아무거나", mode="keyword", folder=f)
+    assert captured["allow_ids"] == {"s1:u1"}       # 폴더 범위로 제한해 넘어간다
+
+    W.api_search(q="아무거나", mode="keyword")
+    assert captured["allow_ids"] is None            # 폴더 미지정이면 전체
+
+
+def test_folder_endpoints_reject_bad_input_and_unknown_folder(tmp_path, monkeypatch):
+    """잘못된 폴더 id 는 500(예상치 못한 오류)이 아니라 400, 없는 폴더는 404."""
+    import vestige.web as W
+
+    db = _seed_folder_db(tmp_path, monkeypatch)
+
+    for bad in (None, "abc"):
+        with pytest.raises(web.HTTPException) as ei:
+            web.api_folder_rename({"id": bad, "name": "x"})
+        assert ei.value.status_code == 400
+
+    # 검색에서 없는 폴더를 가리키면 조용한 0건이 아니라 404(지워진 폴더를 든 화면을 드러냄)
+    monkeypatch.setattr(W, "make_index", lambda *a, **k: None)
+    monkeypatch.setattr(W, "run_search", lambda *a, **kw: [])
+    with pytest.raises(web.HTTPException) as ei:
+        W.api_search(q="x", mode="keyword", folder=9999)
+    assert ei.value.status_code == 404
+
+    f = db.create_folder("빈 폴더")                      # 비어있는 건 정상 응답 0건
+    assert W.api_search(q="x", mode="keyword", folder=f)["count"] == 0
