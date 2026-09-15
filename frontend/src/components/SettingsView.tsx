@@ -800,8 +800,10 @@ export function SettingsView() {
   const enrichPending = enrichSt?.pending_turns ?? 0
   const curCps = embed.find((e) => e.current)?.cps   // 현재 모델 처리량(청크/초) — ETA 추정용
 
+  // 폭 4xl(896px): 좌측 메뉴 208px를 빼면 내용 폭이 3xl 대비 ~490px → ~620px 로 늘어 경로처럼 긴
+  // 값이 덜 잘린다. 더 넓히면 설정 행(라벨—값)이 과하게 벌어져 읽기 나빠지므로 한 단계만.
   return (
-    <div className="mx-auto max-w-3xl px-6 py-5">
+    <div className="mx-auto max-w-4xl px-6 py-5">
       <h2 className="mb-4 text-lg font-semibold">{t("settings.title")}</h2>
 
       <div className="flex flex-col gap-5 md:flex-row md:items-start">
