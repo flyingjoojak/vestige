@@ -314,10 +314,11 @@ export function FolderView() {
                       : openConv?.turn === it.ref
                     return (
                       <div key={`${it.kind}:${it.ref}`}
-                        className={`group flex items-center gap-1.5 rounded-lg border p-2.5 transition-colors ${
+                        className={`group relative flex items-center gap-1.5 rounded-lg border p-2.5 transition-colors ${
                           active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
-                        {/* 순서 바꾸기 — 드래그 대신 위/아래 한 칸(작은 목록엔 이게 더 확실하다) */}
-                        <span className="flex shrink-0 flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                        {/* 순서 바꾸기 — 드래그 대신 위/아래 한 칸(작은 목록엔 이게 더 확실하다).
+                            z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게. */}
+                        <span className="relative z-10 flex shrink-0 flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                           <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0}
                             title={t("folders.moveUp")} aria-label={t("folders.moveUp")}
                             className="rounded p-0.5 hover:bg-muted disabled:opacity-30">
@@ -329,10 +330,12 @@ export function FolderView() {
                             <ChevronDown className="size-3" />
                           </button>
                         </span>
+                        {/* 클릭 영역을 카드 전체로(after:inset-0) — 여백이나 아이콘 자리를 눌러도 열리게.
+                            버튼 자체를 카드로 키우면 안쪽 버튼이 중첩되므로 겹침 레이어로 넓힌다. */}
                         <button onClick={() => setOpenConv({
                           session: it.kind === "session" ? it.ref : (it.session_id ?? ""),
                           turn: it.kind === "turn" ? it.ref : undefined,
-                        })} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                        })} className="flex min-w-0 flex-1 items-center gap-2 text-left after:absolute after:inset-0 after:content-['']">
                           {it.kind === "session"
                             ? <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
                             : <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />}
@@ -347,7 +350,7 @@ export function FolderView() {
                             </span>
                           </span>
                         </button>
-                        <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                        <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                           <button type="button" onClick={() => renameItem(it)}
                             title={t("folders.itemRename")} aria-label={t("folders.itemRename")}
                             className="rounded p-1 hover:bg-muted">
