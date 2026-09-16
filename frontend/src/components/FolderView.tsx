@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown, ChevronRight, ChevronUp, FolderPlus, Folder as FolderIcon, Loader2,
+  ChevronDown, ChevronRight, ChevronUp, FolderPlus, Folder as FolderIcon, GripVertical, Loader2,
   MessagesSquare, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
@@ -86,6 +86,9 @@ export function FolderView() {
   const [searching, setSearching] = useState(false)
   // 이 화면 안에서 열어 볼 대화(세션 탭으로 넘어가지 않는다 — 폴더를 보다가 맥락이 끊기지 않게).
   const [openConv, setOpenConv] = useState<{ session: string; turn?: string } | null>(null)
+  // 드래그 정렬 상태: drag=집어든 항목, over=지금 놓일 자리(그 위에 표시선).
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [overIdx, setOverIdx] = useState<number | null>(null)
   const reqId = useRef(0)   // 최신 검색만 반영
 
   const loadFolders = useCallback(() => {
@@ -157,19 +160,34 @@ export function FolderView() {
     } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
   }
 
-  // 위/아래로 한 칸. 화면에 보이는 순서를 그대로 저장한다(낙관적 반영 후 실패하면 되돌림).
-  async function moveItem(idx: number, dir: -1 | 1) {
+  // 화면에 보이는 순서를 그대로 저장(낙관적 반영 후 실패하면 되돌림). 드래그·버튼이 공용.
+  async function applyOrder(next: FolderItem[]) {
     if (sel == null || !detail) return
-    const next = [...detail.items]
-    const to = idx + dir
-    if (to < 0 || to >= next.length) return
-    ;[next[idx], next[to]] = [next[to], next[idx]]
     setDetail({ ...detail, items: next })
     try {
       await reorderFolder(sel, next.map((x) => ({ kind: x.kind, ref: x.ref })))
     } catch (e) {
       setErr(errText(t, e, "folders.saveFailed")); reload()
     }
+  }
+
+  // 위/아래로 한 칸 — 드래그를 못 쓰는 경우(키보드)를 위한 경로라 드래그가 생겨도 남겨둔다.
+  function moveItem(idx: number, dir: -1 | 1) {
+    if (!detail) return
+    const to = idx + dir
+    if (to < 0 || to >= detail.items.length) return
+    const next = [...detail.items]
+    ;[next[idx], next[to]] = [next[to], next[idx]]
+    applyOrder(next)
+  }
+
+  // 드래그해서 원하는 자리에 놓기(HTML5 기본 드래그 — 라이브러리 없이).
+  function dropItem(from: number, to: number) {
+    if (!detail || from === to) return
+    const next = [...detail.items]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    applyOrder(next)
   }
 
   async function removeItem(kind: "turn" | "session", ref: string) {
@@ -314,10 +332,27 @@ export function FolderView() {
                       : openConv?.turn === it.ref
                     return (
                       <div key={`${it.kind}:${it.ref}`}
-                        className={`group relative flex items-center gap-1.5 rounded-lg border p-2.5 transition-colors ${
-                          active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
-                        {/* 순서 바꾸기 — 드래그 대신 위/아래 한 칸(작은 목록엔 이게 더 확실하다).
+                        draggable
+                        onDragStart={(e) => { setDragIdx(idx); e.dataTransfer.effectAllowed = "move" }}
+                        onDragOver={(e) => {
+                          if (dragIdx == null) return
+                          e.preventDefault()                    // preventDefault 해야 드롭이 허용된다
+                          e.dataTransfer.dropEffect = "move"
+                          if (overIdx !== idx) setOverIdx(idx)
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (dragIdx != null) dropItem(dragIdx, idx)
+                          setDragIdx(null); setOverIdx(null)
+                        }}
+                        onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+                        className={`group relative flex cursor-grab items-center gap-1.5 rounded-lg border p-2.5 transition-colors active:cursor-grabbing ${
+                          active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"} ${
+                          dragIdx === idx ? "opacity-40" : ""} ${
+                          overIdx === idx && dragIdx !== idx ? "border-primary ring-1 ring-primary/40" : ""}`}>
+                        {/* 순서: 카드를 끌어 옮기거나(드래그), 키보드/정밀 조정용으로 위·아래 한 칸.
                             z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게. */}
+                        <GripVertical className="relative z-10 size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
                         <span className="relative z-10 flex shrink-0 flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                           <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0}
                             title={t("folders.moveUp")} aria-label={t("folders.moveUp")}
