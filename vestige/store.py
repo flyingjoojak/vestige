@@ -623,9 +623,12 @@ class ArchiveDB:
                 t = self.conn.execute(
                     "SELECT session_id, summary, question, timestamp FROM turns WHERE id=?",
                     (r["ref"],)).fetchone()
+                folded = self.conn.execute(
+                    "SELECT 1 FROM hidden_turns WHERE turn_id=?", (r["ref"],)).fetchone() is not None
                 item |= {"session_id": t["session_id"] if t else None,
                          "headline": ((t["summary"] or t["question"]) if t else "") or "",
-                         "timestamp": t["timestamp"] if t else None}
+                         "timestamp": t["timestamp"] if t else None,
+                         "hidden": folded}   # 접힘(#128) — 폴더에서도 접기/펼치기 하도록
             else:   # session — 담긴 건 참조뿐이라 현재 기준으로 개수·대표 제목을 매번 계산
                 t = self.conn.execute(
                     "SELECT COUNT(*) n, MIN(timestamp) started, MAX(timestamp) ended FROM turns "
@@ -633,9 +636,15 @@ class ArchiveDB:
                 head = self.conn.execute(
                     "SELECT summary, question FROM turns WHERE session_id=? ORDER BY timestamp, id LIMIT 1",
                     (r["ref"],)).fetchone()
-                item |= {"session_id": r["ref"], "count": t["n"] if t else 0,
+                n_hidden = self.conn.execute(
+                    "SELECT COUNT(*) c FROM turns t JOIN hidden_turns h ON h.turn_id = t.id "
+                    "WHERE t.session_id=?", (r["ref"],)).fetchone()["c"]
+                n = t["n"] if t else 0
+                item |= {"session_id": r["ref"], "count": n,
                          "headline": ((head["summary"] or head["question"]) if head else "") or "",
-                         "timestamp": t["ended"] if t else None}
+                         "timestamp": t["ended"] if t else None,
+                         # 세션은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)
+                         "hidden": n > 0 and n_hidden == n}
             # 폴더에서 붙인 이름이 있으면 그걸 제목으로(원본은 original_headline 으로 함께 내려줌).
             item["original_headline"] = item["headline"]
             if r["alias"]:

@@ -425,3 +425,31 @@ def test_folder_reorder_rejects_bad_payload(tmp_path, monkeypatch):
         with pytest.raises(web.HTTPException) as ei:
             web.api_folder_item_reorder(bad)
         assert ei.value.status_code == 400
+
+
+def test_folder_items_report_folded_state(tmp_path, monkeypatch):
+    """폴더 항목에도 접힘 상태가 실린다 - 폴더 화면에서 바로 접기/펼치기 하려면 필요.
+    세션 항목은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = _seed_folder_db(tmp_path, monkeypatch)
+    db.upsert_turn(Turn(id="s2:u2", session_id="s2", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T02:00:00Z", project="p", question="q3", answer="a3", actions=()))
+    db.commit()
+    f = web.api_folder_create({"name": "F"})["id"]
+    web.api_folder_add({"folder_id": f, "turn_id": "s1:u1"})
+    web.api_folder_add({"folder_id": f, "session_id": "s2"})
+
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s1:u1"]["hidden"] is False and by["s2"]["hidden"] is False
+
+    web.api_hide({"turn_id": "s1:u1"})
+    web.api_hide({"turn_id": "s2:u1"})        # 세션의 일부만 접음
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s1:u1"]["hidden"] is True
+    assert by["s2"]["hidden"] is False        # 아직 전부는 아니므로
+
+    web.api_hide({"turn_id": "s2:u2"})        # 나머지도 접으면
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s2"]["hidden"] is True

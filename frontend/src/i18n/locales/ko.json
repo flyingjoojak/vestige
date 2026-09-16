@@ -520,6 +520,8 @@
     "aliasBadge": "폴더에서 바꾼 이름",
     "moveUp": "위로",
     "moveDown": "아래로",
-    "pickItemPrompt": "가운데에서 항목을 고르면 대화가 여기 열려요."
+    "pickItemPrompt": "가운데에서 항목을 고르면 대화가 여기 열려요.",
+    "foldItem": "접기(검색·지도에서 빼기)",
+    "moveFailed": "폴더를 옮기지 못했어요"
   }
 }

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown, ChevronRight, ChevronUp, FolderPlus, Folder as FolderIcon, GripVertical, Loader2,
+  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, FolderPlus,
+  Folder as FolderIcon, GripVertical, Loader2,
   MessagesSquare, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
-  createFolder, deleteFolder, getFolder, listFolders, removeFromFolder, renameFolder,
-  renameFolderItem, reorderFolder, search,
+  createFolder, deleteFolder, getFolder, hideSession, hideTurn, listFolders, moveFolder,
+  removeFromFolder, renameFolder, renameFolderItem, reorderFolder, search, unhideSession, unhideTurn,
 } from "@/lib/api"
 import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
@@ -29,7 +30,7 @@ function childrenOf(folders: Folder[]): Map<number | null, Folder[]> {
   return m
 }
 
-function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle }: {
+function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle, drag }: {
   parent: number | null
   byParent: Map<number | null, Folder[]>
   sel: number | null
@@ -37,6 +38,8 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle 
   depth: number
   onPick: (id: number) => void
   onToggle: (id: number) => void
+  // 폴더를 끌어 다른 폴더 밑으로 옮기기(중첩 구조를 나중에도 바꿀 수 있게).
+  drag: { id: number | null; over: number | null; start: (id: number) => void; over_: (id: number | null) => void; drop: (id: number | null) => void }
 }) {
   const rows = byParent.get(parent) ?? []
   return (
@@ -47,8 +50,19 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle 
         return (
           <div key={f.id}>
             <div
-              className={`flex items-center gap-1 rounded-md pr-2 text-sm transition-colors ${
-                sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+              draggable
+              onDragStart={(e) => { drag.start(f.id); e.dataTransfer.effectAllowed = "move" }}
+              onDragOver={(e) => {
+                if (drag.id == null || drag.id === f.id) return
+                e.preventDefault(); e.dataTransfer.dropEffect = "move"
+                if (drag.over !== f.id) drag.over_(f.id)
+              }}
+              onDrop={(e) => { e.preventDefault(); drag.drop(f.id) }}
+              onDragEnd={() => drag.drop(undefined as unknown as null)}
+              className={`flex cursor-grab items-center gap-1 rounded-md pr-2 text-sm transition-colors active:cursor-grabbing ${
+                sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
+                drag.id === f.id ? "opacity-40" : ""} ${
+                drag.over === f.id && drag.id !== f.id ? "ring-1 ring-primary/60" : ""}`}
               style={{ paddingLeft: `${depth * 14 + 4}px` }}
             >
               <button type="button" onClick={() => onToggle(f.id)} aria-label={String(f.name)}
@@ -64,7 +78,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle 
             </div>
             {!isCollapsed && kids.length > 0 && (
               <FolderTree parent={f.id} byParent={byParent} sel={sel} collapsed={collapsed}
-                depth={depth + 1} onPick={onPick} onToggle={onToggle} />
+                depth={depth + 1} onPick={onPick} onToggle={onToggle} drag={drag} />
             )}
           </div>
         )
@@ -89,6 +103,9 @@ export function FolderView() {
   // 드래그 정렬 상태: drag=집어든 항목, over=지금 놓일 자리(그 위에 표시선).
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [overIdx, setOverIdx] = useState<number | null>(null)
+  // 폴더 트리 드래그(폴더를 다른 폴더 밑으로 이동).
+  const [dragFolder, setDragFolder] = useState<number | null>(null)
+  const [overFolder, setOverFolder] = useState<number | null>(null)
   const reqId = useRef(0)   // 최신 검색만 반영
 
   const loadFolders = useCallback(() => {
@@ -181,6 +198,26 @@ export function FolderView() {
     applyOrder(next)
   }
 
+  // 폴더를 다른 폴더 밑으로(빈 곳에 놓으면 최상위로). 자기 하위로는 서버가 400 으로 막는다.
+  async function dropFolder(target: number | null) {
+    const moving = dragFolder
+    setDragFolder(null); setOverFolder(null)
+    if (moving == null || moving === target) return
+    try {
+      await moveFolder(moving, target)
+      loadFolders()
+    } catch (e) { setErr(errText(t, e, "folders.moveFailed")) }
+  }
+
+  // 폴더 안에서 바로 접기/펼치기(#128) — 접으려고 세션 화면까지 가지 않게.
+  async function toggleFold(it: FolderItem) {
+    try {
+      if (it.kind === "turn") await (it.hidden ? unhideTurn(it.ref) : hideTurn(it.ref))
+      else await (it.hidden ? unhideSession(it.ref) : hideSession(it.ref))
+      reload()
+    } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
+  }
+
   // 드래그해서 원하는 자리에 놓기(HTML5 기본 드래그 — 라이브러리 없이).
   function dropItem(from: number, to: number) {
     if (!detail || from === to) return
@@ -231,13 +268,18 @@ export function FolderView() {
             <FolderPlus className="size-3.5" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {/* 빈 곳에 놓으면 최상위로 — 하위 폴더를 밖으로 빼낼 방법이 필요하다. */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-2"
+          onDragOver={(e) => { if (dragFolder != null) { e.preventDefault(); setOverFolder(null) } }}
+          onDrop={(e) => { e.preventDefault(); if (dragFolder != null) dropFolder(null) }}>
           {!folders && <div className="grid h-24 place-items-center text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>}
           {folders && folders.length === 0 && (
             <div className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">{t("folders.empty")}</div>
           )}
           {folders && folders.length > 0 && (
             <FolderTree parent={null} byParent={byParent} sel={sel} collapsed={collapsed} depth={0}
+              drag={{ id: dragFolder, over: overFolder, start: setDragFolder,
+                      over_: setOverFolder, drop: dropFolder }}
               onPick={setSel}
               onToggle={(id) => setCollapsed((prev) => {
                 const next = new Set(prev)
@@ -376,8 +418,11 @@ export function FolderView() {
                             : <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />}
                           <span className="min-w-0 flex-1">
                             <span className="flex items-center gap-1">
-                              <span className="min-w-0 truncate text-[13px] font-medium">{it.headline || t("folders.untitled")}</span>
+                              <span className={`min-w-0 truncate text-[13px] font-medium ${it.hidden ? "text-muted-foreground line-through decoration-muted-foreground/40" : ""}`}>
+                                {it.headline || t("folders.untitled")}
+                              </span>
                               {it.alias && <Tag className="size-3 shrink-0 text-primary/70" aria-label={t("folders.aliasBadge")} />}
+                              {it.hidden && <span className="shrink-0 rounded bg-muted px-1 text-[9.5px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
                             </span>
                             <span className="block truncate text-[10.5px] text-muted-foreground tabular-nums">
                               {it.kind === "session" ? t("folders.sessionItem", { count: it.count ?? 0 }) : t("folders.turnItem")}
@@ -386,6 +431,13 @@ export function FolderView() {
                           </span>
                         </button>
                         <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          {/* 접기/펼치기(#128) — 폴더에 담아둔 채로 검색·지도에서만 빼둘 수 있게. */}
+                          <button type="button" onClick={() => toggleFold(it)}
+                            title={it.hidden ? t("chat.unfold") : t("folders.foldItem")}
+                            aria-label={it.hidden ? t("chat.unfold") : t("folders.foldItem")}
+                            className="rounded p-1 hover:bg-muted">
+                            {it.hidden ? <ChevronsUpDown className="size-3.5" /> : <ChevronsDownUp className="size-3.5" />}
+                          </button>
                           <button type="button" onClick={() => renameItem(it)}
                             title={t("folders.itemRename")} aria-label={t("folders.itemRename")}
                             className="rounded p-1 hover:bg-muted">
