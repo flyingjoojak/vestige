@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type, X } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, Pencil, TerminalSquare, Type, X } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
-import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, type SearchMode } from "@/lib/api"
+import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, type SearchMode } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
@@ -38,7 +38,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   kind: "sessions" | "clusters"; initialSel?: string | null; initialTurn?: { turn: string; session: string } | null
 }) {
   const { t } = useTranslation()
-  const { confirm } = useDialogs()
+  const { confirm, prompt } = useDialogs()
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
   // 목록 자체를 좁히는 입력. 서버 검색(대화 내용)과 달리 '제목·id'만 보는 로컬 필터다.
@@ -144,6 +144,24 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       flashMsg({ ok: false, text: errText(t, e, "browse.execFailed") })
     } finally {
       setRestoring(false)
+    }
+  }
+
+  // 세션 제목 바꾸기. 비우면 기본 제목(첫 턴 요약)으로 되돌아간다.
+  async function renameSession() {
+    if (!sel) return
+    const cur = detail?.title ?? selGroup?.label ?? ""
+    const name = await prompt({
+      title: t("browse.renameSession"), description: t("browse.renameSessionHint"),
+      defaultValue: detail?.title ?? "", placeholder: cur, confirmLabel: t("common.save"),
+    })
+    if (name == null) return
+    try {
+      await setSessionTitle(sel, name)
+      loadGroups()
+      getSession(sel).then(setDetail).catch(() => {})
+    } catch (e) {
+      flashMsg({ ok: false, text: errText(t, e, "settings.saveFailed") })
     }
   }
 
@@ -342,6 +360,15 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               {selGroup?.color && <span className="mr-1.5 inline-block size-2.5 rounded-full align-middle" style={{ background: selGroup.color }} />}
               {selGroup?.label} · {convs?.length ?? 0}
             </span>
+            {/* 세션 제목 바꾸기 — 기본 제목은 첫 턴 요약이라 내용과 안 맞을 때가 많다.
+                원문 대화는 건드리지 않고 표시 이름만 바꾼다(재색인해도 유지). */}
+            {kind === "sessions" && sel && (
+              <button type="button" onClick={renameSession}
+                title={t("browse.renameSession")} aria-label={t("browse.renameSession")}
+                className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                <Pencil className="size-3.5" />
+              </button>
+            )}
           </div>
           {/* 배경(서브에이전트) 대화: 직접 열 수 없음 → 안내 + 부모 세션 역링크 */}
           {kind === "sessions" && sel && isSubagent && (

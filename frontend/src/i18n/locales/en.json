@@ -367,7 +367,9 @@
     "resumeConfirmTitle": "This session may be in use",
     "filterSessions": "Filter by title or session ID",
     "filterClusters": "Filter by cluster name",
-    "filterNoMatch": "No matching items."
+    "filterNoMatch": "No matching items.",
+    "renameSession": "Rename session",
+    "renameSessionHint": "A name for this session. The conversation itself is unchanged; leave empty to restore the original title."
   },
   "mcp": {
     "sectionTitle": "MCP integration",

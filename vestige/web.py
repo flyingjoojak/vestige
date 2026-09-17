@@ -614,6 +614,7 @@ def api_session(id: str = Query(...), limit: int = 2000):
     )
     return {
         "session": id, "project": project, "count": len(turns), "turns": turns,
+        "title": db.session_title(id),          # 사용자가 지은 제목(없으면 null)
         "source": source,
         # 배경 대화는 재개 명령이 없음(열기 차단) — 부모 세션 링크만 제공.
         "resume_cmd": "" if is_sub else (_resume_cmd_str(source, id) if _SID_RE.fullmatch(id) else ""),
@@ -856,6 +857,20 @@ def api_hidden(limit: int = 200):
     return {"hidden": db.list_hidden(limit) if limit > 0 else [], "count": db.hidden_count()}
 
 
+@app.post("/api/session/title")
+def api_session_title(payload: dict):
+    """세션 제목을 사용자가 직접 지정(빈 값이면 기본 제목으로 되돌림).
+    원문 대화는 건드리지 않고 별도 테이블에만 기록한다 — 재색인·정제를 다시 돌려도 남는다."""
+    sid = str((payload or {}).get("session_id", "")).strip()
+    if not sid or not _SID_RE.fullmatch(sid):
+        raise HTTPException(status_code=400, detail={"code": "invalid_session_id", "msg": "잘못된 세션 id"})
+    db = ArchiveDB()
+    if db.conn.execute("SELECT 1 FROM turns WHERE session_id=? LIMIT 1", (sid,)).fetchone() is None:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
+    db.set_session_title(sid, str((payload or {}).get("title", "")).strip() or None)
+    return {"ok": True}
+
+
 @app.get("/api/sessions")
 def api_sessions(limit: int = 500):
     """세션 목록(최근순): id·턴수·시작/끝 시각·대표 헤드라인(첫 정제/질문)."""
@@ -878,6 +893,8 @@ def api_sessions(limit: int = 500):
         "  FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id"
         ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
     ).fetchall()
+    # 사용자가 지은 제목은 한 번에 읽어와 덮어쓴다(세션마다 조회하면 N+1).
+    titles = {t["session_id"]: t["title"] for t in db.conn.execute("SELECT session_id, title FROM session_titles")}
     out = []
     for r in rows:
         is_sub, parent = _subagent_info(r["source_file"])
@@ -885,7 +902,8 @@ def api_sessions(limit: int = 500):
             "session": r["session_id"], "count": r["n"],
             "hidden_count": r["n_hidden"] or 0,   # == count 면 세션 전체가 접힌 상태
             "started": r["started"], "ended": r["ended"],
-            "headline": r["summary"] or r["question"] or "",
+            "headline": titles.get(r["session_id"]) or r["summary"] or r["question"] or "",
+            "custom_title": titles.get(r["session_id"]),   # 지정 여부 표시용
             "source": r["source"] or "claude-code",
             "subagent": is_sub,      # 배경(서브에이전트) 대화 여부
             "parent": parent,        # 파생된 부모 세션 id(있으면)
