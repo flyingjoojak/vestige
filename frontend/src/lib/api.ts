@@ -117,8 +117,9 @@ export const createFolder = (name: string, parentId?: number | null) =>
   postFolder<{ ok: boolean; id: number }>("/api/folders/create", { name, parent_id: parentId ?? null })
 export const renameFolder = (id: number, name: string) =>
   postFolder<{ ok: boolean }>("/api/folders/rename", { id, name })
-export const moveFolder = (id: number, parentId: number | null) =>
-  postFolder<{ ok: boolean }>("/api/folders/move", { id, parent_id: parentId })
+// beforeId: 그 형제 '바로 앞'에 놓는다(순서 지정). 없으면 맨 뒤.
+export const moveFolder = (id: number, parentId: number | null, beforeId: number | null = null) =>
+  postFolder<{ ok: boolean }>("/api/folders/move", { id, parent_id: parentId, before_id: beforeId })
 export const deleteFolder = (id: number) =>
   postFolder<{ ok: boolean; deleted: number }>("/api/folders/delete", { id })
 export type FolderTarget = { turnId?: string; sessionId?: string }

@@ -751,14 +751,16 @@ def api_folder_rename(payload: dict):
 
 @app.post("/api/folders/move")
 def api_folder_move(payload: dict):
-    """폴더를 다른 폴더 밑으로(parent_id=null 이면 최상위). 자기 하위로는 못 옮긴다."""
+    """폴더를 다른 폴더 밑으로(parent_id=null 이면 최상위). 자기 하위로는 못 옮긴다.
+    before_id 를 주면 그 형제 '바로 앞'에 놓는다(순서까지 지정) — 없으면 맨 뒤."""
     db = ArchiveDB()
     fid = _folder_id_arg(payload, "id")
     _folder_or_404(db, fid)
     parent_id = (payload or {}).get("parent_id")
     if parent_id is not None:
         _folder_or_404(db, _folder_id_arg(payload, "parent_id"))
-    if not db.move_folder(fid, _folder_id_arg(payload, "parent_id") if parent_id is not None else None):
+    before_id = _folder_id_arg(payload, "before_id") if (payload or {}).get("before_id") is not None else None
+    if not db.move_folder(fid, _folder_id_arg(payload, "parent_id") if parent_id is not None else None, before_id):
         raise HTTPException(status_code=400, detail={"code": "folder_cycle", "msg": "폴더를 자기 하위로 옮길 수 없습니다"})
     return {"ok": True}
 

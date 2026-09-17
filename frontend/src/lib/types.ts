@@ -95,6 +95,7 @@ export interface FolderItem {
   original_headline?: string   // 원본 제목(별칭을 지웠을 때 돌아갈 이름)
   alias?: string | null  // 이 폴더에서만 쓰는 이름
   position?: number | null
+  hidden?: boolean       // 접힘(#128) - 폴더에서도 접기/펼치기
   timestamp: string | null
   count?: number         // kind=session 일 때 그 세션의 현재 턴 수
 }

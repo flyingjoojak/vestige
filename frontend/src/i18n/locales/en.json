@@ -520,6 +520,9 @@
     "aliasBadge": "Renamed in folder",
     "moveUp": "Move up",
     "moveDown": "Move down",
-    "pickItemPrompt": "Pick an item in the middle to read it here."
+    "pickItemPrompt": "Pick an item in the middle to read it here.",
+    "foldItem": "Fold (hide from search & map)",
+    "moveFailed": "Couldn't move the folder",
+    "dropToRootHint": "Drop here to move to top level"
   }
 }

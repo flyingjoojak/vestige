@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
+import { AddToFolder } from "./AddToFolder"
 import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, type SearchMode } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -246,27 +247,41 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       {groups && groups.length === 0 && !groupsErr && (
         <div className="grid h-40 place-items-center px-6 text-center text-sm text-muted-foreground">{t("browse.emptyGroups")}</div>
       )}
+      {/* 행 안에 '폴더에 추가' 버튼을 두려면 버튼 중첩을 피해야 한다 → 행은 div, 클릭 영역은
+          겹침 레이어(after:inset-0)로 카드 전체, 담기 버튼은 z-10 으로 그 위에. */}
       {groups?.map((g) => compact ? (
-        <button key={g.id} onClick={() => pickGroup(g.id)}
-          className={`cm-cv-row flex w-full items-center gap-2.5 rounded-lg border p-3 text-left transition-colors ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+        <div key={g.id}
+          className={`cm-cv-row group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
           {groupIcon(g)}
-          <span className={`min-w-0 flex-1 ${g.folded ? "opacity-55" : ""}`}>
+          <button onClick={() => pickGroup(g.id)}
+            className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
             <span className="block truncate text-sm font-medium">{g.label}</span>
             <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{g.sub}</span>
-          </span>
+          </button>
           {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
-        </button>
+          {kind === "sessions" && (
+            <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <AddToFolder target={{ sessionId: g.id }} />
+            </span>
+          )}
+        </div>
       ) : (
-        <button key={g.id} onClick={() => pickGroup(g.id)}
-          className="cm-cv-row group flex w-full items-center gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-px hover:shadow-md">
+        <div key={g.id}
+          className="cm-cv-row group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md">
           {groupIcon(g)}
-          <div className={`min-w-0 flex-1 ${g.folded ? "opacity-55" : ""}`}>
+          <button onClick={() => pickGroup(g.id)}
+            className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
             <div className="truncate text-sm font-medium">{g.label}</div>
             <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground tabular-nums">{g.sub}</div>
-          </div>
+          </button>
           {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
+          {kind === "sessions" && (
+            <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <AddToFolder target={{ sessionId: g.id }} />
+            </span>
+          )}
           <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </button>
+        </div>
       ))}
     </div>
   )

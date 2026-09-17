@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS hidden_turns(
 );
 CREATE TABLE IF NOT EXISTS folders(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-  parent_id INTEGER REFERENCES folders(id), created_at REAL
+  parent_id INTEGER REFERENCES folders(id), created_at REAL,
+  position REAL             -- 같은 부모 안에서의 순서(작을수록 위)
 );
 CREATE TABLE IF NOT EXISTS folder_items(
   folder_id INTEGER NOT NULL REFERENCES folders(id),
@@ -138,6 +139,17 @@ def _mig_0006_folder_item_alias_position(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE folder_items ADD COLUMN position REAL")
 
 
+def _mig_0007_folder_position(conn: sqlite3.Connection) -> None:
+    """folders 에 position 추가 — 형제 폴더의 순서를 사용자가 정할 수 있게(#201 후속).
+
+    이게 없으면 항상 이름순이라 드래그로 바꿀 수 있는 건 부모(뎁스)뿐이었다.
+    기존 행은 NULL 로 남고, 읽을 때 NULL 은 이름순으로 밀려난다.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(folders)")}
+    if "position" not in cols:
+        conn.execute("ALTER TABLE folders ADD COLUMN position REAL")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -146,6 +158,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0004_hidden_turns,
     _mig_0005_folders,
     _mig_0006_folder_item_alias_position,
+    _mig_0007_folder_position,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -530,12 +543,14 @@ class ArchiveDB:
     def list_folders(self) -> list[dict]:
         """전체 폴더(트리 구성은 호출부에서). 각 폴더의 '직접' 담긴 항목 수를 함께."""
         rows = self.conn.execute(
-            "SELECT f.id, f.name, f.parent_id, f.created_at,"
+            "SELECT f.id, f.name, f.parent_id, f.created_at, f.position,"
             "       (SELECT COUNT(*) FROM folder_items i WHERE i.folder_id = f.id) AS n_items "
-            "FROM folders f ORDER BY f.name, f.id"
+            # 같은 부모 안에서 사용자가 정한 순서 우선, 아직 없으면(NULL) 이름순으로 뒤에.
+            "FROM folders f ORDER BY (f.position IS NULL), f.position, f.name, f.id"
         ).fetchall()
         return [{"id": r["id"], "name": r["name"], "parent_id": r["parent_id"],
-                 "created_at": r["created_at"], "items": r["n_items"]} for r in rows]
+                 "created_at": r["created_at"], "position": r["position"],
+                 "items": r["n_items"]} for r in rows]
 
     def get_folder(self, folder_id: int) -> dict | None:
         r = self.conn.execute(
@@ -561,11 +576,24 @@ class ArchiveDB:
         self.conn.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
         self.conn.commit()
 
-    def move_folder(self, folder_id: int, parent_id: int | None) -> bool:
-        """폴더를 다른 폴더 밑으로. 자기 자신/자기 하위로는 못 옮긴다(순환 방지). 성공 여부 반환."""
+    def move_folder(self, folder_id: int, parent_id: int | None, before_id: int | None = None) -> bool:
+        """폴더를 parent_id 밑으로 옮긴다. 자기 자신/자기 하위로는 못 옮긴다(순환 방지).
+
+        before_id 를 주면 그 형제 '바로 앞'에, 없으면 맨 뒤에 놓는다 — 부모(뎁스)만이 아니라
+        형제 사이 순서까지 한 번의 드래그로 정하기 위한 것. 옮긴 뒤 그 부모의 형제들에게
+        1,2,3… 을 다시 매겨(NULL 이었던 기존 폴더 포함) 순서를 확정한다.
+        """
         if parent_id is not None and parent_id in self.folder_descendants(folder_id):
             return False
         self.conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (parent_id, folder_id))
+
+        sibs = [r["id"] for r in self.conn.execute(
+            "SELECT id FROM folders WHERE parent_id IS ? AND id<>? "
+            "ORDER BY (position IS NULL), position, name, id", (parent_id, folder_id))]
+        at = sibs.index(before_id) if before_id in sibs else len(sibs)
+        sibs.insert(at, folder_id)
+        self.conn.executemany("UPDATE folders SET position=? WHERE id=?",
+                              [(i, fid) for i, fid in enumerate(sibs, start=1)])
         self.conn.commit()
         return True
 
@@ -623,9 +651,12 @@ class ArchiveDB:
                 t = self.conn.execute(
                     "SELECT session_id, summary, question, timestamp FROM turns WHERE id=?",
                     (r["ref"],)).fetchone()
+                folded = self.conn.execute(
+                    "SELECT 1 FROM hidden_turns WHERE turn_id=?", (r["ref"],)).fetchone() is not None
                 item |= {"session_id": t["session_id"] if t else None,
                          "headline": ((t["summary"] or t["question"]) if t else "") or "",
-                         "timestamp": t["timestamp"] if t else None}
+                         "timestamp": t["timestamp"] if t else None,
+                         "hidden": folded}   # 접힘(#128) — 폴더에서도 접기/펼치기 하도록
             else:   # session — 담긴 건 참조뿐이라 현재 기준으로 개수·대표 제목을 매번 계산
                 t = self.conn.execute(
                     "SELECT COUNT(*) n, MIN(timestamp) started, MAX(timestamp) ended FROM turns "
@@ -633,9 +664,15 @@ class ArchiveDB:
                 head = self.conn.execute(
                     "SELECT summary, question FROM turns WHERE session_id=? ORDER BY timestamp, id LIMIT 1",
                     (r["ref"],)).fetchone()
-                item |= {"session_id": r["ref"], "count": t["n"] if t else 0,
+                n_hidden = self.conn.execute(
+                    "SELECT COUNT(*) c FROM turns t JOIN hidden_turns h ON h.turn_id = t.id "
+                    "WHERE t.session_id=?", (r["ref"],)).fetchone()["c"]
+                n = t["n"] if t else 0
+                item |= {"session_id": r["ref"], "count": n,
                          "headline": ((head["summary"] or head["question"]) if head else "") or "",
-                         "timestamp": t["ended"] if t else None}
+                         "timestamp": t["ended"] if t else None,
+                         # 세션은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)
+                         "hidden": n > 0 and n_hidden == n}
             # 폴더에서 붙인 이름이 있으면 그걸 제목으로(원본은 original_headline 으로 함께 내려줌).
             item["original_headline"] = item["headline"]
             if r["alias"]:

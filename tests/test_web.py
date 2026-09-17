@@ -425,3 +425,62 @@ def test_folder_reorder_rejects_bad_payload(tmp_path, monkeypatch):
         with pytest.raises(web.HTTPException) as ei:
             web.api_folder_item_reorder(bad)
         assert ei.value.status_code == 400
+
+
+def test_folder_items_report_folded_state(tmp_path, monkeypatch):
+    """폴더 항목에도 접힘 상태가 실린다 - 폴더 화면에서 바로 접기/펼치기 하려면 필요.
+    세션 항목은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)."""
+    from vestige.models import Turn
+    from vestige.store import ArchiveDB
+
+    db = _seed_folder_db(tmp_path, monkeypatch)
+    db.upsert_turn(Turn(id="s2:u2", session_id="s2", uuid="u2", parent_uuid=None,
+                         timestamp="2026-07-24T02:00:00Z", project="p", question="q3", answer="a3", actions=()))
+    db.commit()
+    f = web.api_folder_create({"name": "F"})["id"]
+    web.api_folder_add({"folder_id": f, "turn_id": "s1:u1"})
+    web.api_folder_add({"folder_id": f, "session_id": "s2"})
+
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s1:u1"]["hidden"] is False and by["s2"]["hidden"] is False
+
+    web.api_hide({"turn_id": "s1:u1"})
+    web.api_hide({"turn_id": "s2:u1"})        # 세션의 일부만 접음
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s1:u1"]["hidden"] is True
+    assert by["s2"]["hidden"] is False        # 아직 전부는 아니므로
+
+    web.api_hide({"turn_id": "s2:u2"})        # 나머지도 접으면
+    by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
+    assert by["s2"]["hidden"] is True
+
+
+def test_folder_move_sets_sibling_order(tmp_path, monkeypatch):
+    """형제 순서까지 드래그 한 번으로 — before_id 로 '그 앞'에 꽂고, 목록은 그 순서로 나온다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    a = web.api_folder_create({"name": "가"})["id"]
+    b = web.api_folder_create({"name": "나"})["id"]
+    c = web.api_folder_create({"name": "다"})["id"]
+
+    order = lambda: [f["id"] for f in web.api_folders()["folders"] if f["parent_id"] is None]
+    assert order() == [a, b, c]                       # 처음엔 이름순
+
+    web.api_folder_move({"id": c, "parent_id": None, "before_id": a})
+    assert order() == [c, a, b]                       # 맨 앞으로
+
+    web.api_folder_move({"id": c, "parent_id": None})  # before 없으면 맨 뒤
+    assert order() == [a, b, c]
+
+
+def test_folder_move_into_and_out_keeps_order(tmp_path, monkeypatch):
+    """다른 폴더 안으로 넣었다가 다시 최상위로 빼도 순서 지정이 유지된다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    a = web.api_folder_create({"name": "가"})["id"]
+    b = web.api_folder_create({"name": "나"})["id"]
+
+    web.api_folder_move({"id": b, "parent_id": a})            # a 안으로
+    assert [f["id"] for f in web.api_folder(id=a)["children"]] == [b]
+
+    web.api_folder_move({"id": b, "parent_id": None, "before_id": a})   # 다시 밖으로, a 앞에
+    tops = [f["id"] for f in web.api_folders()["folders"] if f["parent_id"] is None]
+    assert tops == [b, a]
