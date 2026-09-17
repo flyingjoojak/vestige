@@ -32,12 +32,27 @@ function zoneOf(e: React.DragEvent<HTMLElement>): DropZone {
   return "inside"
 }
 
-function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle, drag }: {
+// 계층을 눈으로 바로 알 수 있게 트리 가이드(├ └ │)를 그린다. 들여쓰기만으로는 깊이가 헷갈린다.
+// lines[i] = i번째 조상이 아래로 더 이어지는지(=그 조상에게 다음 형제가 있는지) → │ 를 이어 그림.
+function TreeGuide({ lines, last }: { lines: boolean[]; last: boolean }) {
+  if (lines.length === 0) return null
+  return (
+    <span aria-hidden className="flex shrink-0 select-none font-mono text-[11px] leading-none text-muted-foreground/45">
+      {lines.slice(0, -1).map((cont, i) => (
+        <span key={i} className="inline-block w-3.5 text-center">{cont ? "│" : ""}</span>
+      ))}
+      <span className="inline-block w-3.5 text-center">{last ? "└" : "├"}</span>
+    </span>
+  )
+}
+
+function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPick, onToggle, drag }: {
   parent: number | null
   byParent: Map<number | null, Folder[]>
   sel: number | null
   collapsed: Set<number>
   depth: number
+  lines?: boolean[]        // 조상들이 아래로 이어지는지 — 가이드 세로선 연결용
   onPick: (id: number) => void
   onToggle: (id: number) => void
   // 폴더 드래그: 행 위/아래 가장자리에 놓으면 '그 자리로'(순서), 가운데면 '그 안으로'(뎁스).
@@ -57,15 +72,17 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
   const ghost = (d: number) => (
     // pointer-events-none 필수: 자리표시가 커서 밑에 깔리면 dragover 가 이쪽으로 넘어가
     // 대상 판정이 뒤집히고(자리표시 사라짐 → 다시 생김) 깜빡이며, 드롭 불가 커서까지 뜬다.
+    // 들여쓰기 폭은 가이드 칸(14px)과 같게 맞춘다 — 실제 행과 같은 자리에 보여야 미리보기가 된다.
     <div aria-hidden className="pointer-events-none flex items-center gap-1.5 rounded-md border border-dashed border-primary/40 bg-muted/40 py-1.5 pr-2 text-sm text-muted-foreground"
-      style={{ paddingLeft: `${d * 14 + 24}px` }}>
+      style={{ paddingLeft: `${d * 14 + 26}px` }}>
       <FolderIcon className="size-3.5 shrink-0 opacity-60" />
       <span className="min-w-0 flex-1 truncate opacity-70">{drag.movingName}</span>
     </div>
   )
   return (
     <>
-      {rows.map((f) => {
+      {rows.map((f, i) => {
+        const isLast = i === rows.length - 1
         const kids = byParent.get(f.id) ?? []
         const isCollapsed = collapsed.has(f.id)
         const over = drag.over?.id === f.id && drag.id !== f.id ? drag.over.zone : null
@@ -91,8 +108,9 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
                 sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
                 drag.id === f.id ? "opacity-40" : ""} ${
                 over === "inside" ? "ring-1 ring-primary/60" : ""}`}
-              style={{ paddingLeft: `${depth * 14 + 4}px` }}
+              style={{ paddingLeft: "4px" }}
             >
+              <TreeGuide lines={lines} last={isLast} />
               <button type="button" onClick={() => onToggle(f.id)} aria-label={String(f.name)}
                 className={`grid size-4 shrink-0 place-items-center rounded ${kids.length ? "hover:bg-muted-foreground/20" : "invisible"}`}>
                 <ChevronRight className={`size-3 transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
@@ -108,7 +126,8 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
             {over === "inside" && ghost(depth + 1)}
             {!isCollapsed && kids.length > 0 && (
               <FolderTree parent={f.id} byParent={byParent} sel={sel} collapsed={collapsed}
-                depth={depth + 1} onPick={onPick} onToggle={onToggle} drag={drag} />
+                depth={depth + 1} lines={[...lines, !isLast]}
+                onPick={onPick} onToggle={onToggle} drag={drag} />
             )}
             {/* 아래로 = 이 폴더(와 그 하위) 다음 형제 자리 */}
             {over === "after" && ghost(depth)}
