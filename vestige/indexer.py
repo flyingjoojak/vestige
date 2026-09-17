@@ -325,7 +325,9 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
         try:   # 원본 미러링(#163 P1): 턴 추출과 완전히 별개 — 여기서 실패해도 색인은 계속.
             raw_archive.mirror_file(db, f, getattr(adapter, "source_name", adapter.name))
         except Exception as ex:  # noqa: BLE001
-            log_fn(f"raw mirror 실패 {os.path.basename(str(f))}: {ex}")
+            # "ERROR " 접두사는 _capture_log 가 /api/index/status 로 올리는 규약이다.
+            # 이게 빠지면 보존 실패가 어디에도 안 남아, 원본이 지워진 뒤에야 발견된다.
+            log_fn(f"ERROR raw mirror {os.path.basename(str(f))}: {ex}")
         try:
             n = index_file(f, db, vi, embedder, adapter=adapter, on_flush=_on_flush)
             if had_new:
@@ -345,11 +347,11 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
     from . import config as C
     if C.RAW_ARCHIVE_MAX_MB.strip():
         try:
-            n = raw_archive.enforce_quota(int(C.RAW_ARCHIVE_MAX_MB) * 1024 * 1024)
+            n = raw_archive.enforce_quota(int(C.RAW_ARCHIVE_MAX_MB) * 1024 * 1024, db)
             if n:
                 log_fn(f"raw archive 용량 초과 - 오래된 세션 {n}개 정리")
         except Exception as ex:  # noqa: BLE001
-            log_fn(f"raw archive quota 정리 실패: {ex}")
+            log_fn(f"ERROR raw archive quota 정리 실패: {ex}")
     return total
 
 

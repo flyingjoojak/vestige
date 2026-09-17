@@ -154,6 +154,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     const name = await prompt({
       title: t("browse.renameSession"), description: t("browse.renameSessionHint"),
       defaultValue: detail?.title ?? "", placeholder: cur, confirmLabel: t("common.save"),
+      allowEmpty: true,   // 비워서 저장 = 기본 제목으로 되돌리기(백엔드 계약)
     })
     if (name == null) return
     try {
@@ -239,7 +240,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         const list = (r.hits || []).filter((h) => convSet.has(h.id)); setHits(list)
         if (list.length) setSelTurn({ session: list[0].session_full, turn: list[0].id })
       }
-    } catch { if (myId === searchReq.current) setHits([]) } finally { if (myId === searchReq.current) setSearching(false) }
+    } catch (e) {
+      // 원인을 버리면 임베더 실패·500·네트워크 끊김이 전부 '결과 없음'으로 보인다.
+      if (myId === searchReq.current) { setHits([]); setSearchErr(errText(t, e, "browse.searchFailed")) }
+    } finally { if (myId === searchReq.current) setSearching(false) }
   }
 
   function pickGroup(id: string) { setSel(id); setSelTurn(null) }

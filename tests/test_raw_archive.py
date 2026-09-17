@@ -376,3 +376,102 @@ def test_raw_cursor_roundtrip(tmp_path):
     db.set_raw_cursor("/x/a.jsonl", 100, "sid1", "claude-code")   # upsert
     db.commit()
     assert db.get_raw_cursor("/x/a.jsonl") == 100
+
+
+# ── 읽는 중 파일이 자라는 경우(#163 회귀) ─────────────────────
+def test_mirror_cursor_advances_by_bytes_written_not_stat_size(tmp_path, monkeypatch):
+    """stat() 과 read() 사이에 로그가 자라도 보존본에 중복이 생기지 않아야 한다.
+
+    mirror_file 은 EOF까지 읽으므로 chunk 가 stat 크기를 넘어설 수 있다. 커서를 stat 크기로
+    저장하면 그 차이만큼을 다음 회차가 다시 읽어 gz 에 같은 줄이 두 번 들어간다.
+    활성 세션(실시간 색인)에서 늘 일어날 수 있는 조건이라 회귀로 막는다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n')
+
+    # get_raw_cursor 는 stat() 다음, read() 전에 불린다 → 여기서 파일을 늘려 경합을 재현.
+    orig = db.get_raw_cursor
+
+    def grow_then_read(fp):
+        f.write_bytes(f.read_bytes() + b'{"b":2}\n')
+        return orig(fp)
+
+    monkeypatch.setattr(db, "get_raw_cursor", grow_then_read)
+    n = R.mirror_file(db, f, "claude-code")
+    monkeypatch.setattr(db, "get_raw_cursor", orig)   # 경합은 1회만
+
+    full = f.read_bytes()
+    assert n == len(full)                                   # EOF까지 읽었다
+    assert db.get_raw_cursor(str(f)) == len(full)           # 커서도 그만큼 전진(stat 크기 아님)
+    assert R.mirror_file(db, f, "claude-code") == 0         # 새 바이트 없음 → 멱등
+    assert R.read_mirror("claude-code", sid) == full        # 중복 줄 없음
+
+
+# ── 보존소 마커 / 커서 정리 ──────────────────────────────────
+def test_enforce_quota_refuses_folder_without_marker(tmp_path, monkeypatch):
+    """마커 없는 폴더(사용자가 고른 기존 폴더 등)에서는 한 파일도 지우지 않는다."""
+    import pytest
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", raw)
+    db = _db(tmp_path)
+    p = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 2000, random_bytes=True)
+    (raw / R._MARKER).unlink()             # 우리가 만든 보존소가 아닌 상황
+    with pytest.raises(RuntimeError):
+        R.enforce_quota(1)
+    assert p.exists()                      # 상한을 한참 넘겨도 삭제 안 함
+
+
+def test_mirror_file_writes_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 100)
+    assert (tmp_path / "raw" / R._MARKER).exists()
+
+
+def test_enforce_quota_clears_cursor_of_deleted_mirror(tmp_path, monkeypatch):
+    """보존본을 지웠으면 커서도 지워야 다음 회차가 처음부터 다시 미러링한다.
+    커서만 남으면 '머리가 잘린' 보존본이 만들어지고 has_mirror 는 복구 가능으로 잘못 표시한다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    old_sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    old = _seed_mirror(tmp_path, db, old_sid, 2000, random_bytes=True)
+    os.utime(old, (1_000_000_000, 1_000_000_000))
+    new = _seed_mirror(tmp_path, db, "129e80dc-1754-7422-b72f-2d176635efb3", 2000, random_bytes=True)
+    old_log = str(tmp_path / f"{old_sid}.jsonl")
+    assert db.get_raw_cursor(old_log) > 0
+
+    assert R.enforce_quota(new.stat().st_size + 1, db) == 1
+    assert not old.exists()
+    assert db.get_raw_cursor(old_log) == 0          # 커서도 함께 비워짐
+
+    # 로그가 이어져도 '꼬리만'이 아니라 처음부터 다시 보존된다.
+    log = tmp_path / f"{old_sid}.jsonl"
+    log.write_bytes(log.read_bytes() + b"tail\n")
+    R.mirror_file(db, log, "claude-code")
+    assert R.read_mirror("claude-code", old_sid) == log.read_bytes()
+
+
+def test_marker_not_claimed_on_folder_with_existing_archives(tmp_path, monkeypatch):
+    """사용자가 기존 폴더를 보존소로 지정한 경우, 미러링은 하되 소유권은 주장하지 않는다.
+
+    마커를 무조건 찍으면 가드가 스스로 무력화된다 - 첫 미러링이 마커를 만들고 그 다음부터
+    enforce_quota 가 남의 .jsonl.gz 까지 지우게 된다.
+    """
+    import pytest
+    raw = tmp_path / "myBackups"
+    (raw / "claude-code").mkdir(parents=True)
+    mine = raw / "claude-code" / "남의백업.jsonl.gz"     # 앱이 만들지 않은 파일
+    mine.write_bytes(b"not ours")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", raw)
+    db = _db(tmp_path)
+
+    p = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 100)
+    assert p.exists()                              # 미러링 자체는 된다
+    assert not (raw / R._MARKER).exists()          # 소유권은 주장하지 않는다
+
+    with pytest.raises(RuntimeError):              # 정리는 영영 거부
+        R.enforce_quota(1, db)
+    assert mine.exists()                           # 남의 파일 그대로

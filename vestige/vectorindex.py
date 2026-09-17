@@ -237,3 +237,14 @@ def make_index(backend: str | None = None):
                 "sqlite-vec 벡터 백엔드 사용 불가(%s) → npy 백엔드로 폴백", e)
             return VectorIndex()
     return VectorIndex()
+
+
+def vector_count(backend: str | None = None) -> int:
+    """벡터 개수만. npy 백엔드에서 make_index()를 쓰면 수백 MB 행렬을 통째로 올리는데,
+    개수 하나 보여주려고 그럴 이유가 없다(상태바가 1초마다 물어본다)."""
+    from .config import VECTOR_BACKEND
+    b = (backend or VECTOR_BACKEND or "npy").lower()
+    if b in ("sqlite-vec", "sqlite_vec", "sqlitevec"):
+        return len(make_index(b))   # DB 조회라 행렬 적재 없음
+    p = Path(VECTOR_IDS_PATH)
+    return len(json.loads(p.read_text(encoding="utf-8"))) if p.exists() else 0

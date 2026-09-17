@@ -42,3 +42,4 @@ packaging/*.log
 
 # editor/backup junk
 *.bak
+restore_test_state.txt
