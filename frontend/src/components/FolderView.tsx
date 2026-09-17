@@ -63,6 +63,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
     over_: (v: { id: number; zone: DropZone } | null) => void
     drop: (target: number, zone: DropZone) => void
     movingName?: string                      // 자리표시(고스트) 행에 쓸 이름
+    blocked: Set<number>                     // 놓을 수 없는 대상(자기 자신 + 자기 하위)
     end: () => void
   }
 }) {
@@ -100,16 +101,25 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
                 // stopPropagation 필수: 이게 없으면 이벤트가 패널까지 올라가 '빈 곳' 핸들러가
                 // 대상 폴더를 지워버려(=항상 최상위로) 판정이 뭉개진다.
                 e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"
-                // 끌고 있는 자기 자신 위: 막지 않고(금지 커서가 뜨지 않게) 표시만 지운다.
-                if (drag.id === f.id) { if (drag.over) drag.over_(null); return }
+                // 자기 자신·자기 하위: 놓아도 서버가 막는 자리다. 미리보기를 띄우면
+                // '된다'고 약속해놓고 실패하는 셈이라, 표시를 지우고 불가로 알린다.
+                if (drag.blocked.has(f.id)) {
+                  e.dataTransfer.dropEffect = "none"
+                  if (drag.over) drag.over_(null)
+                  return
+                }
                 const zone = zoneOf(e)
                 if (drag.over?.id !== f.id || drag.over.zone !== zone) drag.over_({ id: f.id, zone })
               }}
-              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); drag.drop(f.id, zoneOf(e)) }}
+              onDrop={(e) => {
+                e.preventDefault(); e.stopPropagation()
+                if (!drag.blocked.has(f.id)) drag.drop(f.id, zoneOf(e))
+              }}
               onDragEnd={drag.end}
               className={`flex cursor-grab items-center gap-1 rounded-md pr-2 text-sm transition-colors active:cursor-grabbing ${
                 sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
                 drag.id === f.id ? "opacity-40" : ""} ${
+                drag.id != null && drag.id !== f.id && drag.blocked.has(f.id) ? "opacity-40" : ""} ${
                 over === "inside" ? "ring-1 ring-primary/60" : ""}`}
               style={{ paddingLeft: "4px" }}
             >
@@ -268,6 +278,11 @@ export function FolderView() {
     let before: number | null = null
     if (zone === "inside") {
       parent = targetId
+      // 접힌 폴더에 넣으면 방금 옮긴 게 화면에서 사라져 버린다 → 넣는 순간 펼쳐 보여준다.
+      setCollapsed((prev) => {
+        if (!prev.has(targetId)) return prev
+        const next = new Set(prev); next.delete(targetId); return next
+      })
     } else {
       parent = target.parent_id
       const sibs = folders.filter((f) => f.parent_id === parent && f.id !== moving)
@@ -339,6 +354,20 @@ export function FolderView() {
   const byParent = childrenOf(folders ?? [])
   const cur = detail?.folder
 
+  // 끌고 있는 폴더와 그 하위 전체 = 놓을 수 없는 자리(트리가 순환하므로 서버도 막는다).
+  const blocked = (() => {
+    const out = new Set<number>()
+    if (dragFolder == null || !folders) return out
+    const stack = [dragFolder]
+    while (stack.length) {
+      const id = stack.pop()!
+      if (out.has(id)) continue
+      out.add(id)
+      for (const c of folders) if (c.parent_id === id) stack.push(c.id)
+    }
+    return out
+  })()
+
 
   return (
     <div className="grid h-full grid-cols-[minmax(200px,240px)_minmax(300px,360px)_1fr] overflow-hidden">
@@ -376,7 +405,7 @@ export function FolderView() {
             <FolderTree parent={null} byParent={byParent} sel={sel} collapsed={collapsed} depth={0}
               drag={{ id: dragFolder, over: overFolder, start: setDragFolder, over_: setOverFolder,
                       drop: dropOnFolder,
-                      movingName: folders?.find((f) => f.id === dragFolder)?.name,
+                      movingName: folders?.find((f) => f.id === dragFolder)?.name, blocked,
                       end: () => { setDragFolder(null); setOverFolder(null) } }}
               onPick={setSel}
               onToggle={(id) => setCollapsed((prev) => {
@@ -385,6 +414,16 @@ export function FolderView() {
                 else next.add(id)
                 return next
               })} />
+          )}
+          {/* 트리가 패널을 가득 채우면 '빈 곳'이 없어 최상위로 뺄 방법이 사라진다 →
+              드래그 중에는 맨 아래에 전용 드롭 자리를 띄운다. */}
+          {dragFolder != null && folders?.some((f) => f.id === dragFolder && f.parent_id !== null) && (
+            <div
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setOverFolder(null) }}
+              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnRoot() }}
+              className="mt-2 rounded-md border border-dashed border-primary/50 bg-primary/5 px-2 py-2 text-center text-[11px] text-muted-foreground">
+              {t("folders.dropToRootHint")}
+            </div>
           )}
         </div>
       </div>
