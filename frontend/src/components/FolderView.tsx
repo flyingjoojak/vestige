@@ -13,21 +13,23 @@ import {
 import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
+import { childrenOf } from "@/lib/foldertree"
 import { fmtTime } from "@/lib/format"
 import type { Folder, FolderDetail, FolderItem, Hit } from "@/lib/types"
 
 // 폴더(#201) = 사용자가 직접 만드는 수동 군집. 자동 군집(의미 지도)이 알아서 묶어주는 것과 달리
 // 원하는 것만 모아두고, 그 안에서만 검색한다. 왼쪽 트리에서 고르고 오른쪽에서 내용·검색.
 
-// 평평한 목록 → 부모별 자식 맵(트리 렌더용).
-function childrenOf(folders: Folder[]): Map<number | null, Folder[]> {
-  const m = new Map<number | null, Folder[]>()
-  for (const f of folders) {
-    const key = f.parent_id
-    if (!m.has(key)) m.set(key, [])
-    m.get(key)!.push(f)
-  }
-  return m
+// 폴더를 끌어다 놓을 때, 행의 어느 높이에 놓았는지로 '순서'와 '뎁스'를 구분한다
+// (Finder·VS Code 방식). 위/아래 가장자리 = 그 자리로, 가운데 = 그 폴더 안으로.
+type DropZone = "before" | "inside" | "after"
+const EDGE = 0.3   // 위·아래 각각 30% 는 순서 이동, 가운데 40% 는 안으로 넣기
+function zoneOf(e: React.DragEvent<HTMLElement>): DropZone {
+  const r = e.currentTarget.getBoundingClientRect()
+  const ratio = (e.clientY - r.top) / (r.height || 1)
+  if (ratio < EDGE) return "before"
+  if (ratio > 1 - EDGE) return "after"
+  return "inside"
 }
 
 function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle, drag }: {
@@ -38,8 +40,15 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
   depth: number
   onPick: (id: number) => void
   onToggle: (id: number) => void
-  // 폴더를 끌어 다른 폴더 밑으로 옮기기(중첩 구조를 나중에도 바꿀 수 있게).
-  drag: { id: number | null; over: number | null; start: (id: number) => void; over_: (id: number | null) => void; drop: (id: number | null) => void }
+  // 폴더 드래그: 행 위/아래 가장자리에 놓으면 '그 자리로'(순서), 가운데면 '그 안으로'(뎁스).
+  drag: {
+    id: number | null
+    over: { id: number; zone: DropZone } | null
+    start: (id: number) => void
+    over_: (v: { id: number; zone: DropZone } | null) => void
+    drop: (target: number, zone: DropZone) => void
+    end: () => void
+  }
 }) {
   const rows = byParent.get(parent) ?? []
   return (
@@ -47,6 +56,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
       {rows.map((f) => {
         const kids = byParent.get(f.id) ?? []
         const isCollapsed = collapsed.has(f.id)
+        const over = drag.over?.id === f.id && drag.id !== f.id ? drag.over.zone : null
         return (
           <div key={f.id}>
             <div
@@ -55,14 +65,17 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
               onDragOver={(e) => {
                 if (drag.id == null || drag.id === f.id) return
                 e.preventDefault(); e.dataTransfer.dropEffect = "move"
-                if (drag.over !== f.id) drag.over_(f.id)
+                const zone = zoneOf(e)
+                if (drag.over?.id !== f.id || drag.over.zone !== zone) drag.over_({ id: f.id, zone })
               }}
-              onDrop={(e) => { e.preventDefault(); drag.drop(f.id) }}
-              onDragEnd={() => drag.drop(undefined as unknown as null)}
+              onDrop={(e) => { e.preventDefault(); drag.drop(f.id, zoneOf(e)) }}
+              onDragEnd={drag.end}
               className={`flex cursor-grab items-center gap-1 rounded-md pr-2 text-sm transition-colors active:cursor-grabbing ${
                 sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
                 drag.id === f.id ? "opacity-40" : ""} ${
-                drag.over === f.id && drag.id !== f.id ? "ring-1 ring-primary/60" : ""}`}
+                over === "inside" ? "ring-1 ring-primary/60" : ""} ${
+                over === "before" ? "border-t-2 border-primary" : ""} ${
+                over === "after" ? "border-b-2 border-primary" : ""}`}
               style={{ paddingLeft: `${depth * 14 + 4}px` }}
             >
               <button type="button" onClick={() => onToggle(f.id)} aria-label={String(f.name)}
@@ -105,7 +118,7 @@ export function FolderView() {
   const [overIdx, setOverIdx] = useState<number | null>(null)
   // 폴더 트리 드래그(폴더를 다른 폴더 밑으로 이동).
   const [dragFolder, setDragFolder] = useState<number | null>(null)
-  const [overFolder, setOverFolder] = useState<number | null>(null)
+  const [overFolder, setOverFolder] = useState<{ id: number; zone: DropZone } | null>(null)
   const reqId = useRef(0)   // 최신 검색만 반영
 
   const loadFolders = useCallback(() => {
@@ -198,13 +211,41 @@ export function FolderView() {
     applyOrder(next)
   }
 
-  // 폴더를 다른 폴더 밑으로(빈 곳에 놓으면 최상위로). 자기 하위로는 서버가 400 으로 막는다.
-  async function dropFolder(target: number | null) {
+  // 놓은 위치를 '부모 + 그 앞에 올 형제'로 번역한다.
+  //   inside → 그 폴더의 자식으로(맨 뒤)
+  //   before → 그 폴더와 같은 부모, 그 폴더 바로 앞
+  //   after  → 같은 부모, 그 폴더 '다음' 형제의 앞(없으면 맨 뒤)
+  // 자기 하위로 옮기는 건 서버가 400 으로 막는다(순환 방지).
+  async function dropOnFolder(targetId: number, zone: DropZone) {
     const moving = dragFolder
     setDragFolder(null); setOverFolder(null)
-    if (moving == null || moving === target) return
+    if (moving == null || moving === targetId || !folders) return
+    const target = folders.find((f) => f.id === targetId)
+    if (!target) return
+
+    let parent: number | null
+    let before: number | null = null
+    if (zone === "inside") {
+      parent = targetId
+    } else {
+      parent = target.parent_id
+      const sibs = folders.filter((f) => f.parent_id === parent && f.id !== moving)
+      const at = sibs.findIndex((f) => f.id === targetId)
+      before = zone === "before" ? targetId : (sibs[at + 1]?.id ?? null)
+    }
     try {
-      await moveFolder(moving, target)
+      await moveFolder(moving, parent, before)
+      loadFolders()
+    } catch (e) { setErr(errText(t, e, "folders.moveFailed")) }
+  }
+
+  // 빈 곳에 놓으면 최상위 맨 뒤로(하위 폴더를 밖으로 빼내는 길).
+  async function dropOnRoot() {
+    const moving = dragFolder
+    setDragFolder(null); setOverFolder(null)
+    if (moving == null) return
+    try {
+      await moveFolder(moving, null)
       loadFolders()
     } catch (e) { setErr(errText(t, e, "folders.moveFailed")) }
   }
@@ -271,15 +312,15 @@ export function FolderView() {
         {/* 빈 곳에 놓으면 최상위로 — 하위 폴더를 밖으로 빼낼 방법이 필요하다. */}
         <div className="min-h-0 flex-1 overflow-y-auto p-2"
           onDragOver={(e) => { if (dragFolder != null) { e.preventDefault(); setOverFolder(null) } }}
-          onDrop={(e) => { e.preventDefault(); if (dragFolder != null) dropFolder(null) }}>
+          onDrop={(e) => { e.preventDefault(); if (dragFolder != null) dropOnRoot() }}>
           {!folders && <div className="grid h-24 place-items-center text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>}
           {folders && folders.length === 0 && (
             <div className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">{t("folders.empty")}</div>
           )}
           {folders && folders.length > 0 && (
             <FolderTree parent={null} byParent={byParent} sel={sel} collapsed={collapsed} depth={0}
-              drag={{ id: dragFolder, over: overFolder, start: setDragFolder,
-                      over_: setOverFolder, drop: dropFolder }}
+              drag={{ id: dragFolder, over: overFolder, start: setDragFolder, over_: setOverFolder,
+                      drop: dropOnFolder, end: () => { setDragFolder(null); setOverFolder(null) } }}
               onPick={setSel}
               onToggle={(id) => setCollapsed((prev) => {
                 const next = new Set(prev)

@@ -4,6 +4,7 @@ import { Check, FolderPlus, Loader2 } from "lucide-react"
 import { addToFolder, createFolder, listFolders, type FolderTarget } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
+import { flattenTree } from "@/lib/foldertree"
 import type { Folder } from "@/lib/types"
 
 // 검색 결과·대화·세션에서 폴더에 담는 버튼(#201). 여러 곳에서 같은 모양으로 쓰도록 한 컴포넌트로.
@@ -70,14 +71,9 @@ export function AddToFolder({ target, className, showLabel }: {
     }
   }
 
-  // 트리 들여쓰기용 깊이(부모를 따라 올라가며 셈).
-  const depthOf = (f: Folder, all: Folder[]) => {
-    let d = 0
-    let cur = f.parent_id
-    const byId = new Map(all.map((x) => [x.id, x]))
-    while (cur != null && d < 20) { d++; cur = byId.get(cur)?.parent_id ?? null }
-    return d
-  }
+  // 화면의 폴더 트리와 같은 순서·깊이로 보여준다(부모 바로 아래에 그 자식들).
+  // 예전엔 서버가 준 평평한 목록을 그대로 두고 들여쓰기만 붙여, 자식이 부모와 멀리 떨어져 보였다.
+  const tree = folders ? flattenTree(folders) : []
 
   return (
     <span className="relative" onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); triggerRef.current?.focus() } }}>
@@ -105,9 +101,9 @@ export function AddToFolder({ target, className, showLabel }: {
             {folders?.length === 0 && (
               <div className="px-2 py-1.5 text-muted-foreground">{t("folders.empty")}</div>
             )}
-            {folders?.map((f) => (
+            {tree.map((f) => (
               <button key={f.id} type="button" disabled={busy} onClick={() => add(f)}
-                style={{ paddingLeft: `${depthOf(f, folders) * 12 + 8}px` }}
+                style={{ paddingLeft: `${f.depth * 12 + 8}px` }}
                 className="flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left transition-colors hover:bg-muted disabled:opacity-60">
                 <span className="min-w-0 flex-1 truncate text-foreground">{f.name}</span>
                 {f.items > 0 && <span className="shrink-0 tabular-nums text-[10.5px] text-muted-foreground">{f.items}</span>}

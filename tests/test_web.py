@@ -453,3 +453,34 @@ def test_folder_items_report_folded_state(tmp_path, monkeypatch):
     web.api_hide({"turn_id": "s2:u2"})        # 나머지도 접으면
     by = {i["ref"]: i for i in web.api_folder(id=f)["items"]}
     assert by["s2"]["hidden"] is True
+
+
+def test_folder_move_sets_sibling_order(tmp_path, monkeypatch):
+    """형제 순서까지 드래그 한 번으로 — before_id 로 '그 앞'에 꽂고, 목록은 그 순서로 나온다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    a = web.api_folder_create({"name": "가"})["id"]
+    b = web.api_folder_create({"name": "나"})["id"]
+    c = web.api_folder_create({"name": "다"})["id"]
+
+    order = lambda: [f["id"] for f in web.api_folders()["folders"] if f["parent_id"] is None]
+    assert order() == [a, b, c]                       # 처음엔 이름순
+
+    web.api_folder_move({"id": c, "parent_id": None, "before_id": a})
+    assert order() == [c, a, b]                       # 맨 앞으로
+
+    web.api_folder_move({"id": c, "parent_id": None})  # before 없으면 맨 뒤
+    assert order() == [a, b, c]
+
+
+def test_folder_move_into_and_out_keeps_order(tmp_path, monkeypatch):
+    """다른 폴더 안으로 넣었다가 다시 최상위로 빼도 순서 지정이 유지된다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    a = web.api_folder_create({"name": "가"})["id"]
+    b = web.api_folder_create({"name": "나"})["id"]
+
+    web.api_folder_move({"id": b, "parent_id": a})            # a 안으로
+    assert [f["id"] for f in web.api_folder(id=a)["children"]] == [b]
+
+    web.api_folder_move({"id": b, "parent_id": None, "before_id": a})   # 다시 밖으로, a 앞에
+    tops = [f["id"] for f in web.api_folders()["folders"] if f["parent_id"] is None]
+    assert tops == [b, a]
