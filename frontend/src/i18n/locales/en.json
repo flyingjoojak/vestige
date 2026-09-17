@@ -364,7 +364,10 @@
     "selectPrompt": "Select a conversation on the left.",
     "groupListTitle": "{{title}} list",
     "folded": "Folded",
-    "resumeConfirmTitle": "This session may be in use"
+    "resumeConfirmTitle": "This session may be in use",
+    "filterSessions": "Filter by title or session ID",
+    "filterClusters": "Filter by cluster name",
+    "filterNoMatch": "No matching items."
   },
   "mcp": {
     "sectionTitle": "MCP integration",

@@ -1,4 +1,5 @@
-import { useId, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { Check, FolderPlus, Loader2 } from "lucide-react"
 import { addToFolder, createFolder, listFolders, type FolderTarget } from "@/lib/api"
@@ -20,18 +21,46 @@ export function AddToFolder({ target, className, showLabel }: {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState("")      // 방금 담은 폴더 이름(잠깐 표시)
   const [err, setErr] = useState("")
+  // 드롭다운은 목록의 스크롤 영역(overflow-y-auto) 안에 있으면 잘린다 → body 로 포털해서
+  // 화면 좌표(fixed)로 띄운다. 아래 공간이 부족하면 위로 뒤집는다.
+  const [pos, setPos] = useState<{ top: number; left: number; flip: boolean } | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panelId = useId()
+
+  const PANEL_W = 208, PANEL_MAX_H = 288
+  function place() {
+    const r = triggerRef.current?.getBoundingClientRect()
+    if (!r) return
+    const below = window.innerHeight - r.bottom
+    const flip = below < PANEL_MAX_H && r.top > below   // 아래가 좁으면 위로
+    setPos({
+      top: flip ? r.top - 4 : r.bottom + 4,
+      left: Math.min(Math.max(8, r.right - PANEL_W), window.innerWidth - PANEL_W - 8),
+      flip,
+    })
+  }
 
   function toggleOpen() {
     const next = !open
     setOpen(next)
     setErr("")
+    if (next) place()
     if (next && folders == null) {
       listFolders().then((r) => setFolders(r.folders)).catch((e) => setErr(errText(t, e, "folders.loadFailed")))
     }
   }
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener("scroll", close, true)   // capture: 내부 스크롤 영역까지
+    window.addEventListener("resize", close)
+    return () => {
+      window.removeEventListener("scroll", close, true)
+      window.removeEventListener("resize", close)
+    }
+  }, [open])
 
   function flashDone(name: string) {
     setDone(name)
@@ -86,14 +115,16 @@ export function AddToFolder({ target, className, showLabel }: {
         {done ? <Check className="size-3.5 text-primary" /> : <FolderPlus className="size-3.5" />}
         {showLabel && (done ? t("folders.addedTo", { name: done }) : t("folders.addTo"))}
       </button>
-      {open && (
+      {open && pos && createPortal(
         <>
           {/* 바깥 클릭 시 닫힘(장식용, AT엔 숨김) */}
           <button type="button" aria-hidden="true" tabIndex={-1}
-            className="fixed inset-0 z-10 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
+            className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
           <div id={panelId} role="group" aria-label={t("folders.addTo")}
             onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 z-20 mt-1 max-h-72 min-w-52 overflow-y-auto rounded-lg border bg-card p-1 text-[12px] shadow-lg">
+            style={{ top: pos.top, left: pos.left, width: PANEL_W, maxHeight: PANEL_MAX_H,
+                     transform: pos.flip ? "translateY(-100%)" : undefined }}
+            className="fixed z-50 overflow-y-auto rounded-lg border bg-card p-1 text-[12px] shadow-lg">
             {folders == null && !err && (
               <div className="grid h-12 place-items-center text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>
             )}
@@ -114,7 +145,8 @@ export function AddToFolder({ target, className, showLabel }: {
               <FolderPlus className="size-3.5" />{t("folders.newAndAdd")}
             </button>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </span>
   )
