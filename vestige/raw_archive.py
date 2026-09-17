@@ -66,9 +66,19 @@ _MARKER = ".vestige-raw"
 
 
 def _ensure_marker(root: Path) -> None:
+    """보존소 소유 표시를 남긴다 — 단 '비어 있던 폴더'에만.
+
+    무조건 찍으면 가드가 스스로 무력화된다: 사용자가 기존 백업 폴더를 보존소로 지정해도
+    첫 미러링이 마커를 만들고, 그 뒤로 enforce_quota 가 그 폴더를 우리 것으로 오인해
+    남의 .jsonl.gz 까지 지운다. 기존 내용이 있으면 미러링은 하되(추가는 안전) 소유권은
+    주장하지 않는다 → 그 폴더에서는 정리가 영영 거부된다.
+    """
     m = root / _MARKER
-    if not m.exists():
-        m.write_text("vestige raw archive\n", encoding="utf-8")
+    if m.exists():
+        return
+    if any(root.rglob("*.jsonl.gz")):
+        return
+    m.write_text("vestige raw archive\n", encoding="utf-8")
 
 
 def raw_path(source: str, session_id: str) -> Path:

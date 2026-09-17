@@ -452,3 +452,26 @@ def test_enforce_quota_clears_cursor_of_deleted_mirror(tmp_path, monkeypatch):
     log.write_bytes(log.read_bytes() + b"tail\n")
     R.mirror_file(db, log, "claude-code")
     assert R.read_mirror("claude-code", old_sid) == log.read_bytes()
+
+
+def test_marker_not_claimed_on_folder_with_existing_archives(tmp_path, monkeypatch):
+    """사용자가 기존 폴더를 보존소로 지정한 경우, 미러링은 하되 소유권은 주장하지 않는다.
+
+    마커를 무조건 찍으면 가드가 스스로 무력화된다 - 첫 미러링이 마커를 만들고 그 다음부터
+    enforce_quota 가 남의 .jsonl.gz 까지 지우게 된다.
+    """
+    import pytest
+    raw = tmp_path / "myBackups"
+    (raw / "claude-code").mkdir(parents=True)
+    mine = raw / "claude-code" / "남의백업.jsonl.gz"     # 앱이 만들지 않은 파일
+    mine.write_bytes(b"not ours")
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", raw)
+    db = _db(tmp_path)
+
+    p = _seed_mirror(tmp_path, db, "019e80dc-1754-7422-b72f-2d176635efb2", 100)
+    assert p.exists()                              # 미러링 자체는 된다
+    assert not (raw / R._MARKER).exists()          # 소유권은 주장하지 않는다
+
+    with pytest.raises(RuntimeError):              # 정리는 영영 거부
+        R.enforce_quota(1, db)
+    assert mine.exists()                           # 남의 파일 그대로
