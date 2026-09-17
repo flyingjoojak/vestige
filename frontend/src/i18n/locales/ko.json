@@ -522,6 +522,10 @@
     "moveDown": "아래로",
     "pickItemPrompt": "가운데에서 항목을 고르면 대화가 여기 열려요.",
     "foldItem": "접기(검색·지도에서 빼기)",
-    "moveFailed": "폴더를 옮기지 못했어요"
+    "moveFailed": "폴더를 옮기지 못했어요",
+    "dropInto": "'{{name}}' 안으로 넣기",
+    "dropBefore": "'{{name}}' 바로 위로",
+    "dropAfter": "'{{name}}' 바로 아래로",
+    "dropRoot": "맨 바깥(최상위)으로"
   }
 }

@@ -522,6 +522,10 @@
     "moveDown": "Move down",
     "pickItemPrompt": "Pick an item in the middle to read it here.",
     "foldItem": "Fold (hide from search & map)",
-    "moveFailed": "Couldn't move the folder"
+    "moveFailed": "Couldn't move the folder",
+    "dropInto": "Into '{{name}}'",
+    "dropBefore": "Above '{{name}}'",
+    "dropAfter": "Below '{{name}}'",
+    "dropRoot": "To top level"
   }
 }
