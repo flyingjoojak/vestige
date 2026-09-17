@@ -37,7 +37,7 @@ function zoneOf(e: React.DragEvent<HTMLElement>): DropZone {
 function TreeGuide({ lines, last }: { lines: boolean[]; last: boolean }) {
   if (lines.length === 0) return null
   return (
-    <span aria-hidden className="flex shrink-0 select-none font-mono text-[11px] leading-none text-muted-foreground/45">
+    <span aria-hidden className="flex shrink-0 select-none font-mono text-[11px] leading-none text-muted-foreground/80">
       {lines.slice(0, -1).map((cont, i) => (
         <span key={i} className="inline-block w-3.5 text-center">{cont ? "│" : ""}</span>
       ))}
@@ -67,16 +67,18 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
   }
 }) {
   const rows = byParent.get(parent) ?? []
-  // 놓으면 어디에 어떤 깊이로 들어가는지를 '그 자리에' 회색 행으로 미리 그린다
-  // (드롭 자리표시 패턴 — 선 하나보다 결과가 눈에 바로 들어온다).
-  const ghost = (d: number) => (
-    // pointer-events-none 필수: 자리표시가 커서 밑에 깔리면 dragover 가 이쪽으로 넘어가
-    // 대상 판정이 뒤집히고(자리표시 사라짐 → 다시 생김) 깜빡이며, 드롭 불가 커서까지 뜬다.
-    // 들여쓰기 폭은 가이드 칸(14px)과 같게 맞춘다 — 실제 행과 같은 자리에 보여야 미리보기가 된다.
-    <div aria-hidden className="pointer-events-none flex items-center gap-1.5 rounded-md border border-dashed border-primary/40 bg-muted/40 py-1.5 pr-2 text-sm text-muted-foreground"
-      style={{ paddingLeft: `${d * 14 + 26}px` }}>
-      <FolderIcon className="size-3.5 shrink-0 opacity-60" />
-      <span className="min-w-0 flex-1 truncate opacity-70">{drag.movingName}</span>
+  // 놓았을 때의 모습 그대로 그린다(드롭 자리표시 패턴) — 트리 가이드(├└│)까지 같이 그려야 '어느 계층에 들어가는지'가 보인다.
+  // pointer-events-none 필수: 자리표시가 커서 밑에 깔리면 dragover 가 이쪽으로 넘어가
+  // 대상 판정이 뒤집히고(자리표시 사라짐 → 다시 생김) 깜빡이며, 드롭 불가 커서까지 뜬다.
+  const ghost = (g: { lines: boolean[]; last: boolean }) => (
+    <div aria-hidden className="pointer-events-none flex items-center gap-1 rounded-md border border-dashed border-primary/50 bg-primary/5 pr-2 text-sm"
+      style={{ paddingLeft: "4px" }}>
+      <TreeGuide lines={g.lines} last={g.last} />
+      <span className="size-4 shrink-0" />{/* 펼침 화살표 자리 — 실제 행과 가로 정렬을 맞춘다 */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-muted-foreground">
+        <FolderIcon className="size-3.5 shrink-0 opacity-70" />
+        <span className="min-w-0 flex-1 truncate opacity-80">{drag.movingName}</span>
+      </span>
     </div>
   )
   return (
@@ -88,7 +90,8 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
         const over = drag.over?.id === f.id && drag.id !== f.id ? drag.over.zone : null
         return (
           <div key={f.id}>
-            {over === "before" && ghost(depth)}
+            {/* 이 행 앞에 끼어든다 → 계보는 같고, 뒤에 이 행이 오므로 마지막이 아니다 */}
+            {over === "before" && ghost({ lines, last: false })}
             <div
               draggable
               onDragStart={(e) => { drag.start(f.id); e.dataTransfer.effectAllowed = "move" }}
@@ -122,15 +125,15 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
                 {f.items > 0 && <span className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{f.items}</span>}
               </button>
             </div>
-            {/* 안으로 넣기 = 첫 자식 자리에 들어간다 → 한 단계 들여쓴 자리에 그린다 */}
-            {over === "inside" && ghost(depth + 1)}
+            {/* 이 폴더의 첫 자식이 된다 → 한 단계 깊어지고, 기존 자식이 없으면 마지막 */}
+            {over === "inside" && ghost({ lines: [...lines, !isLast], last: kids.length === 0 })}
             {!isCollapsed && kids.length > 0 && (
               <FolderTree parent={f.id} byParent={byParent} sel={sel} collapsed={collapsed}
                 depth={depth + 1} lines={[...lines, !isLast]}
                 onPick={onPick} onToggle={onToggle} drag={drag} />
             )}
-            {/* 아래로 = 이 폴더(와 그 하위) 다음 형제 자리 */}
-            {over === "after" && ghost(depth)}
+            {/* 이 행(과 하위) 다음 형제 자리 → 원래 이 행이 마지막이었다면 이제 이쪽이 마지막 */}
+            {over === "after" && ghost({ lines, last: isLast })}
           </div>
         )
       })}
