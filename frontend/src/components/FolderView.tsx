@@ -333,9 +333,19 @@ export function FolderView() {
         <div className="min-h-0 flex-1 overflow-y-auto p-2"
           onDragOver={(e) => {
             if (dragFolder == null) return
-            e.preventDefault(); setOverFolder(null)
+            e.preventDefault()
+            // '진짜 빈 곳'일 때만 대상을 지운다. 자리표시(pointer-events-none) 위를 지날 때는
+            // 이벤트가 그 뒤의 이 패널로 통과하는데, 여기서 무조건 지우면 자리표시가 사라졌다
+            // 다시 생기며 깜빡인다(상·하단 30% 구역에서만 나던 증상).
+            if (e.target === e.currentTarget) setOverFolder(null)
           }}
-          onDrop={(e) => { e.preventDefault(); if (dragFolder != null) dropOnRoot() }}>
+          onDrop={(e) => {
+            if (dragFolder == null) return
+            e.preventDefault()
+            // 자리표시 위에서 놓아도 미리 보여준 그 자리로 간다(최상위로 튕기지 않게).
+            if (overFolder) dropOnFolder(overFolder.id, overFolder.zone)
+            else dropOnRoot()
+          }}>
           {!folders && <div className="grid h-24 place-items-center text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>}
           {folders && folders.length === 0 && (
             <div className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">{t("folders.empty")}</div>
@@ -414,8 +424,11 @@ export function FolderView() {
               onDragOver={(e) => { if (dragIdx != null) e.preventDefault() }}
               onDrop={(e) => {
                 if (dragIdx == null) return
-                e.preventDefault()                     // 빈 곳에 놓으면 맨 뒤로
-                if (detail) dropItem(dragIdx, detail.items.length - 1)
+                e.preventDefault()
+                // 자리표시 위에서 놓으면 이벤트가 여기로 통과해 온다 → 미리 보여준 그 자리로.
+                // 진짜 빈 곳(목록 아래)에 놓았을 때만 맨 뒤로 보낸다.
+                if (overIdx != null) dropItem(dragIdx, overIdx)
+                else if (detail) dropItem(dragIdx, detail.items.length - 1)
                 setDragIdx(null); setOverIdx(null)
               }}>
               {/* 검색 중이면 검색 결과, 아니면 폴더에 담긴 것들 */}
