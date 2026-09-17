@@ -55,7 +55,9 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
   // 놓으면 어디에 어떤 깊이로 들어가는지를 '그 자리에' 회색 행으로 미리 그린다
   // (드롭 자리표시 패턴 — 선 하나보다 결과가 눈에 바로 들어온다).
   const ghost = (d: number) => (
-    <div aria-hidden className="flex items-center gap-1.5 rounded-md border border-dashed border-primary/40 bg-muted/40 py-1.5 pr-2 text-sm text-muted-foreground"
+    // pointer-events-none 필수: 자리표시가 커서 밑에 깔리면 dragover 가 이쪽으로 넘어가
+    // 대상 판정이 뒤집히고(자리표시 사라짐 → 다시 생김) 깜빡이며, 드롭 불가 커서까지 뜬다.
+    <div aria-hidden className="pointer-events-none flex items-center gap-1.5 rounded-md border border-dashed border-primary/40 bg-muted/40 py-1.5 pr-2 text-sm text-muted-foreground"
       style={{ paddingLeft: `${d * 14 + 24}px` }}>
       <FolderIcon className="size-3.5 shrink-0 opacity-60" />
       <span className="min-w-0 flex-1 truncate opacity-70">{drag.movingName}</span>
@@ -74,10 +76,12 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, onPick, onToggle,
               draggable
               onDragStart={(e) => { drag.start(f.id); e.dataTransfer.effectAllowed = "move" }}
               onDragOver={(e) => {
-                if (drag.id == null || drag.id === f.id) return
+                if (drag.id == null) return
                 // stopPropagation 필수: 이게 없으면 이벤트가 패널까지 올라가 '빈 곳' 핸들러가
                 // 대상 폴더를 지워버려(=항상 최상위로) 판정이 뭉개진다.
                 e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"
+                // 끌고 있는 자기 자신 위: 막지 않고(금지 커서가 뜨지 않게) 표시만 지운다.
+                if (drag.id === f.id) { if (drag.over) drag.over_(null); return }
                 const zone = zoneOf(e)
                 if (drag.over?.id !== f.id || drag.over.zone !== zone) drag.over_({ id: f.id, zone })
               }}
@@ -404,7 +408,16 @@ export function FolderView() {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
+            {/* 카드 사이 여백·목록 아래 빈 공간에서도 드롭을 허용해야 한다 — 여기서 preventDefault
+                가 없으면 그 구간을 지날 때마다 '드롭 불가' 커서가 번쩍인다(카드 위에선 멀쩡한데). */}
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3"
+              onDragOver={(e) => { if (dragIdx != null) e.preventDefault() }}
+              onDrop={(e) => {
+                if (dragIdx == null) return
+                e.preventDefault()                     // 빈 곳에 놓으면 맨 뒤로
+                if (detail) dropItem(dragIdx, detail.items.length - 1)
+                setDragIdx(null); setOverIdx(null)
+              }}>
               {/* 검색 중이면 검색 결과, 아니면 폴더에 담긴 것들 */}
               {hits !== null ? (
                 hits.length === 0 && !searching
@@ -438,7 +451,7 @@ export function FolderView() {
                       <Fragment key={`${it.kind}:${it.ref}`}>
                       {/* 놓일 자리에 회색 자리표시 — 위로 끌면 그 행 위, 아래로 끌면 아래에 자리가 생긴다 */}
                       {overIdx === idx && dragIdx !== null && dragIdx > idx && (
-                        <div aria-hidden className="rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
+                        <div aria-hidden className="pointer-events-none rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
                           <span className="truncate opacity-70">{detail.items[dragIdx].headline || t("folders.untitled")}</span>
                         </div>
                       )}
@@ -519,7 +532,7 @@ export function FolderView() {
                         </span>
                       </div>
                       {overIdx === idx && dragIdx !== null && dragIdx < idx && (
-                        <div aria-hidden className="rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
+                        <div aria-hidden className="pointer-events-none rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
                           <span className="truncate opacity-70">{detail.items[dragIdx].headline || t("folders.untitled")}</span>
                         </div>
                       )}
