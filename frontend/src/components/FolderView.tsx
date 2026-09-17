@@ -118,7 +118,9 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
               onDragEnd={drag.end}
               className={`flex cursor-grab items-center gap-1 rounded-md pr-2 text-sm transition-colors active:cursor-grabbing ${
                 sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
-                drag.id === f.id ? "opacity-40" : ""} ${
+                // 집어 든 행은 내용을 감춰 '빈 자리'로만 남긴다(높이는 유지 → 레이아웃이 안 흔들림).
+                // 흐리게만 두면 같은 폴더가 원본·미리보기 두 곳에 이름까지 겹쳐 보여 헷갈린다.
+                drag.id === f.id ? "invisible" : ""} ${
                 drag.id != null && drag.id !== f.id && drag.blocked.has(f.id) ? "opacity-40" : ""} ${
                 over === "inside" ? "ring-1 ring-primary/60" : ""}`}
               style={{ paddingLeft: "4px" }}
@@ -396,7 +398,10 @@ export function FolderView() {
             // 자리표시 위에서 놓아도 미리 보여준 그 자리로 간다(최상위로 튕기지 않게).
             if (overFolder) dropOnFolder(overFolder.id, overFolder.zone)
             else dropOnRoot()
-          }}>
+          }}
+          // 안전장치: 끌던 행은 invisible 로 숨겨두므로, 드래그가 취소돼도 상태가 반드시
+          // 풀려야 한다(안 그러면 그 폴더가 계속 안 보인다). dragend 는 위로 버블링된다.
+          onDragEnd={() => { setDragFolder(null); setOverFolder(null) }}>
           {!folders && <div className="grid h-24 place-items-center text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>}
           {folders && folders.length === 0 && (
             <div className="px-2 py-6 text-center text-[12.5px] text-muted-foreground">{t("folders.empty")}</div>
@@ -491,7 +496,9 @@ export function FolderView() {
                 if (overIdx != null) dropItem(dragIdx, overIdx)
                 else if (detail) dropItem(dragIdx, detail.items.length - 1)
                 setDragIdx(null); setOverIdx(null)
-              }}>
+              }}
+              // 안전장치: 끌던 항목을 invisible 로 숨기므로 취소돼도 상태가 반드시 풀려야 한다.
+              onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}>
               {/* 검색 중이면 검색 결과, 아니면 폴더에 담긴 것들 */}
               {hits !== null ? (
                 hits.length === 0 && !searching
@@ -546,7 +553,7 @@ export function FolderView() {
                         onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
                         className={`group relative flex cursor-grab items-center gap-1.5 rounded-lg border p-2.5 transition-colors active:cursor-grabbing ${
                           active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"} ${
-                          dragIdx === idx ? "opacity-40" : ""}`}>
+                          dragIdx === idx ? "invisible" : ""}`}>
                         {/* 순서: 카드를 끌어 옮기거나(드래그), 키보드/정밀 조정용으로 위·아래 한 칸.
                             z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게. */}
                         <GripVertical className="relative z-10 size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
