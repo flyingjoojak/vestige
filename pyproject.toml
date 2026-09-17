@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vestige"
-version = "0.2.1"
+version = "0.3.0"
 description = "Claude Code 대화를 자동 누적해 의미 검색하는 개인 정보자산 검색창 (로컬 임베딩·하이브리드 검색)"
 readme = "README.md"
 requires-python = ">=3.10"

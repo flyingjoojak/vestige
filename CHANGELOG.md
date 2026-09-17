@@ -7,6 +7,56 @@
 만들어지고, **그 릴리스 본문이 앱의 업데이트 배너에 그대로 표시**됩니다. 아래처럼
 `<!--lang:ko-->` / `<!--lang:en-->` 마커로 나눠 두면, 배너가 사용자 언어에 맞는 섹션만 보여줍니다.
 
+## [0.3.0] - 2026-09-17
+
+<!--lang:ko-->
+
+### Added
+- **접기** - 지금 필요 없는 대화를 접어 검색·지도에서 빼둡니다. 지우는 게 아니라 제자리에 한 줄로 남아 언제든 다시 펼칠 수 있고, 다시 색인해도 접어둔 상태가 유지됩니다.
+- **접힘 모아보기** - 접어둔 것만 따로 모아 보고, 거기서 바로 그 대화로 이동하거나 펼칠 수 있습니다.
+- **폴더** - 원하는 세션·대화만 골라 담는 내 손으로 만드는 군집입니다. 하위 폴더, 드래그로 순서·위치 바꾸기, 그 폴더 범위 안에서만 검색하기를 지원합니다.
+- **폴더 안에서만 쓰는 이름** - 담아둔 항목에 별칭을 붙일 수 있습니다. 원본 제목은 그대로라 다른 화면에는 영향이 없고, 같은 대화를 여러 폴더에 담아 각각 다른 이름을 붙여도 됩니다.
+- **원본 로그 보존과 세션 복구** - Claude Code가 오래된 로그를 정리해도 이어서 대화할 수 있도록, 로그가 늘어난 만큼을 따로 압축 보관합니다. 원문이 사라진 세션은 복구 버튼으로 되살립니다. 보존소 경로와 용량 상한은 설정에서 정할 수 있습니다.
+- **세션·군집 목록 검색창** - 세션은 제목이나 세션 ID로, 군집은 이름으로 목록을 걸러냅니다.
+- **세션 제목 직접 짓기** - 자동으로 붙는 제목 대신 원하는 이름을 붙일 수 있습니다. 비워서 저장하면 원래 제목으로 돌아갑니다.
+- **markdown으로 내보내기** - 원문도 보존본도 없는 예전 세션을 파일로 받아둘 수 있습니다.
+
+### Changed
+- 확인·입력 창이 앱 안에서 뜹니다(전에는 브라우저 기본 팝업이 따로 떴습니다).
+- 하단 상태바가 1초 간격으로 갱신됩니다.
+
+### Fixed
+- 접기·펼치기 후 의미 지도가 다시 뜨기까지 오래 걸리고 군집 색이 전부 바뀌던 문제.
+- 폴더에 담아둔 세션의 제목을 바꿔도 폴더 화면에만 옛 제목이 남던 문제.
+- 검색이 실패했는데 "결과 없음"으로 보이던 문제.
+- 담기 드롭다운이 잘리거나, 목록을 스크롤하면 닫히던 문제.
+- 원본 보존이 실패해도 아무 표시가 없던 문제. 이제 색인 로그에 오류로 남습니다.
+- 진행 중인 세션을 보존할 때 같은 내용이 중복 기록될 수 있던 문제.
+
+<!--lang:en-->
+
+### Added
+- **Fold** - Fold away conversations you don't need right now so they drop out of search and the map. Nothing is deleted: a single line stays in place so you can unfold anytime, and the folded state survives re-indexing.
+- **Folded view** - See everything you've folded in one place, and jump to the conversation or unfold it from there.
+- **Folders** - Hand-made clusters: pick the sessions and conversations you want and collect them. Supports subfolders, drag to reorder or re-nest, and search scoped to a folder.
+- **Folder-only names** - Give a collected item an alias. The original title is untouched, so other screens are unaffected, and the same conversation can carry a different name in each folder.
+- **Raw log preservation and session restore** - So you can keep talking even after Claude Code prunes old logs, Vestige archives each log's new bytes separately. Sessions whose originals are gone can be restored with one click. The archive path and size cap are configurable.
+- **Session and cluster list search** - Filter sessions by title or session ID, clusters by name.
+- **Custom session titles** - Name a session yourself instead of the auto-generated title. Save it empty to restore the original.
+- **Markdown export** - Save older sessions to a file when neither the original nor an archived copy exists.
+
+### Changed
+- Confirmation and input dialogs now appear inside the app (previously separate browser popups).
+- The status bar refreshes every second.
+
+### Fixed
+- The semantic map took a long time to reappear after folding or unfolding, and cluster colors all changed.
+- Renaming a session left the old title showing in the folder view.
+- Failed searches were shown as "no results".
+- The add-to-folder dropdown was clipped, and closed when you scrolled its list.
+- Failures to preserve raw logs were silent. They now surface as errors in the indexing log.
+- Preserving an in-progress session could record the same content twice.
+
 ## [0.2.0] - 2026-09-10
 
 <!--lang:ko-->
