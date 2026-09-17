@@ -52,6 +52,10 @@ export const getSources = () =>
 export const getSession = (id: string) =>
   getJSON<SessionDetail>(`/api/session?id=${encodeURIComponent(id)}`)
 
+// 세션 제목을 직접 지정(빈 값이면 기본 제목으로 되돌림). 원문 대화는 건드리지 않는다.
+export const setSessionTitle = (sessionId: string, title: string) =>
+  postJSON<{ ok: boolean }>("/api/session/title", { session_id: sessionId, title })
+
 export const listSessions = () =>
   getJSON<{ sessions: SessionRow[] }>(`/api/sessions`)
 
@@ -106,7 +110,8 @@ export const unhideSession = (sessionId: string) => postHide("/api/unhide", { se
 // 폴더(#201). 담기/빼기는 turn_id 또는 session_id 중 하나로 대상을 지정한다.
 export const listFolders = () => getJSON<{ folders: Folder[] }>(`/api/folders`)
 export const getFolder = (id: number) => getJSON<FolderDetail>(`/api/folder?id=${id}`)
-async function postFolder<T>(url: string, body: Record<string, unknown>): Promise<T> {
+// JSON 본문 POST 공통(폴더·세션 제목 등). 실패는 failure() 로 code/params 를 실은 Error.
+async function postJSON<T>(url: string, body: Record<string, unknown>): Promise<T> {
   const r = await fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   })
@@ -114,25 +119,25 @@ async function postFolder<T>(url: string, body: Record<string, unknown>): Promis
   return r.json()
 }
 export const createFolder = (name: string, parentId?: number | null) =>
-  postFolder<{ ok: boolean; id: number }>("/api/folders/create", { name, parent_id: parentId ?? null })
+  postJSON<{ ok: boolean; id: number }>("/api/folders/create", { name, parent_id: parentId ?? null })
 export const renameFolder = (id: number, name: string) =>
-  postFolder<{ ok: boolean }>("/api/folders/rename", { id, name })
+  postJSON<{ ok: boolean }>("/api/folders/rename", { id, name })
 // beforeId: 그 형제 '바로 앞'에 놓는다(순서 지정). 없으면 맨 뒤.
 export const moveFolder = (id: number, parentId: number | null, beforeId: number | null = null) =>
-  postFolder<{ ok: boolean }>("/api/folders/move", { id, parent_id: parentId, before_id: beforeId })
+  postJSON<{ ok: boolean }>("/api/folders/move", { id, parent_id: parentId, before_id: beforeId })
 export const deleteFolder = (id: number) =>
-  postFolder<{ ok: boolean; deleted: number }>("/api/folders/delete", { id })
+  postJSON<{ ok: boolean; deleted: number }>("/api/folders/delete", { id })
 export type FolderTarget = { turnId?: string; sessionId?: string }
 const targetBody = (t: FolderTarget) => (t.turnId ? { turn_id: t.turnId } : { session_id: t.sessionId })
 export const addToFolder = (folderId: number, t: FolderTarget) =>
-  postFolder<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
+  postJSON<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
 export const removeFromFolder = (folderId: number, t: FolderTarget) =>
-  postFolder<{ ok: boolean }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
+  postJSON<{ ok: boolean }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
 // 폴더 안에서만 쓰는 표시 이름(원본 제목은 그대로). 빈 문자열이면 원래 제목으로 되돌린다.
 export const renameFolderItem = (folderId: number, t: FolderTarget, alias: string) =>
-  postFolder<{ ok: boolean }>("/api/folders/item/rename", { folder_id: folderId, ...targetBody(t), alias })
+  postJSON<{ ok: boolean }>("/api/folders/item/rename", { folder_id: folderId, ...targetBody(t), alias })
 export const reorderFolder = (folderId: number, order: { kind: "turn" | "session"; ref: string }[]) =>
-  postFolder<{ ok: boolean; count: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
+  postJSON<{ ok: boolean; count: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
 
 export const listHidden = (limit = 200) =>
   getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)

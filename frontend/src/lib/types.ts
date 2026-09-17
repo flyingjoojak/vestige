@@ -38,6 +38,7 @@ export type SessionSource = "claude-code" | "codex"
 
 export interface SessionDetail {
   session: string
+  title?: string | null          // 사용자가 지은 제목(없으면 null)
   project: string
   count: number
   turns: SessionTurn[]
@@ -55,6 +56,7 @@ export interface SessionRow {
   started: string
   ended: string
   headline: string
+  custom_title?: string | null   // 사용자가 지은 제목(있으면 headline 이 이 값)
   hidden_count?: number        // 접힌 턴 수(count 와 같으면 세션 전체가 접힌 상태, #128)
   source?: SessionSource
   subagent?: boolean           // 배경(서브에이전트) 대화 여부

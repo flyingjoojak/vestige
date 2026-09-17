@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, TerminalSquare, Type } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, Pencil, TerminalSquare, Type, X } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
-import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, type SearchMode } from "@/lib/api"
+import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, type SearchMode } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
@@ -38,9 +38,11 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   kind: "sessions" | "clusters"; initialSel?: string | null; initialTurn?: { turn: string; session: string } | null
 }) {
   const { t } = useTranslation()
-  const { confirm } = useDialogs()
+  const { confirm, prompt } = useDialogs()
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
+  // 목록 자체를 좁히는 입력. 서버 검색(대화 내용)과 달리 '제목·id'만 보는 로컬 필터다.
+  const [listQ, setListQ] = useState("")
   const [pointsByCluster, setPointsByCluster] = useState<Map<number, Conv[]>>(new Map())
   const [sel, setSel] = useState<string | null>(initialSel)
   const [selTurn, setSelTurn] = useState<{ session: string; turn: string } | null>(initialTurn)
@@ -145,6 +147,24 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     }
   }
 
+  // 세션 제목 바꾸기. 비우면 기본 제목(첫 턴 요약)으로 되돌아간다.
+  async function renameSession() {
+    if (!sel) return
+    const cur = detail?.title ?? selGroup?.label ?? ""
+    const name = await prompt({
+      title: t("browse.renameSession"), description: t("browse.renameSessionHint"),
+      defaultValue: detail?.title ?? "", placeholder: cur, confirmLabel: t("common.save"),
+    })
+    if (name == null) return
+    try {
+      await setSessionTitle(sel, name)
+      loadGroups()
+      getSession(sel).then(setDetail).catch(() => {})
+    } catch (e) {
+      flashMsg({ ok: false, text: errText(t, e, "settings.saveFailed") })
+    }
+  }
+
   // 지도에서 진입(그룹/대화)하면 선택 갱신. 객체 대신 원시값을 dep으로 써 매 렌더 재실행 방지.
   const jumpTurn = initialTurn?.turn ?? null
   const jumpSess = initialTurn?.session ?? null
@@ -234,6 +254,30 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       : <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
 
   // 그룹 목록 — 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
+  const shownGroups = (() => {
+    const q = listQ.trim().toLowerCase()
+    if (!groups || !q) return groups
+    return groups.filter((g) =>
+      g.label.toLowerCase().includes(q) || (kind === "sessions" && g.id.toLowerCase().includes(q)))
+  })()
+
+  // 목록 위 검색창 — 세션은 제목·세션 id, 군집은 이름으로 좁힌다.
+  const listFilter = (
+    <div className="relative">
+      <Magnifier className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input value={listQ} onChange={(e) => setListQ(e.target.value)}
+        aria-label={t(kind === "sessions" ? "browse.filterSessions" : "browse.filterClusters")}
+        placeholder={t(kind === "sessions" ? "browse.filterSessions" : "browse.filterClusters")}
+        className="h-8 rounded-lg pl-8 text-[13px]" />
+      {listQ && (
+        <button type="button" onClick={() => setListQ("")} aria-label={t("search.reset")}
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground">
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
+  )
+
   const groupList = (compact: boolean) => (
     <div className={compact ? "min-h-0 flex-1 space-y-1 overflow-y-auto p-3" : "mx-auto w-full max-w-2xl space-y-2.5 p-4"}>
       {groupsErr && (
@@ -244,12 +288,14 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         </div>
       )}
       {!groups && !groupsErr && <div className="grid h-40 place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>}
-      {groups && groups.length === 0 && !groupsErr && (
-        <div className="grid h-40 place-items-center px-6 text-center text-sm text-muted-foreground">{t("browse.emptyGroups")}</div>
+      {groups && shownGroups?.length === 0 && !groupsErr && (
+        <div className="grid h-40 place-items-center px-6 text-center text-sm text-muted-foreground">
+          {listQ ? t("browse.filterNoMatch") : t("browse.emptyGroups")}
+        </div>
       )}
       {/* 행 안에 '폴더에 추가' 버튼을 두려면 버튼 중첩을 피해야 한다 → 행은 div, 클릭 영역은
           겹침 레이어(after:inset-0)로 카드 전체, 담기 버튼은 z-10 으로 그 위에. */}
-      {groups?.map((g) => compact ? (
+      {shownGroups?.map((g) => compact ? (
         <div key={g.id}
           className={`cm-cv-row group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
           {groupIcon(g)}
@@ -291,7 +337,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       <div className="flex h-full flex-col">
         <div className="shrink-0 px-6 pt-5">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <p className="text-xs text-muted-foreground">{groups ? t("browse.groupCount", { count: groups.length }) : ""}</p>
+          <p className="mb-2.5 text-xs text-muted-foreground">
+            {groups ? t("browse.groupCount", { count: shownGroups?.length ?? 0 }) : ""}
+          </p>
+          <div className="mx-auto w-full max-w-2xl">{listFilter}</div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">{groupList(false)}</div>
       </div>
@@ -311,6 +360,15 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               {selGroup?.color && <span className="mr-1.5 inline-block size-2.5 rounded-full align-middle" style={{ background: selGroup.color }} />}
               {selGroup?.label} · {convs?.length ?? 0}
             </span>
+            {/* 세션 제목 바꾸기 — 기본 제목은 첫 턴 요약이라 내용과 안 맞을 때가 많다.
+                원문 대화는 건드리지 않고 표시 이름만 바꾼다(재색인해도 유지). */}
+            {kind === "sessions" && sel && (
+              <button type="button" onClick={renameSession}
+                title={t("browse.renameSession")} aria-label={t("browse.renameSession")}
+                className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                <Pencil className="size-3.5" />
+              </button>
+            )}
           </div>
           {/* 배경(서브에이전트) 대화: 직접 열 수 없음 → 안내 + 부모 세션 역링크 */}
           {kind === "sessions" && sel && isSubagent && (
@@ -432,7 +490,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
 
       {/* 오른쪽: 그룹 목록(전환용) */}
       <div className="flex min-h-0 flex-col border-l">
-        <div className="shrink-0 border-b px-3 py-2.5 text-xs font-medium text-muted-foreground">{t("browse.groupListTitle", { title })}</div>
+        <div className="shrink-0 space-y-2 border-b px-3 py-2.5">
+          <div className="text-xs font-medium text-muted-foreground">{t("browse.groupListTitle", { title })}</div>
+          {listFilter}
+        </div>
         {groupList(true)}
       </div>
     </div>

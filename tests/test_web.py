@@ -484,3 +484,26 @@ def test_folder_move_into_and_out_keeps_order(tmp_path, monkeypatch):
     web.api_folder_move({"id": b, "parent_id": None, "before_id": a})   # 다시 밖으로, a 앞에
     tops = [f["id"] for f in web.api_folders()["folders"] if f["parent_id"] is None]
     assert tops == [b, a]
+
+
+def test_session_title_override_and_reset(tmp_path, monkeypatch):
+    """사용자가 지은 세션 제목은 목록·상세에 반영되고, 원문 대화는 그대로다. 비우면 기본 제목으로 복귀."""
+    _seed_folder_db(tmp_path, monkeypatch)
+
+    assert web.api_sessions()["sessions"][0]["headline"] in ("q1", "q2")   # 기본=첫 턴 질문
+    web.api_session_title({"session_id": "s1", "title": "내가 지은 제목"})
+
+    row = next(r for r in web.api_sessions()["sessions"] if r["session"] == "s1")
+    assert row["headline"] == "내가 지은 제목" and row["custom_title"] == "내가 지은 제목"
+    assert web.api_session(id="s1")["title"] == "내가 지은 제목"
+    assert web.api_session(id="s1")["turns"][0]["question"] == "q1"        # 대화는 불변
+
+    web.api_session_title({"session_id": "s1", "title": ""})               # 비우면 원복
+    row = next(r for r in web.api_sessions()["sessions"] if r["session"] == "s1")
+    assert row["headline"] == "q1" and row["custom_title"] is None
+
+
+def test_session_title_rejects_unknown_session():
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_session_title({"session_id": "", "title": "x"})
+    assert ei.value.status_code == 400

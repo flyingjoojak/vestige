@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS raw_cursors(
 CREATE TABLE IF NOT EXISTS hidden_turns(
   turn_id TEXT PRIMARY KEY, hidden_at REAL
 );
+CREATE TABLE IF NOT EXISTS session_titles(
+  session_id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS folders(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
   parent_id INTEGER REFERENCES folders(id), created_at REAL,
@@ -150,6 +153,18 @@ def _mig_0007_folder_position(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE folders ADD COLUMN position REAL")
 
 
+def _mig_0008_session_titles(conn: sqlite3.Connection) -> None:
+    """session_titles 추가 — 사용자가 직접 지은 세션 제목.
+
+    기본 제목은 '첫 턴의 요약/질문'을 매번 계산해 쓰는 파생값이라 고쳐 쓸 데가 없었다.
+    별도 테이블에 두면 재색인·정제가 다시 돌아도 사용자가 지은 이름이 살아남는다.
+    (원문 대화는 건드리지 않는다 — 폴더 별칭과 같은 성격이되 이쪽은 앱 전체에 적용)
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS session_titles(
+      session_id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at REAL
+    )""")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -159,6 +174,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0005_folders,
     _mig_0006_folder_item_alias_position,
     _mig_0007_folder_position,
+    _mig_0008_session_titles,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -705,6 +721,23 @@ class ArchiveDB:
         """이 항목이 담긴 폴더 id들(같은 항목을 여러 폴더에 담을 수 있다)."""
         return [r["folder_id"] for r in self.conn.execute(
             "SELECT folder_id FROM folder_items WHERE kind=? AND ref=?", (kind, ref))]
+
+    # --- 세션 제목(사용자 지정) ------------------------------------------
+    def set_session_title(self, session_id: str, title: str | None) -> None:
+        """빈 값이면 지정을 지워 기본 제목(첫 턴 요약)으로 되돌린다."""
+        if title:
+            self.conn.execute(
+                "INSERT INTO session_titles(session_id, title, updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at",
+                (session_id, title, time.time()))
+        else:
+            self.conn.execute("DELETE FROM session_titles WHERE session_id=?", (session_id,))
+        self.conn.commit()
+
+    def session_title(self, session_id: str) -> str | None:
+        r = self.conn.execute(
+            "SELECT title FROM session_titles WHERE session_id=?", (session_id,)).fetchone()
+        return r["title"] if r else None
 
     # --- 메타 -----------------------------------------------------------
     def get_meta(self, key: str) -> str | None:
