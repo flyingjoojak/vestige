@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
-import { getSession, hideSession as apiHideSession, hideTurn, unhideTurn } from "@/lib/api"
+import { getSession, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
 import { AddToFolder } from "./AddToFolder"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -142,6 +142,19 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
     }
   }
 
+  // 세션 전체 펼치기 — 접기(foldWholeSession)와 대칭으로 요청 한 번. 턴마다 foldTurn 을 돌리면
+  // 500턴 세션에서 요청 500개 + 지도 캐시 무효화 500번이 나간다.
+  async function unfoldWholeSession() {
+    const ids = new Set((data?.turns ?? []).map((x) => x.id))
+    setFolded(ids, false)
+    try {
+      await unhideSession(session)
+    } catch (e) {
+      setFolded(ids, true)
+      setHideErr(errText(t, e, "chat.foldFailed"))
+    }
+  }
+
   const turns = data?.turns ?? []
   const foldedCount = turns.filter((x) => x.hidden).length
   const allFolded = turns.length > 0 && foldedCount === turns.length
@@ -158,7 +171,7 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
         )}
         {data && turns.length > 0 && (
           allFolded
-            ? <button type="button" onClick={() => turns.forEach((x) => foldTurn(x.id, false))} title={t("chat.unfoldAll")}
+            ? <button type="button" onClick={unfoldWholeSession} title={t("chat.unfoldAll")}
                 className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
                 <ChevronsUpDown className="size-3.5" />{t("chat.unfoldAll")}
               </button>

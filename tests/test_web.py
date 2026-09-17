@@ -507,3 +507,64 @@ def test_session_title_rejects_unknown_session():
     with pytest.raises(web.HTTPException) as ei:
         web.api_session_title({"session_id": "", "title": "x"})
     assert ei.value.status_code == 400
+
+
+# ── 지도 캐시 무효화(#128 회귀) ───────────────────────────────
+def test_graph3d_invalidate_marks_stale_instead_of_deleting(tmp_path, monkeypatch):
+    """접기/펼치기는 캐시를 지우면 안 된다.
+
+    지우면 (1) 다음 조회가 동기 UMAP 경로로 떨어져 군집 탭이 수십 초 멈추고,
+    (2) prev_members 가 사라져 군집 id 승계가 끊겨 색이 전부 바뀐다.
+    '낡음' 표시만 남기고 데이터·members 는 보존해야 한다.
+    """
+    import json
+    from vestige import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    cache = tmp_path / "graph3d_cache.json"
+    cache.write_text(json.dumps({
+        "n": 100, "v": web._GRAPH3D_VER,
+        "data": {"points": [{"id": "s1:u1"}], "clusters": [{"id": 3}]},
+        "members": [["s1:u1"]],
+    }), encoding="utf-8")
+
+    web._graph3d_invalidate()
+
+    assert cache.exists()                      # 지우지 않는다
+    after = json.loads(cache.read_text(encoding="utf-8"))
+    assert after["stale"] is True
+    assert after["data"]["clusters"] == [{"id": 3}]   # 옛 데이터는 그대로 제공 가능
+    assert after["members"] == [["s1:u1"]]            # 군집 id 승계 기준 보존
+
+
+def test_graph3d_invalidate_survives_missing_cache(tmp_path, monkeypatch):
+    from vestige import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    web._graph3d_invalidate()                  # 캐시 없어도 예외 없이 지나간다
+    assert not (tmp_path / "graph3d_cache.json").exists()
+
+
+# ── /api/stats (상태바 1초 폴링) ──────────────────────────────
+def test_api_stats_does_not_load_vector_matrix(monkeypatch):
+    """개수 하나 보여주려고 수백 MB 행렬을 올리지 않는다(상태바가 1초마다 호출)."""
+    called = []
+    monkeypatch.setattr(web, "make_index", lambda *a, **k: called.append(1) or _Boom())
+    monkeypatch.setattr(web, "vector_count", lambda *a, **k: 7)
+    web._stats_cache.update(at=0.0, v=None)    # 캐시 비우고 시작
+    out = web.api_stats()
+    assert out["vectors"] == 7
+    assert called == []                        # make_index 를 아예 안 부른다
+
+
+def test_api_stats_uses_ttl_cache(monkeypatch):
+    monkeypatch.setattr(web, "vector_count", lambda *a, **k: 1)
+    web._stats_cache.update(at=0.0, v=None)
+    first = web.api_stats()
+    monkeypatch.setattr(web, "vector_count", lambda *a, **k: 999)   # 값이 바뀌어도
+    assert web.api_stats() is first                                  # TTL 안에선 같은 객체
+    web._stats_cache.update(at=0.0, v=None)                          # 만료시키면 재계산
+    assert web.api_stats()["vectors"] == 999
+
+
+class _Boom:
+    def __len__(self):
+        raise AssertionError("make_index() 가 불리면 안 된다")

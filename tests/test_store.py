@@ -316,3 +316,40 @@ def test_add_to_folder_idempotent_and_multi_folder(tmp_path):
     assert sorted(db.folders_of("turn", "s1:u1")) == sorted([a, b])
     db.remove_from_folder(a, "turn", "s1:u1")
     assert db.folders_of("turn", "s1:u1") == [b]
+
+
+def test_folder_session_item_uses_custom_session_title(tmp_path):
+    """폴더에 담긴 세션도 사용자가 지은 제목을 따른다(/api/sessions 와 같은 기준).
+    안 보면 제목을 바꿔도 폴더 화면에만 옛 제목이 남는다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", q="첫 질문")); db.commit()
+    f = db.create_folder("모음")
+    db.add_to_folder(f, "session", "s1")
+
+    it = db.folder_items(f)[0]
+    assert it["headline"] == "첫 질문"          # 기본: 첫 턴에서 뽑은 제목
+
+    db.set_session_title("s1", "내가 지은 제목")
+    it = db.folder_items(f)[0]
+    assert it["headline"] == "내가 지은 제목"
+    assert it["original_headline"] == "내가 지은 제목"
+
+    # 폴더 별칭이 있으면 그게 최우선(원본은 original_headline 으로 유지)
+    db.set_item_alias(f, "session", "s1", "폴더용 이름")
+    it = db.folder_items(f)[0]
+    assert it["headline"] == "폴더용 이름"
+    assert it["original_headline"] == "내가 지은 제목"
+
+
+def test_clear_raw_cursors_only_touches_given_session(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.set_raw_cursor("/x/a.jsonl", 10, "sid-a", "claude-code")
+    db.set_raw_cursor("/x/b.jsonl", 20, "sid-b", "claude-code")
+    db.set_raw_cursor("/x/c.jsonl", 30, "sid-a", "codex")   # 같은 sid, 다른 소스
+    db.commit()
+
+    assert db.clear_raw_cursors("claude-code", ["sid-a"]) == 1
+    assert db.get_raw_cursor("/x/a.jsonl") == 0
+    assert db.get_raw_cursor("/x/b.jsonl") == 20    # 다른 세션은 그대로
+    assert db.get_raw_cursor("/x/c.jsonl") == 30    # 다른 소스도 그대로
+    assert db.clear_raw_cursors("claude-code", []) == 0

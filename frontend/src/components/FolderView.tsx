@@ -222,7 +222,11 @@ export function FolderView() {
     const alias = await prompt({
       title: t("folders.itemRename"),
       description: t("folders.itemRenameHint", { original: it.original_headline || it.headline }),
-      defaultValue: it.alias ?? it.headline, confirmLabel: t("common.save"),
+      // 별칭이 없으면 빈 칸에서 시작한다 — 원본 제목을 채워두면 확인만 눌러도 그 문자열이
+      // 별칭으로 박혀 '별칭 있음' 상태가 되고, 되돌릴 방법이 없었다.
+      defaultValue: it.alias ?? "", placeholder: it.original_headline || it.headline,
+      confirmLabel: t("common.save"),
+      allowEmpty: true,   // 비워서 저장 = 원본 제목으로 되돌리기(백엔드 계약)
     })
     if (alias == null) return
     try {
@@ -332,6 +336,8 @@ export function FolderView() {
     try {
       const r = await search({ q: term.trim(), k: 30, folder: sel })
       if (my !== reqId.current) return
+      // 임베딩 모델 미선택 등은 200 + {error, code} 로 온다 — 안 보면 실패가 '결과 없음'으로 보인다.
+      if (r.code || r.error) { setHits([]); setErr(errText(t, r, "folders.searchFailed")); return }
       setHits(r.hits || [])
     } catch (e) {
       if (my !== reqId.current) return

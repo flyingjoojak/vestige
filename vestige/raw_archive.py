@@ -18,6 +18,7 @@ gzip 멤버 하나로 이어 쓴다(``gzip.open`` 은 이어붙인 여러 멤버
 """
 from __future__ import annotations
 
+import contextlib
 import gzip
 import json
 import logging
@@ -58,6 +59,18 @@ def _sanitize(s: str) -> str:
     return out or "unknown"
 
 
+# 보존소 소유 표시. enforce_quota 가 이 마커 없는 폴더에서는 아무것도 지우지 않는다 —
+# 보존소 경로는 설정 화면에서 사용자가 직접 고를 수 있어서, 홈 폴더나 기존 백업 폴더를
+# 지정한 채 용량 상한을 켜면 앱이 만들지 않은 .jsonl.gz 까지 삭제 대상이 되기 때문.
+_MARKER = ".vestige-raw"
+
+
+def _ensure_marker(root: Path) -> None:
+    m = root / _MARKER
+    if not m.exists():
+        m.write_text("vestige raw archive\n", encoding="utf-8")
+
+
 def raw_path(source: str, session_id: str) -> Path:
     """이 세션의 압축 원본 경로. source/session_id 는 파일명·UUID에서만 나와 경로이탈 위험이
     없지만, 방어적으로 한 번 더 sanitize."""
@@ -89,9 +102,13 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     sid = session_id_for(path)
     out = raw_path(source, sid)
     out.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_marker(raw_dir())
     with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
         gz.write(chunk)
-    db.set_raw_cursor(path, size, sid, source)
+    # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
+    # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
+    # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
+    db.set_raw_cursor(path, mirrored + len(chunk), sid, source)
     db.commit()
     return len(chunk)
 
@@ -114,24 +131,48 @@ def mirror_size_bytes() -> int:
     root = raw_dir()
     if not root.exists():
         return 0
-    return sum(p.stat().st_size for p in root.rglob("*.jsonl.gz") if p.is_file())
+    total = 0
+    for p in root.rglob("*.jsonl.gz"):
+        with contextlib.suppress(OSError):   # 색인이 동시에 정리 중일 수 있음 — 설정 화면이 500 나지 않게
+            total += p.stat().st_size
+    return total
 
 
-def enforce_quota(max_bytes: int) -> int:
+def enforce_quota(max_bytes: int, db=None) -> int:
     """보존소가 max_bytes 를 넘으면 오래된 세션(mtime 기준)부터 지워 상한 아래로.
-    기본은 무제한(설정 UI에서 켤 때만 호출됨). 반환: 삭제한 파일 수."""
+    기본은 무제한(설정 UI에서 켤 때만 호출됨). 반환: 삭제한 파일 수.
+
+    db 를 주면 지운 세션의 미러 커서도 함께 비운다 — 커서만 남으면 그 세션이 이어질 때
+    '머리가 잘린' 보존본이 만들어지고, has_mirror 는 그걸 복구 가능으로 잘못 표시한다."""
     root = raw_dir()
     if max_bytes <= 0 or not root.exists():
         return 0
-    files = sorted(root.rglob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
-    total = sum(p.stat().st_size for p in files)
-    removed = 0
+    if not (root / _MARKER).exists():
+        # 우리가 만든 보존소가 아니다. 사용자가 고른 폴더일 수 있으므로 한 파일도 지우지 않는다.
+        raise RuntimeError(f"보존소 마커({_MARKER})가 없는 폴더라 정리를 건너뜁니다: {root}")
+
+    def _size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:      # 색인이 동시에 정리했을 수 있음 — 없는 파일은 0으로 본다
+            return 0
+
+    files = sorted(root.rglob("*.jsonl.gz"), key=lambda p: (p.stat().st_mtime if p.exists() else 0.0))
+    total = sum(_size(p) for p in files)
+    removed, dropped = 0, []
     for p in files:
         if total <= max_bytes:
             break
-        total -= p.stat().st_size
+        total -= _size(p)
+        dropped.append((p.parent.name, p.name[: -len(".jsonl.gz")]))
         p.unlink(missing_ok=True)
         removed += 1
+    if db is not None:
+        by_source: dict[str, list[str]] = {}
+        for src, sid in dropped:
+            by_source.setdefault(src, []).append(sid)
+        for src, sids in by_source.items():
+            db.clear_raw_cursors(src, sids)
     return removed
 
 

@@ -25,6 +25,7 @@ export function AddToFolder({ target, className, showLabel }: {
   // 화면 좌표(fixed)로 띄운다. 아래 공간이 부족하면 위로 뒤집는다.
   const [pos, setPos] = useState<{ top: number; left: number; flip: boolean } | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panelId = useId()
 
@@ -53,11 +54,19 @@ export function AddToFolder({ target, className, showLabel }: {
 
   useEffect(() => {
     if (!open) return
+    // capture 로 받는 이유: 패널이 fixed 라 바깥 스크롤 컨테이너가 움직이면 좌표가 어긋난다.
+    // 단 패널 자신의 목록 스크롤은 제외해야 한다 — 안 그러면 폴더가 많을 때 목록을 굴리는
+    // 순간 닫혀서 아래쪽 폴더를 고를 수가 없다.
+    const onScroll = (e: Event) => {
+      const el = e.target as Node | null
+      if (el && panelRef.current?.contains(el)) return
+      setOpen(false)
+    }
     const close = () => setOpen(false)
-    window.addEventListener("scroll", close, true)   // capture: 내부 스크롤 영역까지
+    window.addEventListener("scroll", onScroll, true)
     window.addEventListener("resize", close)
     return () => {
-      window.removeEventListener("scroll", close, true)
+      window.removeEventListener("scroll", onScroll, true)
       window.removeEventListener("resize", close)
     }
   }, [open])
@@ -120,7 +129,7 @@ export function AddToFolder({ target, className, showLabel }: {
           {/* 바깥 클릭 시 닫힘(장식용, AT엔 숨김) */}
           <button type="button" aria-hidden="true" tabIndex={-1}
             className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
-          <div id={panelId} role="group" aria-label={t("folders.addTo")}
+          <div id={panelId} ref={panelRef} role="group" aria-label={t("folders.addTo")}
             onClick={(e) => e.stopPropagation()}
             style={{ top: pos.top, left: pos.left, width: PANEL_W, maxHeight: PANEL_MAX_H,
                      transform: pos.flip ? "translateY(-100%)" : undefined }}

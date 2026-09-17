@@ -10,7 +10,12 @@ import { Input } from "@/components/ui/input"
 // 떠서 앱과 따로 놀고(데스크톱 앱에선 더 이질적), 스타일·번역도 못 맞춘다.
 // 호출부가 기존 `await window.confirm(...)` 흐름을 그대로 쓰도록 Promise 를 돌려준다.
 type ConfirmOpts = { title: string; description?: React.ReactNode; confirmLabel?: string; danger?: boolean }
-type PromptOpts = { title: string; description?: React.ReactNode; defaultValue?: string; placeholder?: string; confirmLabel?: string }
+// allowEmpty: 빈 값 제출 허용. 제목·별칭처럼 '비우면 기본값으로 되돌린다'가 계약인 곳에서 필요하다
+// (기본값은 false — 폴더 이름처럼 빈 값이 무의미한 곳을 지킨다).
+type PromptOpts = {
+  title: string; description?: React.ReactNode; defaultValue?: string
+  placeholder?: string; confirmLabel?: string; allowEmpty?: boolean
+}
 
 type Pending =
   | { kind: "confirm"; opts: ConfirmOpts; resolve: (v: boolean) => void }
@@ -53,7 +58,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
 
   const opts = pending?.opts
   const isPrompt = pending?.kind === "prompt"
-  const canSubmit = !isPrompt || value.trim().length > 0
+  const canSubmit = !isPrompt || (opts as PromptOpts).allowEmpty === true || value.trim().length > 0
 
   return (
     <Ctx.Provider value={{ confirm, prompt }}>

@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from .int8_model import INT8_MODEL_ID
 from .search import search as run_search
 from .store import ArchiveDB, _actions_from_json
-from .vectorindex import make_index
+from .vectorindex import make_index, vector_count
 
 _state: dict = {}
 # 빌드된 React 프론트(있으면 서빙, 없으면 인라인 _HTML 폴백).
@@ -1988,7 +1988,11 @@ def _graph3d_data(refresh: bool = False) -> dict:
             if cached.get("v") == _GRAPH3D_VER and cached.get("data"):
                 cached_n = int(cached.get("n") or 0)
                 # 임계값 이상 변했을 때만 재계산(작은 변화엔 지도 안 흔들리게) — stale-while-revalidate.
-                if cached_n > 0 and abs(n - cached_n) >= max(_GRAPH3D_MIN_DELTA, int(cached_n * _GRAPH3D_DELTA_RATIO)):
+                # stale 표시(접기/펼치기·정제)는 개수가 그대로여도 내용이 바뀐 경우라 무조건 재계산.
+                if cached.get("stale") or (
+                    cached_n > 0
+                    and abs(n - cached_n) >= max(_GRAPH3D_MIN_DELTA, int(cached_n * _GRAPH3D_DELTA_RATIO))
+                ):
                     _graph3d_recompute_bg(n)
                 return cached["data"]
         except Exception:
@@ -1999,10 +2003,21 @@ def _graph3d_data(refresh: bool = False) -> dict:
 
 
 def _graph3d_invalidate() -> None:
-    """지도 캐시 폐기 → 다음 조회 시 군집·라벨 재계산. 정제로 태그가 바뀌었을 때 등."""
+    """지도 캐시를 '낡음'으로만 표시 → 다음 조회가 옛 데이터를 즉시 주고 뒤에서 재계산한다.
+
+    파일을 지우면 안 되는 이유 두 가지:
+    1) 캐시가 없으면 _graph3d_data 가 동기 경로로 떨어져 UMAP+HDBSCAN 이 그 자리에서 돈다.
+       접기/펼치기는 일상 클릭이라 그때마다 군집 탭이 수십 초 멈춘다.
+    2) prev_members 가 같이 사라져 군집 id 승계가 끊기고, 접기 한 번에 군집 색이 전부 바뀐다.
+    """
     from . import config as C
+    cache_path = C.DATA_DIR / "graph3d_cache.json"
     with contextlib.suppress(Exception):
-        (C.DATA_DIR / "graph3d_cache.json").unlink(missing_ok=True)
+        if not cache_path.exists():
+            return
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        cached["stale"] = True
+        cache_path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
 
 
 @app.get("/api/graph3d")
@@ -2011,16 +2026,26 @@ def api_graph3d(refresh: bool = False):
     return _graph3d_data(refresh)
 
 
+# 상태바가 1초 주기로 물어본다. enriched 카운트는 turns 풀스캔이라 매번 돌 만한 값이 아니고,
+# 벡터 개수는 vector_count() 로 행렬 적재를 피한다(둘 다 초 단위로 바뀌지 않는 값).
+_stats_cache: dict = {"at": 0.0, "v": None}
+_STATS_TTL = 2.0
+
+
 @app.get("/api/stats")
 def api_stats():
+    now = time.time()
+    if _stats_cache["v"] is not None and now - _stats_cache["at"] < _STATS_TTL:
+        return _stats_cache["v"]
     db = ArchiveDB()
-    vi = make_index()
-    return {
+    out = {
         "turns": db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"],
         "sessions": db.conn.execute("SELECT COUNT(DISTINCT session_id) c FROM turns").fetchone()["c"],
-        "vectors": len(vi),
+        "vectors": vector_count(),
         "enriched": db.conn.execute("SELECT COUNT(*) c FROM turns WHERE summary IS NOT NULL").fetchone()["c"],
     }
+    _stats_cache.update(at=now, v=out)
+    return out
 
 
 @app.get("/")

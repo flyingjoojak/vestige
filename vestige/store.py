@@ -545,6 +545,20 @@ class ArchiveDB:
             (file_path, mirrored_offset, session_id, source, time.time()),
         )
 
+    def clear_raw_cursors(self, source: str, session_ids: list[str]) -> int:
+        """이 세션들의 미러 커서를 지운다 → 다음 회차에 0부터 다시 미러링.
+        보존본(.gz)을 지웠는데 커서가 남으면, 이어지는 로그의 '꼬리'만 새 파일에 쌓여
+        머리가 잘린 보존본이 되고 has_mirror 는 그걸 복구 가능으로 표시한다."""
+        if not session_ids:
+            return 0
+        n = 0
+        for sid in session_ids:
+            cur = self.conn.execute(
+                "DELETE FROM raw_cursors WHERE source=? AND session_id=?", (source, sid))
+            n += cur.rowcount or 0
+        self.conn.commit()
+        return n
+
     # --- 폴더(#201) ------------------------------------------------------
     # 사용자가 직접 만드는 수동 군집. 자동 군집(의미 기반)과 달리 원하는 것만 모은다.
     # (_SUBTREE_CTE = 자신+하위 폴더 id 집합 'sub'. 아래 조회들이 공통으로 앞에 붙여 쓴다)
@@ -684,8 +698,11 @@ class ArchiveDB:
                     "SELECT COUNT(*) c FROM turns t JOIN hidden_turns h ON h.turn_id = t.id "
                     "WHERE t.session_id=?", (r["ref"],)).fetchone()["c"]
                 n = t["n"] if t else 0
+                # 사용자가 지은 세션 제목이 있으면 그게 우선(/api/sessions 와 같은 기준).
+                # 안 보면 제목을 바꿔도 폴더 화면에만 옛 제목이 남는다.
+                custom = self.session_title(r["ref"])
                 item |= {"session_id": r["ref"], "count": n,
-                         "headline": ((head["summary"] or head["question"]) if head else "") or "",
+                         "headline": custom or (((head["summary"] or head["question"]) if head else "") or ""),
                          "timestamp": t["ended"] if t else None,
                          # 세션은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)
                          "hidden": n > 0 and n_hidden == n}
