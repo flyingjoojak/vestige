@@ -60,7 +60,8 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
     id: number | null
     over: { id: number; zone: DropZone } | null
     start: (id: number) => void
-    over_: (v: { id: number; zone: DropZone } | null) => void
+    // rect/depth 를 함께 넘긴다 — 부모가 이걸로 '레이아웃을 밀지 않는' 표시선 위치를 계산한다.
+    over_: (v: { id: number; zone: DropZone; rect: DOMRect; depth: number } | null) => void
     drop: (target: number, zone: DropZone) => void
     movingName?: string                      // 자리표시(고스트) 행에 쓸 이름
     blocked: Set<number>                     // 놓을 수 없는 대상(자기 자신 + 자기 하위)
@@ -68,20 +69,6 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
   }
 }) {
   const rows = byParent.get(parent) ?? []
-  // 놓았을 때의 모습 그대로 그린다(드롭 자리표시 패턴) — 트리 가이드(├└│)까지 같이 그려야 '어느 계층에 들어가는지'가 보인다.
-  // pointer-events-none 필수: 자리표시가 커서 밑에 깔리면 dragover 가 이쪽으로 넘어가
-  // 대상 판정이 뒤집히고(자리표시 사라짐 → 다시 생김) 깜빡이며, 드롭 불가 커서까지 뜬다.
-  const ghost = (g: { lines: boolean[]; last: boolean }) => (
-    <div aria-hidden className="pointer-events-none flex items-center gap-1 rounded-md border border-dashed border-primary/50 bg-primary/5 pr-2 text-sm"
-      style={{ paddingLeft: "4px" }}>
-      <TreeGuide lines={g.lines} last={g.last} />
-      <span className="size-4 shrink-0" />{/* 펼침 화살표 자리 — 실제 행과 가로 정렬을 맞춘다 */}
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-muted-foreground">
-        <FolderIcon className="size-3.5 shrink-0 opacity-70" />
-        <span className="min-w-0 flex-1 truncate opacity-80">{drag.movingName}</span>
-      </span>
-    </div>
-  )
   return (
     <>
       {rows.map((f, i) => {
@@ -91,8 +78,6 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
         const over = drag.over?.id === f.id && drag.id !== f.id ? drag.over.zone : null
         return (
           <div key={f.id}>
-            {/* 이 행 앞에 끼어든다 → 계보는 같고, 뒤에 이 행이 오므로 마지막이 아니다 */}
-            {over === "before" && ghost({ lines, last: false })}
             <div
               draggable
               onDragStart={(e) => { drag.start(f.id); e.dataTransfer.effectAllowed = "move" }}
@@ -109,7 +94,9 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
                   return
                 }
                 const zone = zoneOf(e)
-                if (drag.over?.id !== f.id || drag.over.zone !== zone) drag.over_({ id: f.id, zone })
+                if (drag.over?.id !== f.id || drag.over.zone !== zone) {
+                  drag.over_({ id: f.id, zone, rect: e.currentTarget.getBoundingClientRect(), depth })
+                }
               }}
               onDrop={(e) => {
                 e.preventDefault(); e.stopPropagation()
@@ -118,11 +105,8 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
               onDragEnd={drag.end}
               className={`flex cursor-grab items-center gap-1 rounded-md pr-2 text-sm transition-colors active:cursor-grabbing ${
                 sel === f.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} ${
-                // 집어 든 행은 내용을 감춰 '빈 자리'로만 남긴다(높이는 유지 → 레이아웃이 안 흔들림).
-                // 흐리게만 두면 같은 폴더가 원본·미리보기 두 곳에 이름까지 겹쳐 보여 헷갈린다.
-                // opacity-0 을 쓴다 — visibility:hidden/display:none 으로 소스를 숨기면
-                // 브라우저가 드래그 자체를 취소해버린다(드래그가 아예 안 걸림).
-                drag.id === f.id ? "opacity-0" : ""} ${
+                // 끌고 있는 원본은 흐리게(어디서 집었는지 표시). 숨기면 브라우저가 드래그를 취소한다.
+                drag.id === f.id ? "opacity-40" : ""} ${
                 drag.id != null && drag.id !== f.id && drag.blocked.has(f.id) ? "opacity-40" : ""} ${
                 over === "inside" ? "ring-1 ring-primary/60" : ""}`}
               style={{ paddingLeft: "4px" }}
@@ -139,15 +123,11 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
                 {f.items > 0 && <span className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{f.items}</span>}
               </button>
             </div>
-            {/* 이 폴더의 첫 자식이 된다 → 한 단계 깊어지고, 기존 자식이 없으면 마지막 */}
-            {over === "inside" && ghost({ lines: [...lines, !isLast], last: kids.length === 0 })}
             {!isCollapsed && kids.length > 0 && (
               <FolderTree parent={f.id} byParent={byParent} sel={sel} collapsed={collapsed}
                 depth={depth + 1} lines={[...lines, !isLast]}
                 onPick={onPick} onToggle={onToggle} drag={drag} />
             )}
-            {/* 이 행(과 하위) 다음 형제 자리 → 원래 이 행이 마지막이었다면 이제 이쪽이 마지막 */}
-            {over === "after" && ghost({ lines, last: isLast })}
           </div>
         )
       })}
@@ -171,9 +151,15 @@ export function FolderView() {
   // 드래그 정렬 상태: drag=집어든 항목, over=지금 놓일 자리(그 위에 표시선).
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [overIdx, setOverIdx] = useState<number | null>(null)
+  const [itemLine, setItemLine] = useState<number | null>(null)   // 항목 표시선 y(컨테이너 기준)
+  const itemsRef = useRef<HTMLDivElement | null>(null)
   // 폴더 트리 드래그(폴더를 다른 폴더 밑으로 이동).
   const [dragFolder, setDragFolder] = useState<number | null>(null)
-  const [overFolder, setOverFolder] = useState<{ id: number; zone: DropZone } | null>(null)
+  // 표시선은 절대 위치로 띄운다(react-arborist 의 Cursor, dnd-kit 의 DragOverlay 와 같은 방식).
+  // 인라인으로 자리를 끼워 넣으면 행들이 밀리고, 그 이동이 커서 판정을 바꿔 진동·오작동이 생긴다.
+  const [overFolder, setOverFolder] =
+    useState<{ id: number; zone: DropZone; top: number; left: number } | null>(null)
+  const treeRef = useRef<HTMLDivElement | null>(null)
   const reqId = useRef(0)   // 최신 검색만 반영
 
   const loadFolders = useCallback(() => {
@@ -385,7 +371,7 @@ export function FolderView() {
           </button>
         </div>
         {/* 빈 곳에 놓으면 최상위로 — 하위 폴더를 밖으로 빼낼 방법이 필요하다. */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-2"
+        <div ref={treeRef} className="relative min-h-0 flex-1 overflow-y-auto p-2"
           onDragOver={(e) => {
             if (dragFolder == null) return
             e.preventDefault()
@@ -410,9 +396,17 @@ export function FolderView() {
           )}
           {folders && folders.length > 0 && (
             <FolderTree parent={null} byParent={byParent} sel={sel} collapsed={collapsed} depth={0}
-              drag={{ id: dragFolder, over: overFolder, start: setDragFolder, over_: setOverFolder,
-                      drop: dropOnFolder,
-                      movingName: folders?.find((f) => f.id === dragFolder)?.name, blocked,
+              drag={{ id: dragFolder, over: overFolder, start: setDragFolder,
+                      drop: dropOnFolder, blocked,
+                      over_: (v) => {
+                        if (!v) { setOverFolder(null); return }
+                        const box = treeRef.current
+                        if (!box) return
+                        const b = box.getBoundingClientRect()
+                        // 컨테이너 내부 좌표(스크롤 포함)로 변환 — 행이 움직이지 않으므로 안정적이다.
+                        const y = (v.zone === "before" ? v.rect.top : v.rect.bottom) - b.top + box.scrollTop
+                        setOverFolder({ id: v.id, zone: v.zone, top: y, left: v.depth * 14 + 20 })
+                      },
                       end: () => { setDragFolder(null); setOverFolder(null) } }}
               onPick={setSel}
               onToggle={(id) => setCollapsed((prev) => {
@@ -421,6 +415,14 @@ export function FolderView() {
                 else next.add(id)
                 return next
               })} />
+          )}
+          {/* 놓일 자리 표시선 — 절대 위치라 행을 밀지 않는다(밀면 커서 판정이 흔들려 진동한다).
+              '안으로 넣기'는 선이 아니라 대상 행의 테두리로 표시된다. */}
+          {overFolder && overFolder.zone !== "inside" && (
+            <div aria-hidden className="pointer-events-none absolute right-2 z-10 h-0.5 rounded-full bg-primary"
+              style={{ top: overFolder.top - 1, left: overFolder.left }}>
+              <span className="absolute -left-1 top-1/2 size-2 -translate-y-1/2 rounded-full bg-primary" />
+            </div>
           )}
           {/* 트리가 패널을 가득 채우면 '빈 곳'이 없어 최상위로 뺄 방법이 사라진다 →
               드래그 중에는 맨 아래에 전용 드롭 자리를 띄운다. */}
@@ -488,7 +490,7 @@ export function FolderView() {
 
             {/* 카드 사이 여백·목록 아래 빈 공간에서도 드롭을 허용해야 한다 — 여기서 preventDefault
                 가 없으면 그 구간을 지날 때마다 '드롭 불가' 커서가 번쩍인다(카드 위에선 멀쩡한데). */}
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3"
+            <div ref={itemsRef} className="relative min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3"
               onDragOver={(e) => { if (dragIdx != null) e.preventDefault() }}
               onDrop={(e) => {
                 if (dragIdx == null) return
@@ -497,10 +499,15 @@ export function FolderView() {
                 // 진짜 빈 곳(목록 아래)에 놓았을 때만 맨 뒤로 보낸다.
                 if (overIdx != null) dropItem(dragIdx, overIdx)
                 else if (detail) dropItem(dragIdx, detail.items.length - 1)
-                setDragIdx(null); setOverIdx(null)
+                setDragIdx(null); setOverIdx(null); setItemLine(null)
               }}
               // 안전장치: 끌던 항목을 invisible 로 숨기므로 취소돼도 상태가 반드시 풀려야 한다.
-              onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}>
+              onDragEnd={() => { setDragIdx(null); setOverIdx(null); setItemLine(null) }}>
+              {/* 놓일 자리 표시선(절대 위치 — 카드를 밀지 않는다) */}
+              {dragIdx != null && itemLine != null && (
+                <div aria-hidden className="pointer-events-none absolute inset-x-3 z-10 h-0.5 rounded-full bg-primary"
+                  style={{ top: itemLine - 1 }} />
+              )}
               {/* 검색 중이면 검색 결과, 아니면 폴더에 담긴 것들 */}
               {hits !== null ? (
                 hits.length === 0 && !searching
@@ -532,12 +539,6 @@ export function FolderView() {
                       : openConv?.turn === it.ref
                     return (
                       <Fragment key={`${it.kind}:${it.ref}`}>
-                      {/* 놓일 자리에 회색 자리표시 — 위로 끌면 그 행 위, 아래로 끌면 아래에 자리가 생긴다 */}
-                      {overIdx === idx && dragIdx !== null && dragIdx > idx && (
-                        <div aria-hidden className="pointer-events-none rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
-                          <span className="truncate opacity-70">{detail.items[dragIdx].headline || t("folders.untitled")}</span>
-                        </div>
-                      )}
                       <div
                         draggable
                         onDragStart={(e) => { setDragIdx(idx); e.dataTransfer.effectAllowed = "move" }}
@@ -545,17 +546,27 @@ export function FolderView() {
                           if (dragIdx == null) return
                           e.preventDefault()                    // preventDefault 해야 드롭이 허용된다
                           e.dataTransfer.dropEffect = "move"
-                          if (overIdx !== idx) setOverIdx(idx)
+                          if (overIdx !== idx) {
+                            const box = itemsRef.current
+                            if (box) {
+                              const r = e.currentTarget.getBoundingClientRect()
+                              const b = box.getBoundingClientRect()
+                              // 끌어올릴 땐 그 행 위, 내릴 땐 아래에 선을 그린다.
+                              const y = (dragIdx > idx ? r.top : r.bottom) - b.top + box.scrollTop
+                              setItemLine(y)
+                            }
+                            setOverIdx(idx)
+                          }
                         }}
                         onDrop={(e) => {
                           e.preventDefault()
                           if (dragIdx != null) dropItem(dragIdx, idx)
                           setDragIdx(null); setOverIdx(null)
                         }}
-                        onDragEnd={() => { setDragIdx(null); setOverIdx(null) }}
+                        onDragEnd={() => { setDragIdx(null); setOverIdx(null); setItemLine(null) }}
                         className={`group relative flex cursor-grab items-center gap-1.5 rounded-lg border p-2.5 transition-colors active:cursor-grabbing ${
                           active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"} ${
-                          dragIdx === idx ? "opacity-0" : ""}`}>
+                          dragIdx === idx ? "opacity-40" : ""}`}>
                         {/* 순서: 카드를 끌어 옮기거나(드래그), 키보드/정밀 조정용으로 위·아래 한 칸.
                             z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게. */}
                         <GripVertical className="relative z-10 size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
@@ -614,11 +625,6 @@ export function FolderView() {
                           </button>
                         </span>
                       </div>
-                      {overIdx === idx && dragIdx !== null && dragIdx < idx && (
-                        <div aria-hidden className="pointer-events-none rounded-lg border border-dashed border-primary/40 bg-muted/40 p-2.5 text-[13px] text-muted-foreground">
-                          <span className="truncate opacity-70">{detail.items[dragIdx].headline || t("folders.untitled")}</span>
-                        </div>
-                      )}
                       </Fragment>
                     )
                   })}
