@@ -353,3 +353,68 @@ def test_clear_raw_cursors_only_touches_given_session(tmp_path):
     assert db.get_raw_cursor("/x/b.jsonl") == 20    # 다른 세션은 그대로
     assert db.get_raw_cursor("/x/c.jsonl") == 30    # 다른 소스도 그대로
     assert db.clear_raw_cursors("claude-code", []) == 0
+
+
+def test_folder_session_title_is_order_independent(tmp_path):
+    """'제목 바꾸고 담기'와 '담고 제목 바꾸기'의 결과가 같아야 한다.
+
+    폴더의 세션 항목은 스냅샷이 아니라 참조라, 담은 시점과 무관하게 현재 제목을 따른다.
+    """
+    def build(rename_first: bool):
+        db = ArchiveDB(tmp_path / f"{rename_first}.db")
+        db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+        f = db.create_folder("F")
+        if rename_first:
+            db.set_session_title("s1", "내가 지은 제목")
+            db.add_to_folder(f, "session", "s1")
+        else:
+            db.add_to_folder(f, "session", "s1")
+            db.set_session_title("s1", "내가 지은 제목")
+        return db.folder_items(f)[0]
+
+    a, b = build(True), build(False)
+    assert a["headline"] == b["headline"] == "내가 지은 제목"
+    assert a["original_headline"] == b["original_headline"] == "내가 지은 제목"
+
+
+def test_folder_alias_outranks_session_title_and_both_reset(tmp_path):
+    """별칭 > 세션 제목 > 첫 턴 요약 순으로 이기고, 각각 비우면 한 단계씩 되돌아간다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+    f = db.create_folder("F")
+    db.add_to_folder(f, "session", "s1")
+    db.set_item_alias(f, "session", "s1", "폴더용 별칭")
+    db.set_session_title("s1", "내가 지은 제목")
+
+    it = db.folder_items(f)[0]
+    assert it["headline"] == "폴더용 별칭"            # 별칭이 최우선
+    assert it["original_headline"] == "내가 지은 제목"  # 별칭을 떼면 보일 이름
+
+    db.set_item_alias(f, "session", "s1", None)
+    assert db.folder_items(f)[0]["headline"] == "내가 지은 제목"
+
+    db.set_session_title("s1", None)
+    assert db.folder_items(f)[0]["headline"] == "원래 첫 질문"
+
+
+def test_folder_alias_is_per_folder(tmp_path):
+    """같은 세션을 두 폴더에 담고 한쪽에만 별칭을 붙이면, 다른 폴더는 영향받지 않는다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+    f1, f2 = db.create_folder("F1"), db.create_folder("F2")
+    db.add_to_folder(f1, "session", "s1"); db.add_to_folder(f2, "session", "s1")
+    db.set_session_title("s1", "공통 제목")
+    db.set_item_alias(f1, "session", "s1", "F1 전용")
+
+    assert db.folder_items(f1)[0]["headline"] == "F1 전용"
+    assert db.folder_items(f2)[0]["headline"] == "공통 제목"
+
+
+def test_folder_turn_item_ignores_session_title(tmp_path):
+    """턴 항목의 제목은 그 턴의 요약/질문이다 — 세션 제목을 바꿔도 영향받지 않는다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", q="턴 자신의 질문")); db.commit()
+    f = db.create_folder("F")
+    db.add_to_folder(f, "turn", "s1:u1")
+    db.set_session_title("s1", "내가 지은 세션 제목")
+    assert db.folder_items(f)[0]["headline"] == "턴 자신의 질문"

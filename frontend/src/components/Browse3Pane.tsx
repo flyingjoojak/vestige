@@ -147,20 +147,26 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     }
   }
 
-  // 세션 제목 바꾸기. 비우면 기본 제목(첫 턴 요약)으로 되돌아간다.
+  // 세션 제목 바꾸기. 지금 보이는 제목을 채워 열어 고쳐 쓰게 하고, 비우면 기본 제목으로 되돌아간다.
   async function renameSession() {
     if (!sel) return
-    const cur = detail?.title ?? selGroup?.label ?? ""
+    const auto = selGroup?.label ?? ""          // 자동 제목(첫 턴 요약)
+    const cur = detail?.title || auto           // 지금 화면에 보이는 제목
     const name = await prompt({
       title: t("browse.renameSession"), description: t("browse.renameSessionHint"),
-      defaultValue: detail?.title ?? "", placeholder: cur, confirmLabel: t("common.save"),
+      defaultValue: cur, placeholder: auto, confirmLabel: t("common.save"),
       allowEmpty: true,   // 비워서 저장 = 기본 제목으로 되돌리기(백엔드 계약)
     })
     if (name == null) return
+    // 자동 제목을 그대로 둔 채 확인만 누른 경우엔 저장하지 않는다. 저장해버리면 그 문자열이
+    // 고정돼, 나중에 요약(정제)이 좋아져도 옛 제목이 계속 남는다.
+    if (!detail?.title && name === auto) return
     try {
       await setSessionTitle(sel, name)
       loadGroups()
-      getSession(sel).then(setDetail).catch(() => {})
+      getSession(sel).then(setDetail).catch((e) => {
+        flashMsg({ ok: false, text: errText(t, e, "browse.loadFailed") })
+      })
     } catch (e) {
       flashMsg({ ok: false, text: errText(t, e, "settings.saveFailed") })
     }
