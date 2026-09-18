@@ -87,10 +87,15 @@ trust a field to exist.
 - **Database changes:** the user's `archive.db` is a permanent asset. Never edit `_SCHEMA` in a way
   that breaks existing DBs - add a versioned, idempotent step to `_MIGRATIONS` in `vestige/store.py`
   instead (see the comment there). Migrations only ever go forward and are appended to the end of
-  the list.
+  the list. Adding something to `_SCHEMA` **and** a migration is the rule, not a choice: a schema-only
+  change silently gives new installs and upgraded installs different databases, and only the latter
+  breaks. `test_migrated_db_schema_matches_fresh_schema` guards this - keep it green.
 - **Style:** small, focused files; explicit error handling; no secrets. Match the surrounding code.
 - **Commits:** conventional prefixes (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
 - **PRs:** describe what changed and why, and note how you verified it. Keep unrelated changes out.
+- **Link the issue:** put `Closes #123` (or `Fixes #123`) in the PR body when it resolves one. GitHub
+  then closes the issue on merge and records which PR did it - closing by hand leaves no trail, so
+  later you cannot tell when a feature shipped or in which release.
 
 ## Scope
 
