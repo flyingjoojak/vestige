@@ -72,10 +72,12 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     if (copyTimer.current) clearTimeout(copyTimer.current)
     if (msgTimer.current) clearTimeout(msgTimer.current)
   }, [])
-  function flashMsg(m: { ok: boolean; text: string }) {
+  // sticky=true 면 자동으로 지우지 않는다. 데이터가 영구히 사라졌다는 고지를 4초 토스트로
+  // 흘려보내면, 못 본 사용자는 그 사실을 다시 확인할 방법이 없다.
+  function flashMsg(m: { ok: boolean; text: string }, sticky = false) {
     setResumeMsg(m)
     if (msgTimer.current) clearTimeout(msgTimer.current)
-    msgTimer.current = setTimeout(() => setResumeMsg(null), 4000)
+    if (!sticky) msgTimer.current = setTimeout(() => setResumeMsg(null), 4000)
   }
 
   // 세션 재개 커맨드(출처별: claude --resume / codex resume). 상세 로드 전엔 판단 보류.
@@ -140,9 +142,11 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         // 부분 복구를 '완료'로 표시하면 사용자는 뒷부분이 왜 없는지 알 수 없다.
         flashMsg(r.partial
           ? { ok: false, text: errText(t, r, "browse.restorePartial") }
-          : { ok: true, text: t("browse.restoreDone") })
-        const d = await getSession(sel)
-        setDetail(d)
+          : { ok: true, text: t("browse.restoreDone") }, r.partial === true)
+        // 상세 재조회는 따로 감싼다 — 실패해도 위 유실 고지를 덮어쓰지 않게.
+        try {
+          setDetail(await getSession(sel))
+        } catch { /* 목록은 그대로 두고 고지를 유지 */ }
       } else {
         flashMsg({ ok: false, text: errText(t, r, "browse.restoreFailed") })
       }

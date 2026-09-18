@@ -22,7 +22,9 @@ import contextlib
 import gzip
 import json
 import logging
+import os
 import re
+import time
 import zlib
 from pathlib import Path
 
@@ -82,13 +84,56 @@ def _ensure_marker(root: Path) -> None:
     m.write_text("vestige raw archive\n", encoding="utf-8")
 
 
+def _lost_marker(mirror: Path) -> Path:
+    """이 보존본에서 '확정 구간'이 유실됐다는 표시. 있으면 복구는 반드시 부분 복구로 보고한다."""
+    return mirror.with_name(mirror.name + ".lost")
+
+
 def raw_path(source: str, session_id: str) -> Path:
     """이 세션의 압축 원본 경로. source/session_id 는 파일명·UUID에서만 나와 경로이탈 위험이
     없지만, 방어적으로 한 번 더 sanitize."""
     return raw_dir() / _sanitize(source) / f"{_sanitize(session_id)}.jsonl.gz"
 
 
-def mirror_file(db, path: str | Path, source: str) -> int:
+def _repair_mirror(db, out: Path, log_fn=None) -> bool:
+    """보존본이 손상됐으면 고친다. 반환: True 면 보존본을 비웠으니 소스를 처음부터 다시 담아야 한다.
+
+    이 함수가 존재하는 이유는 하나다 — **잘라낸 바이트와 커서가 따로 놀면 안 된다.**
+    이 파일의 유실은 지금까지 전부 그 불변식이 깨져서 났다. 잘라낸 구간은 "아직 안 읽은 것"이
+    아니라 "이미 읽었는데 보존에 실패한 것"이라, 커서를 그대로 두면 소스에 멀쩡히 남아 있는
+    대화가 영영 안 돌아온다(그리고 남은 파일은 gzip 으로 온전해서 '복구 완료'로 보고된다).
+
+    mirror_file 은 소스 파일이 있을 때만 불리므로, 확정 구간이 깨졌으면 보존본을 통째로 버리고
+    소스에서 다시 만드는 게 항상 가능하고 또 가장 안전하다(결과: 보존본 ≡ 소스).
+    """
+    if not out.exists():
+        return False
+    cur_size = out.stat().st_size
+    # 기록과 크기가 정확히 같을 때만 손대지 않는다(빠른 경로). 기록이 없거나(업그레이드 직후),
+    # 더 크거나(중단된 append), 더 작으면(전원 차단·동기화) 파일을 직접 스캔해 판단한다.
+    ok = db.mirror_ok_bytes(str(out))
+    if ok == cur_size:
+        return False
+    _, good_end, intact = _walk_members(out.read_bytes(), out.name)
+    if ok is not None and good_end < ok:
+        # 이미 보존에 성공했던 구간이 깨졌다 → 소스에서 전체를 다시 담는다.
+        msg = f"보존본 손상({ok - good_end}바이트) - 소스에서 전체를 다시 보존합니다: {out.name}"
+        if log_fn:   # 색인 로그 규약: "ERROR " 접두사만 /api/index/status 로 UI 에 올라간다
+            log_fn(f"ERROR raw mirror {msg}")
+        logger.warning("%s", msg)
+        with open(out, "r+b") as f:
+            f.truncate(0)
+        _lost_marker(out).unlink(missing_ok=True)   # 다시 온전해질 것이므로 표시도 지운다
+        return True
+    if not intact and good_end < cur_size:
+        # 커서가 아직 지나가지 않은 구간(중단된 append)이라, 걷어내도 아래 append 가 다시 채운다.
+        logger.warning("보존본 꼬리 %d바이트를 걷어냅니다(중단된 append): %s", cur_size - good_end, out.name)
+        with open(out, "r+b") as f:
+            f.truncate(good_end)
+    return False
+
+
+def mirror_file(db, path: str | Path, source: str, log_fn=None) -> int:
     """path 의 새 바이트(마지막 미러링 이후분)를 세션별 압축 원본에 append.
 
     반환: 이번에 미러링한 바이트 수(0이면 새 바이트 없음 — 멱등).
@@ -109,7 +154,13 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     if base_for_conflict(path) is not None:
         return 0
     size = Path(path).stat().st_size
+    sid = session_id_for(path)
+    out = raw_path(source, sid)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_marker(raw_dir())
     mirrored = db.get_raw_cursor(path)
+    if _repair_mirror(db, out, log_fn):
+        mirrored = 0        # 보존본을 버렸으니 소스를 처음부터 다시 담는다
     if mirrored > size:
         mirrored = 0
     if mirrored == size:
@@ -119,30 +170,15 @@ def mirror_file(db, path: str | Path, source: str) -> int:
         chunk = f.read()
     if not chunk:
         return 0
-    sid = session_id_for(path)
-    out = raw_path(source, sid)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_marker(raw_dir())
-    # 중단된 append 의 잔재를 걷어낸다. 앞서 죽었다면 꼬리에 트레일러 없는 gzip 멤버가 남아 있고,
-    # 그대로 이어 쓰면 읽을 때 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지' 못 읽는다.
-    #
-    # 기준값의 키는 반드시 '이 보존본 파일 경로'다. 소스 로그 경로로 키를 잡으면(예전 구현)
-    # 한 보존본에 소스 파일이 둘 붙거나(복구본·충돌본) 보존소를 옮겼다 되돌릴 때 **남의 숫자로
-    # 멀쩡한 파일을 잘라낸다**. 실측으로 전손(510→142바이트, 복원 0바이트)을 확인했다.
-    # 기록해둔 크기와 파일이 정확히 같을 때만 '손 안 대도 된다'고 판단한다(빠른 경로).
-    # 조금이라도 어긋나면 — 기록이 없거나(업그레이드 직후), 파일이 더 크거나(중단된 append),
-    # 더 작거나(전원 차단·동기화로 꼬리 유실) — **파일을 직접 스캔해** 마지막 온전한 멤버의
-    # 끝을 찾아 거기까지만 남긴다. DB 숫자를 믿고 자르면 그 숫자가 틀린 순간 데이터를 잃는다.
-    if out.exists():
-        cur_size = out.stat().st_size
-        if db.mirror_ok_bytes(str(out)) != cur_size:
-            _, good_end, intact = _walk_members(out.read_bytes(), out.name)
-            if not intact and good_end < cur_size:
-                logger.warning("보존본 꼬리 %d바이트를 걷어냅니다(손상): %s", cur_size - good_end, out.name)
-                with open(out, "r+b") as f:
-                    f.truncate(good_end)
-    with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
-        gz.write(chunk)
+    with open(out, "ab") as raw_f:
+        with gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
+            gz.write(chunk)
+        # 디스크까지 내려보낸 뒤에야 크기를 '정상'으로 기록한다. 이게 없으면 전원이 나갔을 때
+        # DB 커밋(fsync)만 살아남고 .gz 꼬리는 0으로 채워진 채 크기만 맞는 상태가 되어,
+        # 빠른 경로가 '기록==크기니 온전하다'고 오판하고 그 뒤 영구히 검사하지 않는다.
+        with contextlib.suppress(OSError):
+            raw_f.flush()
+            os.fsync(raw_f.fileno())
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
@@ -178,6 +214,8 @@ def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | No
     if not p.exists():
         return None
     data, _end, intact = _walk_members(p.read_bytes(), p.name)
+    if intact and _lost_marker(p).exists():
+        intact = False       # gzip 으로는 멀쩡해도 가운데가 뚫린 상태 — 완료로 보고하면 안 된다
     return data, intact
 
 
@@ -256,6 +294,7 @@ def enforce_quota(max_bytes: int, db=None) -> int:
         dropped.append((p.parent.name, p.name[: -len(".jsonl.gz")]))
         paths.append(str(p))
         p.unlink(missing_ok=True)
+        _lost_marker(p).unlink(missing_ok=True)   # 보존본을 지웠으면 유실 표시도 함께
         removed += 1
     if db is not None:
         by_source: dict[str, list[str]] = {}

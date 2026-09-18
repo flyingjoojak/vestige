@@ -708,6 +708,9 @@ def test_repairs_when_mirror_shrank_below_record(tmp_path, monkeypatch):
 
     got = R.read_mirror("claude-code", sid)
     assert got is not None
-    assert b'{"n":0}\n' in got
-    for i in range(2, 6):                                 # 이후 기록분은 전부 읽혀야 한다
+    # n=1 까지 포함해 '전부' 들어 있어야 한다. 손상 구간을 잘라내기만 하고 커서를 그대로 두면
+    # 소스에 멀쩡히 남아 있는 n=1 이 영영 안 돌아오고, 남은 파일은 gzip 으로 온전해서
+    # '복구 완료'로 보고된다(가운데가 뚫린 대화). range(2,6) 으로 두면 그 유실을 지나친다.
+    for i in range(6):
         assert b'{"n":%d}\n' % i in got, i
+    assert R.read_mirror_checked("claude-code", sid)[1] is True   # 되살렸으니 온전하다
