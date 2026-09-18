@@ -532,3 +532,45 @@ def test_folder_session_headline_prefers_unfolded_turn(tmp_path):
     it = db.folder_items(f)[0]
     assert it["hidden"] is True               # 전 턴이 접히면 세션도 접힘
     assert it["headline"] == "접을 첫 질문"    # 다 접혔으면 그중 첫 턴(대안 없음)
+
+
+def test_reorder_folder_pushes_unlisted_items_behind(tmp_path):
+    """주어진 목록에 없는 항목은 뒤로 밀려 position 이 충돌하지 않아야 한다.
+
+    예전엔 주어진 것에만 1..n 을 매겨 남은 항목과 같은 번호가 생겼고, 정렬이 added_at
+    타이브레이크 운에 맡겨졌다(docstring 은 '건드리지 않아 뒤에 남는다'고 약속했지만 아니었다).
+    """
+    db = ArchiveDB(tmp_path / "a.db")
+    for i in range(4):
+        db.upsert_turn(_turn(f"s1:u{i}"))
+    db.commit()
+    f = db.create_folder("F")
+    for i in range(4):
+        db.add_to_folder(f, "turn", f"s1:u{i}")
+
+    # 뒤 두 개만 순서를 뒤집어 보낸다(앞 두 개는 목록에 없음)
+    changed = db.reorder_folder(f, [("turn", "s1:u3"), ("turn", "s1:u2")])
+    assert changed == 2
+
+    items = db.folder_items(f)
+    assert [i["ref"] for i in items] == ["s1:u3", "s1:u2", "s1:u0", "s1:u1"]
+    positions = [i["position"] for i in items]
+    assert positions == sorted(positions) and len(set(positions)) == 4   # 충돌 없음
+
+
+def test_reorder_folder_reports_zero_when_items_gone(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    f = db.create_folder("F")
+    assert db.reorder_folder(f, [("turn", "없는턴")]) == 0
+
+
+def test_remove_from_folder_reports_rowcount(tmp_path):
+    """0을 돌려줘야 '눌렀는데 아무 일도 안 일어남'을 화면이 구분할 수 있다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    f = db.create_folder("F")
+    db.add_to_folder(f, "turn", "s1:u1")
+    assert db.remove_from_folder(f, "turn", "s1:u1") == 1
+    assert db.remove_from_folder(f, "turn", "s1:u1") == 0      # 이미 없음
+    assert db.remove_from_folder(f, "session", "s1") == 0      # 틀린 kind

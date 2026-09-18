@@ -692,18 +692,38 @@ class ArchiveDB:
             (alias or None, folder_id, kind, ref))
         self.conn.commit()
 
-    def reorder_folder(self, folder_id: int, order: list[tuple[str, str]]) -> None:
+    def reorder_folder(self, folder_id: int, order: list[tuple[str, str]]) -> int:
         """폴더 안 항목 순서를 통째로 다시 매긴다. order = [(kind, ref), …] 화면에 보이는 순서.
-        목록에 없는 항목(그 사이 다른 창에서 추가된 것 등)은 건드리지 않아 뒤쪽에 남는다."""
-        self.conn.executemany(
-            "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
-            [(i, folder_id, kind, ref) for i, (kind, ref) in enumerate(order, start=1)])
-        self.conn.commit()
+        반환: 실제로 갱신된 행 수(0이면 그 사이 항목이 사라진 것 — 호출부가 구분할 수 있게).
 
-    def remove_from_folder(self, folder_id: int, kind: str, ref: str) -> None:
-        self.conn.execute(
+        목록에 없는 항목(그 사이 다른 창에서 담은 것 등)은 주어진 목록 뒤로 밀어 번호를 잇는다.
+        예전엔 주어진 것에만 1..n 을 매겨, 남은 항목의 position 과 정면 충돌했다
+        (같은 번호가 둘 생겨 정렬이 added_at 타이브레이크 운에 맡겨졌다).
+        """
+        changed = 0
+        for i, (kind, ref) in enumerate(order, start=1):
+            cur = self.conn.execute(
+                "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
+                (i, folder_id, kind, ref))
+            changed += cur.rowcount or 0
+        given = set(order)
+        rest = [(r["kind"], r["ref"]) for r in self.conn.execute(
+            "SELECT kind, ref FROM folder_items WHERE folder_id=? "
+            "ORDER BY (position IS NULL), position, added_at", (folder_id,))
+            if (r["kind"], r["ref"]) not in given]
+        if rest:
+            self.conn.executemany(
+                "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
+                [(len(order) + i, folder_id, k, r) for i, (k, r) in enumerate(rest, start=1)])
+        self.conn.commit()
+        return changed
+
+    def remove_from_folder(self, folder_id: int, kind: str, ref: str) -> int:
+        """반환: 지운 행 수(0이면 이미 없던 항목 — '눌렀는데 안 먹힌다'를 구분하려면 필요)."""
+        cur = self.conn.execute(
             "DELETE FROM folder_items WHERE folder_id=? AND kind=? AND ref=?", (folder_id, kind, ref))
         self.conn.commit()
+        return cur.rowcount or 0
 
     def folder_items(self, folder_id: int) -> list[dict]:
         """폴더에 '직접' 담긴 항목(하위 폴더 제외). 표시용 헤드라인을 붙여 돌려준다.

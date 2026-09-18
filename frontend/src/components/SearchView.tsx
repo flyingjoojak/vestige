@@ -287,10 +287,12 @@ export function SearchView() {
               )
             }
             return (
-              <div key={h.id} role="button" tabIndex={0}
-                onClick={() => setSel({ session: h.session_full, turn: h.id })}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSel({ session: h.session_full, turn: h.id }) } }}
-                className={`group w-full cursor-pointer rounded-lg border p-3 text-left transition-colors ${active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+              // 카드 전체가 클릭 영역이지만 role="button" 을 쓰지 않는다 — ARIA 의 button 은
+              // 자식을 presentational 로 취급해, 안에 있는 담기·접기 버튼이 보조기술에 노출되지
+              // 않는다. Browse3Pane·FolderView 와 같은 방식: 바깥은 평범한 div, 열기 동작은
+              // 아래쪽 투명 버튼(after:inset-0)이 맡고, 액션 버튼은 relative z-10 으로 그 위에 둔다.
+              <div key={h.id}
+                className={`group relative w-full rounded-lg border p-3 text-left transition-colors ${active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                 <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
                   {hasMultipleSources && h.source && (
                     <span className="rounded bg-muted px-1 py-0.5 text-[9.5px] font-medium text-foreground/70">{sourceLabel(h.source)}</span>
@@ -303,18 +305,20 @@ export function SearchView() {
                   <span>{fmtTime(h.timestamp)}</span>
                   <span className="opacity-40">·</span>
                   <span>{t("search.session", { n: h.session })}</span>
-                  <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <span className="relative z-10 ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     <AddToFolder target={{ turnId: h.id }} />
                     <button type="button" onClick={(e) => fold(h.id, true, e)}
                       title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
-                      className="inline-flex items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
+                      className="inline-flex min-h-6 min-w-6 items-center justify-center rounded transition-colors hover:bg-muted hover:text-foreground">
                       <ChevronsDownUp className="size-3.5" />
                     </button>
                   </span>
                 </div>
-                <div className="line-clamp-2 text-[13.5px] font-medium leading-snug text-balance">
+                {/* 카드 전체를 덮는 열기 버튼. 텍스트가 곧 접근 가능한 이름이 된다. */}
+                <button type="button" onClick={() => setSel({ session: h.session_full, turn: h.id })}
+                  className="line-clamp-2 block w-full text-left text-[13.5px] font-medium leading-snug text-balance after:absolute after:inset-0 after:content-['']">
                   {h.summary || h.question || t("search.untitled")}
-                </div>
+                </button>
               </div>
             )
           })}

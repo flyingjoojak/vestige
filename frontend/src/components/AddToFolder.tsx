@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
-import { Check, FolderPlus, Loader2 } from "lucide-react"
+import { Check, FolderPlus, Loader2, X } from "lucide-react"
 import { addToFolder, createFolder, listFolders, type FolderTarget } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -99,7 +99,15 @@ export function AddToFolder({ target, className, showLabel }: {
     setBusy(true)
     try {
       const r = await createFolder(name)
-      await addToFolder(r.id, target)
+      try {
+        await addToFolder(r.id, target)
+      } catch (e) {
+        // 부분 실패: 폴더는 만들어졌고 담기만 실패했다. 그냥 '저장 실패'로 뭉개면
+        // 사용자는 빈 폴더가 왜 생겼는지 알 수 없다.
+        setFolders(null)
+        setErr(errText(t, e, "folders.createdButNotAdded"))
+        return
+      }
       setFolders(null)          // 다음에 열 때 새 목록으로
       flashDone(name)
     } catch (e) {
@@ -124,6 +132,18 @@ export function AddToFolder({ target, className, showLabel }: {
         {done ? <Check className="size-3.5 text-primary" /> : <FolderPlus className="size-3.5" />}
         {showLabel && (done ? t("folders.addedTo", { name: done }) : t("folders.addTo"))}
       </button>
+      {/* 패널이 닫힌 상태의 실패는 여기서 보여준다. '새 폴더 만들어 담기'는 모달을 띄우려고
+          드롭다운을 먼저 닫으므로, 에러를 패널 안에만 두면 아무 데도 표시되지 않는다
+          (폴더는 만들어졌는데 담기만 실패한 부분 실패가 특히 조용해진다). */}
+      {err && !open && (
+        <span role="alert" className="ml-1 inline-flex items-center gap-1 align-middle text-[11px] text-destructive">
+          {err}
+          <button type="button" onClick={(e) => { e.stopPropagation(); setErr("") }}
+            aria-label={t("common.close")} className="rounded p-0.5 hover:bg-destructive/10">
+            <X className="size-3" />
+          </button>
+        </span>
+      )}
       {open && pos && createPortal(
         <>
           {/* 바깥 클릭 시 닫힘(장식용, AT엔 숨김) */}

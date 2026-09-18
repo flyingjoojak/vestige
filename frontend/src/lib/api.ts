@@ -131,13 +131,15 @@ export type FolderTarget = { turnId?: string; sessionId?: string }
 const targetBody = (t: FolderTarget) => (t.turnId ? { turn_id: t.turnId } : { session_id: t.sessionId })
 export const addToFolder = (folderId: number, t: FolderTarget) =>
   postJSON<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
+// changed=0 이면 '이미 없던 항목'이다 — ok 만 보면 아무 일도 안 했는데 성공으로 보인다.
 export const removeFromFolder = (folderId: number, t: FolderTarget) =>
-  postJSON<{ ok: boolean }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
+  postJSON<{ ok: boolean; changed: number }>("/api/folders/remove", { folder_id: folderId, ...targetBody(t) })
 // 폴더 안에서만 쓰는 표시 이름(원본 제목은 그대로). 빈 문자열이면 원래 제목으로 되돌린다.
 export const renameFolderItem = (folderId: number, t: FolderTarget, alias: string) =>
   postJSON<{ ok: boolean }>("/api/folders/item/rename", { folder_id: folderId, ...targetBody(t), alias })
 export const reorderFolder = (folderId: number, order: { kind: "turn" | "session"; ref: string }[]) =>
-  postJSON<{ ok: boolean; count: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
+  // count = 시도한 개수, changed = 실제 갱신된 개수. 다르면 그 사이 항목 구성이 바뀐 것이다.
+  postJSON<{ ok: boolean; count: number; changed: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
 
 export const listHidden = (limit = 200) =>
   getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)

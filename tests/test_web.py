@@ -600,3 +600,58 @@ def test_graph3d_data_returns_empty_without_vectors(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "make_index", lambda *a, **k: (_ for _ in ()).throw(AssertionError("불리면 안 됨")))
     monkeypatch.setattr(web, "vector_count", lambda *a, **k: 0)
     assert web._graph3d_data() == {"points": [], "clusters": [], "method": None, "dims": 3}
+
+
+# ── /api/config 신규 키 검증 ─────────────────────────────────
+# 거부 경로는 write_config 전에 반환하므로, 유효값 확인도 '잘못된 키 하나를 끼워'
+# 조기 반환시켜 검사한다 — 실제 설정 파일·환경변수를 건드리지 않게.
+def test_config_put_rejects_bad_raw_archive_max_mb():
+    """잘못된 값을 통과시키면 indexer 의 int() 에서 조용히 터지고, 사용자는 상한을
+    켰다고 믿는데 영구히 미적용인 상태가 된다."""
+    for bad in ("abc", "-5", "1.5"):
+        r = web.api_config_put({"VESTIGE_RAW_ARCHIVE_MAX_MB": bad})
+        assert r["ok"] is False, bad
+        assert r["code"] == "invalid_config_value"
+        assert "VESTIGE_RAW_ARCHIVE_MAX_MB" in r["invalid"], bad
+
+
+def test_config_put_rejects_unwritable_raw_archive_dir(tmp_path):
+    """쓸 수 없는 경로를 저장하면 이후 모든 미러링이 실패하는데, 설정 화면에는
+    그 경로가 멀쩡히 적혀 있다."""
+    afile = tmp_path / "notadir"
+    afile.write_text("x", encoding="utf-8")          # 파일을 디렉터리로 지정
+    r = web.api_config_put({"VESTIGE_RAW_ARCHIVE_DIR": str(afile)})
+    assert r["ok"] is False and "VESTIGE_RAW_ARCHIVE_DIR" in r["invalid"]
+
+
+def test_config_put_accepts_creatable_raw_archive_dir(tmp_path):
+    good = tmp_path / "raw" / "nested"               # 아직 없지만 만들 수 있는 경로
+    r = web.api_config_put({
+        "VESTIGE_RAW_ARCHIVE_DIR": str(good),
+        "VESTIGE_INDEX_MODE": "bogus",               # 조기 반환용(저장까지 가지 않게)
+    })
+    assert r["ok"] is False
+    assert "VESTIGE_RAW_ARCHIVE_DIR" not in r["invalid"]   # 경로는 유효 판정
+    assert r["invalid"] == ["VESTIGE_INDEX_MODE"]
+    assert good.is_dir()                             # 검증 과정에서 만들어진다
+    assert not (good / ".vestige-write-test").exists()     # 쓰기 시험 흔적은 안 남긴다
+
+
+def test_config_put_allows_clearing_raw_archive_max():
+    """빈 값 = 무제한(설정 UI 계약) — 거부하면 상한을 끌 수가 없다."""
+    r = web.api_config_put({"VESTIGE_RAW_ARCHIVE_MAX_MB": "", "VESTIGE_INDEX_MODE": "bogus"})
+    assert "VESTIGE_RAW_ARCHIVE_MAX_MB" not in r["invalid"]
+
+
+def test_raw_size_cached_reuses_value_within_ttl(monkeypatch):
+    """설정 화면이 3초 폴링인데 보존소 전체를 매번 rglob+stat 하면 안 된다."""
+    calls = []
+    from vestige import raw_archive
+    monkeypatch.setattr(raw_archive, "mirror_size_bytes", lambda: calls.append(1) or 123)
+    web._raw_size_cache.update(at=0.0, n=0)
+    assert web._raw_size_cached() == 123
+    assert web._raw_size_cached() == 123
+    assert len(calls) == 1                  # 두 번째는 캐시
+    web._raw_size_cache["at"] = 0.0         # 만료시키면 다시 센다
+    assert web._raw_size_cached() == 123
+    assert len(calls) == 2
