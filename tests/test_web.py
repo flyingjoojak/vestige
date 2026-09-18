@@ -568,3 +568,35 @@ def test_api_stats_uses_ttl_cache(monkeypatch):
 class _Boom:
     def __len__(self):
         raise AssertionError("make_index() 가 불리면 안 된다")
+
+
+def test_graph3d_data_does_not_load_vector_matrix_for_staleness_check(tmp_path, monkeypatch):
+    """캐시가 신선하면 벡터 행렬을 올리지 않는다.
+
+    이 함수는 예열 스레드가 3분마다 + /api/graph3d 요청마다 부른다. 낡았는지 판정할 개수
+    하나 때문에 make_index() 로 행렬(수십 MB)을 통째로 올리고 버리던 것을 막는다.
+    """
+    import json
+    from vestige import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    (tmp_path / "graph3d_cache.json").write_text(json.dumps({
+        "n": 100, "v": web._GRAPH3D_VER,
+        "data": {"points": [{"id": "s1:u1"}], "clusters": [], "method": "umap", "dims": 3},
+        "members": [["s1:u1"]],
+    }), encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("make_index() 가 불리면 안 된다")
+    monkeypatch.setattr(web, "make_index", boom)
+    monkeypatch.setattr(web, "vector_count", lambda *a, **k: 100)   # 변화 없음 → 재계산 불필요
+
+    out = web._graph3d_data()
+    assert out["points"] == [{"id": "s1:u1"}]
+
+
+def test_graph3d_data_returns_empty_without_vectors(tmp_path, monkeypatch):
+    from vestige import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(web, "make_index", lambda *a, **k: (_ for _ in ()).throw(AssertionError("불리면 안 됨")))
+    monkeypatch.setattr(web, "vector_count", lambda *a, **k: 0)
+    assert web._graph3d_data() == {"points": [], "clusters": [], "method": None, "dims": 3}
