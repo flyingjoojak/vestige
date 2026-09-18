@@ -9,7 +9,15 @@ export function loadRecentQueries(): string[] {
     const raw = localStorage.getItem(KEY)
     if (!raw) return []
     const v = JSON.parse(raw)
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x).slice(0, MAX) : []
+    if (!Array.isArray(v)) return []
+    // 읽을 때 정규화한다. 우리 쓰기 경로는 늘 trim 하지만 localStorage 는 사용자가 직접
+    // 고칠 수 있는 신뢰 경계다 — 공백만 있는 값이 칩으로 뜨거나, "foo" 와 " foo " 가
+    // 서로 다른 항목으로 공존하는 걸 막는다.
+    const cleaned = v
+      .filter((x): x is string => typeof x === "string")
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0)
+    return [...new Set(cleaned)].slice(0, MAX)
   } catch {
     return []
   }
