@@ -236,7 +236,6 @@
     "actions": "도구 실행 {{count}}개",
     "sessionLabel": "세션 {{id}}",
     "turnCount": "대화 {{count}}개",
-    "error": "오류: {{err}}",
     "loadPrev": "이전 {{count}}개 더보기",
     "loadNext": "다음 {{count}}개 더보기",
     "folded": "접힘",
@@ -246,7 +245,8 @@
     "foldSession": "세션 전체 접기",
     "foldedCount": "접힘 {{count}}개",
     "foldFailed": "접기에 실패했어요",
-    "foldSessionConfirm": "이 세션의 모든 턴을 접을까요? 접으면 검색·지도에서 빠지고, 세션을 열어 언제든 다시 펼 수 있어요."
+    "foldSessionConfirm": "이 세션의 모든 턴을 접을까요? 접으면 검색·지도에서 빠지고, 세션을 열어 언제든 다시 펼 수 있어요.",
+    "loadFailed": "대화를 불러오지 못했어요"
   },
   "graph": {
     "title": "3D 의미 지도",
@@ -302,7 +302,10 @@
     "sourceCount": "{{n}}개",
     "sourceFilterAria": "검색 소스",
     "foldTurn": "이 턴 접기(검색에서 빼기)",
-    "foldFailed": "접기에 실패했어요"
+    "foldFailed": "접기에 실패했어요",
+    "recentQueries": "최근 검색",
+    "clearRecent": "지우기",
+    "recentSessions": "최근 세션"
   },
   "onboarding": {
     "title": "임베딩 모델 선택",

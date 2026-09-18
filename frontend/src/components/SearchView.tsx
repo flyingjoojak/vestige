@@ -8,11 +8,12 @@ import { ChatThread } from "./ChatThread"
 import { SourceFilter } from "./SourceFilter"
 import { AddToFolder } from "./AddToFolder"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
-import { getSources, hideTurn, search, unhideTurn, type SearchMode, type SourceOption } from "@/lib/api"
+import { getSources, hideTurn, listSessions, search, unhideTurn, type SearchMode, type SourceOption } from "@/lib/api"
 import { fmtTime } from "@/lib/format"
 import { sourceLabel } from "@/lib/source"
 import { errText } from "@/lib/errors"
-import type { Hit } from "@/lib/types"
+import { clearRecentQueries, loadRecentQueries, pushRecentQuery } from "@/lib/recentQueries"
+import type { Hit, SessionRow } from "@/lib/types"
 
 // 날짜 input 클릭 시 네이티브 달력을 강제로 연다(웹뷰에서 안 뜨는 문제 대응).
 function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTMLInputElement>) {
@@ -36,6 +37,9 @@ export function SearchView() {
   const [hits, setHits] = useState<Hit[]>([])
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle")
   const [searchErr, setSearchErr] = useState("")
+  // 검색 전 화면(idle)에 띄울 것들 — 빈 검색창만 두면 '뭘 검색해야 하나'로 막힌다.
+  const [recent, setRecent] = useState<string[]>(() => loadRecentQueries())
+  const [recentSessions, setRecentSessions] = useState<SessionRow[] | null>(null)
   // 선택한 결과 → 오른쪽 채팅 스레드로 표시(열고닫기 없이 클릭 전환).
   const [sel, setSel] = useState<{ session: string; turn: string } | null>(null)
   // 검색 소스 필터: 데이터 있는 출처만 목록에 뜬다(1종뿐이면 필터 자체를 숨김).
@@ -77,8 +81,19 @@ export function SearchView() {
       setSrcOpts(r.sources)
       setSrcSel(new Set(r.sources.map((s) => s.source)))   // 기본=전체 선택
     }).catch(() => { /* 소스 목록 실패 시 필터만 숨김(검색은 전체로 동작) */ })
+    // 검색 전 화면용 최근 세션. 실패하면 그 블록만 안 뜨고 검색은 그대로 된다(장식용 데이터).
+    listSessions()
+      .then((r) => { if (alive) setRecentSessions(r.sessions.filter((s) => !s.subagent).slice(0, 6)) })
+      .catch(() => { if (alive) setRecentSessions([]) })
     return () => { alive = false }
   }, [])
+
+  // 검색 전에는 오른쪽 패널을 '고르세요'로 두지 않고 가장 최근 세션의 마지막 대화를 띄운다.
+  // 마운트뿐 아니라 '검색어를 지웠을 때'(state 가 idle 로 돌아오고 sel 이 풀릴 때)도 다시 채운다.
+  useEffect(() => {
+    if (state !== "idle" || sel != null || !recentSessions?.length) return
+    setSel({ session: recentSessions[0].session, turn: "" })
+  }, [state, sel, recentSessions])
 
   const hasMultipleSources = srcOpts.length > 1
 
@@ -102,10 +117,12 @@ export function SearchView() {
       }
       const list = r.hits || []
       setHits(list); setSearchErr(""); setState("done"); setFolded(new Set())
+      setRecent(pushRecentQuery(term))   // 성공한 검색만 기록(오타·실패는 안 남김)
       setSel(list.length ? { session: list[0].session_full, turn: list[0].id } : null)   // 첫 결과 자동 선택
-    } catch {
+    } catch (e) {
       if (myId !== reqId.current) return
-      setHits([]); setSearchErr(""); setState("error"); setSel(null)   // 실패는 '결과 없음'과 구분
+      // 실패는 '결과 없음'과 구분. 원인을 버리면 임베더 실패·500·네트워크 끊김이 다 똑같아 보인다.
+      setHits([]); setSearchErr(errText(t, e, "search.errorTitle")); setState("error"); setSel(null)
     }
   }
   function pick(e: string) { setQ(e); run(e) }
@@ -188,17 +205,68 @@ export function SearchView() {
           )}
 
           {state === "idle" && (
-            <div className="py-10 text-center text-muted-foreground">
-              <Magnifier className="mx-auto mb-3 size-8 text-muted-foreground/60" />
-              <div className="mb-4 text-sm">{t("search.idleHint")}</div>
-              <div className="flex flex-wrap justify-center gap-2 px-2">
-                {EXAMPLES.map((e) => (
-                  <button key={e} onClick={() => pick(e)}
-                    className="rounded-full border bg-card px-3 py-1.5 text-[12.5px] shadow-sm transition-colors hover:border-primary/50 hover:text-foreground">
-                    {e}
-                  </button>
-                ))}
-              </div>
+            <div className="space-y-5 py-4">
+              {/* 최근 검색어: 같은 걸 다시 찾는 일이 잦다. 없으면(첫 실행) 이 블록을 아예 안 띄운다. */}
+              {recent.length > 0 && (
+                <section>
+                  <div className="mb-2 flex items-center justify-between px-1">
+                    <h3 className="text-[12px] font-medium text-muted-foreground">{t("search.recentQueries")}</h3>
+                    <button type="button"
+                      onClick={() => { clearRecentQueries(); setRecent([]) }}
+                      className="rounded px-1.5 py-0.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground">
+                      {t("search.clearRecent")}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 px-1">
+                    {recent.map((r) => (
+                      <button key={r} type="button" onClick={() => pick(r)}
+                        className="max-w-full truncate rounded-full border bg-card px-2.5 py-1 text-[12px] shadow-sm transition-colors hover:border-primary/50 hover:text-foreground">
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* 최근 대화: 검색어가 없어도 바로 들어갈 곳을 준다(빈 화면으로 시작하지 않게). */}
+              {recentSessions != null && recentSessions.length > 0 && (
+                <section>
+                  <h3 className="mb-2 px-1 text-[12px] font-medium text-muted-foreground">{t("search.recentSessions")}</h3>
+                  <div className="space-y-1">
+                    {recentSessions.map((s) => (
+                      <button key={s.session} type="button"
+                        onClick={() => setSel({ session: s.session, turn: "" })}
+                        className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/50 ${
+                          sel?.session === s.session ? "border-primary/60 bg-primary/5" : "bg-card"}`}>
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                          {s.headline || t("browse.untitled")}
+                        </span>
+                        {/* 표기는 세션 탭과 같은 키를 쓴다 — 같은 값이 화면마다 다르게 보이지 않게
+                            ('대화 N개' = 턴 N개. 이 앱에서 세션 ⊃ 대화(턴)) */}
+                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                          {fmtTime(s.ended)} · {t("chat.turnCount", { count: s.count })}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* 둘 다 없을 때(첫 실행·색인 전)만 예시를 보여준다 — 그때는 이게 유일한 단서다. */}
+              {recent.length === 0 && recentSessions != null && recentSessions.length === 0 && (
+                <div className="py-8 text-center text-muted-foreground">
+                  <Magnifier className="mx-auto mb-3 size-8 text-muted-foreground/60" />
+                  <div className="mb-4 text-sm">{t("search.idleHint")}</div>
+                  <div className="flex flex-wrap justify-center gap-2 px-2">
+                    {EXAMPLES.map((e) => (
+                      <button key={e} onClick={() => pick(e)}
+                        className="rounded-full border bg-card px-3 py-1.5 text-[12.5px] shadow-sm transition-colors hover:border-primary/50 hover:text-foreground">
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -256,7 +324,9 @@ export function SearchView() {
       {/* 오른쪽: 선택한 결과의 세션을 채팅 스레드로 */}
       <div className="min-h-0 overflow-hidden">
         {sel
-          ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session} focusTurn={sel.turn} />
+          // 검색 결과로 들어오면 그 턴으로, '최근 세션'으로 들어오면(지목한 턴 없음) 마지막 대화로.
+          ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session}
+              focusTurn={sel.turn} focusLast={!sel.turn} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("search.detailPlaceholder")}
             </div>}

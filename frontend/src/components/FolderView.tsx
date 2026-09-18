@@ -13,7 +13,7 @@ import {
 import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
-import { childrenOf } from "@/lib/foldertree"
+import { childrenOf, flattenTree } from "@/lib/foldertree"
 import { fmtTime } from "@/lib/format"
 import type { Folder, FolderDetail, FolderItem, Hit } from "@/lib/types"
 
@@ -167,6 +167,13 @@ export function FolderView() {
   }, [t])
   useEffect(loadFolders, [loadFolders])
 
+  // 아무것도 고르지 않았으면 트리 맨 위 폴더를 열어둔다 — 빈 오른쪽 패널로 시작하지 않게.
+  // (폴더를 지워 선택이 풀렸을 때도 같은 규칙으로 다음 폴더가 열린다)
+  useEffect(() => {
+    if (sel != null || !folders?.length) return
+    setSel(flattenTree(folders)[0]?.id ?? folders[0].id)
+  }, [folders, sel])
+
   // 폴더를 바꾸면 그 폴더 내용을 불러오고 검색 상태는 초기화.
   useEffect(() => {
     setHits(null); setQ(""); setOpenConv(null)
@@ -174,6 +181,17 @@ export function FolderView() {
     setDetail(null)
     getFolder(sel).then(setDetail).catch((e) => setErr(errText(t, e, "folders.loadFailed")))
   }, [sel, t])
+
+  // 폴더만 열고 오른쪽을 '고르세요'로 두지 않는다 — 첫 항목의 대화를 미리 띄운다.
+  // 원문이 사라진 항목(유령 참조)은 열 수 없으니 건너뛰고, 열 수 있는 첫 항목을 고른다.
+  useEffect(() => {
+    if (openConv != null || !detail?.items.length) return
+    const first = detail.items.find((it) => !!it.session_id)
+    if (!first) return
+    setOpenConv(first.kind === "turn"
+      ? { session: first.session_id!, turn: first.ref }
+      : { session: first.session_id! })       // 세션 항목은 turn 없이 → 마지막 대화로 착지
+  }, [detail, openConv])
 
   function reload() {
     loadFolders()
@@ -647,8 +665,9 @@ export function FolderView() {
       {/* 오른쪽: 고른 항목의 대화를 이 화면 안에서(세션 탭으로 넘어가지 않는다 — 맥락이 끊기지 않게) */}
       <div className="min-h-0 overflow-hidden">
         {openConv?.session
+          // 턴 항목은 그 턴으로, 세션 항목은(지목한 턴 없음) 마지막 대화로.
           ? <ChatThread key={`${openConv.session}:${openConv.turn ?? ""}`}
-              session={openConv.session} focusTurn={openConv.turn} />
+              session={openConv.session} focusTurn={openConv.turn} focusLast={!openConv.turn} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("folders.pickItemPrompt")}
             </div>}

@@ -62,6 +62,9 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [detailErr, setDetailErr] = useState(false)                  // 세션 상세 로드 실패
 
   // 타이머 정리(unmount 후 setState 방지). copied 되돌림 / resumeMsg 자동 해제용.
+  // 선택된 대화 줄로 목록을 스크롤 — 마지막 대화를 자동 선택하거나 지도에서 점프해 들어오면
+  // 그 줄이 목록 밖에 있어, 오른쪽 내용과 목록 하이라이트가 어긋나 보인다.
+  const selRowRef = useRef<HTMLButtonElement | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchReq = useRef(0)   // 최신 검색만 반영(빠른 연속 입력 시 오래된 응답 덮어쓰기 방지) — SearchView 와 동일 패턴
@@ -218,6 +221,12 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         if (cancelled) return
         setConvs(d.turns.map((turn) => ({ t: turn.id, s: sel, h: turn.summary || turn.question || "" })))
         setDetail(d)
+        // 세션을 고르면 곧바로 마지막 대화를 띄운다 — 오른쪽 패널을 '고르세요' 안내문으로 두지
+        // 않고, 그 세션을 다시 여는 이유(방금 하던 데)에 바로 착지시킨다.
+        // cur ?? 로 채워 넣어, 지도·접힘에서 특정 턴을 지목해 들어온 경우는 덮지 않는다
+        // (그 경로와 이 효과의 실행 순서에 의존하지 않게 함수형 갱신을 쓴다).
+        const last = d.turns.at(-1)
+        if (last) setSelTurn((cur) => cur ?? { session: sel, turn: last.id })
       }).catch(() => { if (!cancelled) { setConvs([]); setDetailErr(true) } })
       return () => { cancelled = true }
     }
@@ -225,6 +234,9 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   }, [sel, kind, pointsByCluster])
 
   const convSet = useMemo(() => new Set((convs ?? []).map((c) => c.t)), [convs])
+
+  // block:"nearest" — 이미 보이면 건드리지 않고, 목록 밖일 때만 최소한으로 끌어온다.
+  useEffect(() => { selRowRef.current?.scrollIntoView({ block: "nearest" }) }, [selTurn?.turn, convs])
 
   async function runSearch(v = q, m = mode) {
     setQ(v)
@@ -482,6 +494,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           ) : (
             convs?.map((it) => (
               <button key={it.t} onClick={() => setSelTurn({ session: it.s, turn: it.t })}
+                ref={selTurn?.turn === it.t ? selRowRef : null}
                 className={`cm-cv-row w-full rounded-lg border p-2.5 text-left transition-colors ${selTurn?.turn === it.t ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                 <div className="line-clamp-2 text-[13px] font-medium leading-snug">{it.h || t("browse.untitled")}</div>
                 <div className="mt-0.5 text-[10.5px] text-muted-foreground tabular-nums">{t("browse.sessionId", { id: it.s.slice(0, 8) })}</div>

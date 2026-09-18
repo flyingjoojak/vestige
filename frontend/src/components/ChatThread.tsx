@@ -87,14 +87,18 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
 const PAD = 25   // 포커스 턴 위/아래로 이만큼만 먼저 렌더(큰 세션 로딩 지연 방지)
 
 // 포커스 턴 주변 렌더 창. data 를 받는 시점에 함께 확정해야 첫 렌더부터 최종 창으로 그려진다.
-function windowFor(d: Detail, focusTurn?: string) {
+// focusLast: 지목한 턴 없이 세션만 열 때(예: '최근 세션' 클릭) 맨 마지막 대화로 간다 —
+// 그 세션을 다시 여는 이유는 보통 '방금 하던 데'를 보려는 것이라 첫 턴은 거의 쓸모가 없다.
+function windowFor(d: Detail, focusTurn?: string, focusLast?: boolean) {
   const n = d.turns.length
-  const fi = focusTurn ? d.turns.findIndex((t) => t.id === focusTurn) : 0
+  const fi = focusLast ? n - 1 : (focusTurn ? d.turns.findIndex((t) => t.id === focusTurn) : 0)
   const c = fi >= 0 ? fi : 0
   return { s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) }
 }
 
-export function ChatThread({ session, focusTurn }: { session: string; focusTurn?: string }) {
+export function ChatThread(
+  { session, focusTurn, focusLast }: { session: string; focusTurn?: string; focusLast?: boolean },
+) {
   const { t } = useTranslation()
   const { confirm } = useDialogs()
   const [data, setData] = useState<Detail | null>(null)
@@ -107,10 +111,10 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
       // 렌더 창을 data 와 '같은 렌더'에 확정한다(두 setState 는 배치됨). 효과에서 뒤늦게 잡으면
       // 첫 렌더가 기본 창(0~50)으로 그려지고, 그 사이 자식이 먼저 scrollIntoView 를 해버려
       // 곧이어 창이 바뀌며(위쪽 턴이 빠지며) 지목한 턴이 엉뚱한 위치로 밀린다(26~49번째에서 발생).
-      setRange(windowFor(d, focusTurn))
+      setRange(windowFor(d, focusTurn, focusLast))
       setData(d)
-    }).catch((e) => setErr(String(e)))
-  }, [session, focusTurn])
+    }).catch((e) => setErr(errText(t, e, "chat.loadFailed")))
+  }, [session, focusTurn, focusLast, t])
 
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
@@ -156,6 +160,8 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
   }
 
   const turns = data?.turns ?? []
+  // 실제로 강조·스크롤할 턴. focusLast 면 마지막 턴(지목한 턴이 없을 때의 착지점).
+  const focusId = focusLast ? turns.at(-1)?.id : focusTurn
   const foldedCount = turns.filter((x) => x.hidden).length
   const allFolded = turns.length > 0 && foldedCount === turns.length
   return (
@@ -183,7 +189,8 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
       </div>
       {hideErr && <div className="shrink-0 px-5 pt-2 text-[11px] text-destructive">{hideErr}</div>}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {err && <div className="py-10 text-center text-muted-foreground">{t("chat.error", { err })}</div>}
+        {/* errText 가 이미 사용자용 문장을 만든다 — '오류: ' 를 덧붙이면 말이 겹친다. */}
+        {err && <div role="alert" className="py-10 text-center text-muted-foreground">{err}</div>}
         {!data && !err && <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>}
         {/* 읽기 좋은 폭으로 묶고 가운데 정렬 — 넓은 패널에서도 채팅답게 */}
         <div className="mx-auto max-w-3xl space-y-3">
@@ -192,8 +199,8 @@ export function ChatThread({ session, focusTurn }: { session: string; focusTurn?
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadPrev", { count: range.s })}</button>
           )}
           {turns.slice(range.s, range.e).map((turn, j) => (turn.hidden
-            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onUnhide={(id) => foldTurn(id, false)} />
-            : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusTurn} onHide={(id) => foldTurn(id, true)} />))}
+            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onUnhide={(id) => foldTurn(id, false)} />
+            : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onHide={(id) => foldTurn(id, true)} />))}
           {data && range.e < turns.length && (
             <button onClick={() => setRange((r) => ({ ...r, e: Math.min(turns.length, r.e + 50) }))}
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadNext", { count: turns.length - range.e })}</button>
