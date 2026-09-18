@@ -129,13 +129,18 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     # 기준값의 키는 반드시 '이 보존본 파일 경로'다. 소스 로그 경로로 키를 잡으면(예전 구현)
     # 한 보존본에 소스 파일이 둘 붙거나(복구본·충돌본) 보존소를 옮겼다 되돌릴 때 **남의 숫자로
     # 멀쩡한 파일을 잘라낸다**. 실측으로 전손(510→142바이트, 복원 0바이트)을 확인했다.
-    ok = db.mirror_ok_bytes(str(out))
-    if ok is not None and out.exists():
+    # 기록해둔 크기와 파일이 정확히 같을 때만 '손 안 대도 된다'고 판단한다(빠른 경로).
+    # 조금이라도 어긋나면 — 기록이 없거나(업그레이드 직후), 파일이 더 크거나(중단된 append),
+    # 더 작거나(전원 차단·동기화로 꼬리 유실) — **파일을 직접 스캔해** 마지막 온전한 멤버의
+    # 끝을 찾아 거기까지만 남긴다. DB 숫자를 믿고 자르면 그 숫자가 틀린 순간 데이터를 잃는다.
+    if out.exists():
         cur_size = out.stat().st_size
-        if cur_size > ok:
-            logger.warning("보존본 꼬리 %d바이트를 걷어냅니다(중단된 append): %s", cur_size - ok, out.name)
-            with open(out, "r+b") as f:
-                f.truncate(ok)
+        if db.mirror_ok_bytes(str(out)) != cur_size:
+            _, good_end, intact = _walk_members(out.read_bytes(), out.name)
+            if not intact and good_end < cur_size:
+                logger.warning("보존본 꼬리 %d바이트를 걷어냅니다(손상): %s", cur_size - good_end, out.name)
+                with open(out, "r+b") as f:
+                    f.truncate(good_end)
     with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
         gz.write(chunk)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
@@ -172,31 +177,42 @@ def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | No
     p = raw_path(source, session_id)
     if not p.exists():
         return None
-    raw = p.read_bytes()
+    data, _end, intact = _walk_members(p.read_bytes(), p.name)
+    return data, intact
+
+
+def _walk_members(raw: bytes, name: str = "") -> tuple[bytes, int, bool]:
+    """멀티멤버 gzip 을 멤버 단위로 푼다.
+
+    반환: (온전하게 푼 바이트, **마지막 온전한 멤버의 끝 오프셋**, 전부 온전한가)
+
+    두 번째 값이 핵심이다 — 잘라낼 지점을 DB 숫자가 아니라 파일 자신에서 구하기 위한 것.
+    지금까지 이 파일의 유실은 두 번 다 'DB 에 적어둔 숫자를 믿고 파일을 잘라서' 났다.
+    gzip.open(...).read() 한 방이면 버퍼를 채우려 손상 지점을 넘어가 EOFError 로 앞의 멀쩡한
+    멤버까지 전부 날린다. zlib 으로 끊어 읽으면 어디까지가 온전한지 정확히 알 수 있다.
+    """
     mv = memoryview(raw)                 # 멤버마다 raw[pos:] 를 복사하면 O(멤버수 × 파일크기)
     out = bytearray()
     pos, bad = 0, None
-    # 멤버를 하나씩 직접 푼다. gzip.open(...).read() 는 버퍼를 채우려고 손상 지점까지 넘어가서
-    # 앞의 멀쩡한 멤버까지 통째로 날린다(EOFError). zlib 으로 끊어 읽으면 어디까지 온전한지 안다.
     while pos < len(raw):
         d = zlib.decompressobj(31)       # 31 = gzip 헤더 포함
         try:
             chunk = d.decompress(mv[pos:]) + d.flush()
         except zlib.error as ex:
-            bad = ex
+            bad = str(ex)
             break
         if not d.eof:                    # 멤버가 제대로 끝나지 않았다 = 잘림
             bad = "트레일러 없음(중단된 append)"
             break
-        out += chunk
         consumed = len(raw) - pos - len(d.unused_data)
         if consumed <= 0:                # 진행이 없으면 무한루프 방지
             bad = "진행 불가"
             break
+        out += chunk                     # 멤버가 온전할 때만 확정한다(pos 와 out 이 늘 짝)
         pos += consumed
     if bad is not None:
-        logger.warning("보존본 꼬리 손상 - 온전한 %d바이트만 반환합니다 (%s): %s", len(out), p.name, bad)
-    return bytes(out), bad is None
+        logger.warning("보존본 꼬리 손상 - %d바이트까지만 온전합니다 (%s): %s", pos, name or "?", bad)
+    return bytes(out), pos, bad is None
 
 
 def mirror_size_bytes() -> int:

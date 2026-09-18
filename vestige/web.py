@@ -1067,6 +1067,11 @@ def api_session_restore(session: str = Query(...)):
     except Exception as e:  # noqa: BLE001 — 파일시스템 오류 등을 사용자에게 그대로 전달
         raise HTTPException(status_code=500, detail={"code": "restore_failed", "msg": f"복구 실패: {e}", "detail": str(e)})
     if got is None:
+        # 보존본 파일이 있는데 None 이면 '없음'이 아니라 '읽을 수 없음'이다. 뭉뚱그려
+        # "원본이 없어요"라고 하면 사용자가 살아있을지도 모르는 .gz 를 지운다.
+        if raw_archive.has_mirror(source, sid):
+            return {"ok": False, "code": "restore_corrupt",
+                    "warning": "보존본이 손상돼 읽을 수 없어요. 파일은 지우지 마세요 - 나중에 복구 방법이 생길 수 있어요."}
         return {"ok": False, "missing": True, "code": "restore_no_mirror",
                 "warning": "보존된 원본이 없어 복구할 수 없어요(이 기능 이전에 유실된 세션일 수 있어요)."}
     target, intact = got

@@ -137,7 +137,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     try {
       const r = await restoreSession(sel)
       if (r.ok) {
-        flashMsg({ ok: true, text: t("browse.restoreDone") })
+        // 부분 복구를 '완료'로 표시하면 사용자는 뒷부분이 왜 없는지 알 수 없다.
+        flashMsg(r.partial
+          ? { ok: false, text: errText(t, r, "browse.restorePartial") }
+          : { ok: true, text: t("browse.restoreDone") })
         const d = await getSession(sel)
         setDetail(d)
       } else {

@@ -659,3 +659,55 @@ def test_restore_reports_partial_when_tail_is_damaged(tmp_path, monkeypatch):
     target, intact = got
     assert intact is False                          # 손상 사실을 알린다
     assert target.read_bytes() == b'{"ok":1}\n'     # 온전한 앞부분은 복구
+
+
+def test_repairs_broken_tail_even_without_db_record(tmp_path, monkeypatch):
+    """경계 기록이 없어도(업그레이드 직후) 깨진 꼬리를 걷어내야 한다.
+
+    기록이 없을 때 가드를 꺼버리면, 꼬리가 깨진 보존본을 가진 사용자 — 즉 이 기능이 가장
+    필요한 사용자 — 에게만 정확히 작동하지 않는다. 잘라낼 지점은 DB 가 아니라 파일에서 구한다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00truncated-member")     # 중단된 append 잔재
+    db.conn.execute("DELETE FROM raw_mirrors")            # 업그레이드 직후 = 기록 없음
+    db.commit()
+    assert db.mirror_ok_bytes(str(out)) is None
+
+    f.write_bytes(b'{"a":1}\n{"b":2}\n')
+    R.mirror_file(db, f, "claude-code")
+    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'
+
+
+def test_repairs_when_mirror_shrank_below_record(tmp_path, monkeypatch):
+    """파일이 기록보다 작아져도(전원 차단·동기화로 꼬리 유실) 그 위에 그냥 덧붙이면 안 된다.
+
+    cur_size < ok 는 '끝이 이미 깨졌다'는 가장 강한 신호다. 예전 구현은 이 방향을 아예 안 봐서
+    그 뒤 모든 멤버가 영구히 안 읽혔다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"n":0}\n')
+    R.mirror_file(db, f, "claude-code")
+    f.write_bytes(b'{"n":0}\n{"n":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+
+    out.write_bytes(out.read_bytes()[:-5])                # 꼬리 5바이트 유실
+    for i in range(2, 6):                                 # 이후 회차들
+        f.write_bytes(f.read_bytes() + b'{"n":%d}\n' % i)
+        R.mirror_file(db, f, "claude-code")
+
+    got = R.read_mirror("claude-code", sid)
+    assert got is not None
+    assert b'{"n":0}\n' in got
+    for i in range(2, 6):                                 # 이후 기록분은 전부 읽혀야 한다
+        assert b'{"n":%d}\n' % i in got, i
