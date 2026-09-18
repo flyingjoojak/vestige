@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS raw_cursors(
   file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL,
   mirror_bytes INTEGER
 );
+CREATE TABLE IF NOT EXISTS raw_mirrors(
+  mirror_path TEXT PRIMARY KEY, ok_bytes INTEGER, updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS hidden_turns(
   turn_id TEXT PRIMARY KEY, hidden_at REAL
 );
@@ -192,6 +195,22 @@ def _mig_0010_raw_mirror_bytes(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE raw_cursors ADD COLUMN mirror_bytes INTEGER")
 
 
+def _mig_0011_raw_mirrors(conn: sqlite3.Connection) -> None:
+    """raw_mirrors — 보존본(.gz) '파일 경로'별로 마지막 성공 append 직후의 크기.
+
+    0010 의 raw_cursors.mirror_bytes 는 키가 틀렸다. 그건 '소스 로그 파일 경로'로 키가 잡히는데
+    잘라낼 대상은 보존본(source, session_id → 그리고 보존소 루트)이라 1:N 이었다:
+      - 보존소 경로를 바꿨다 되돌리면 다른 보존소의 숫자로 잘라낸다(실측: 510→142바이트, 전손)
+      - restore() 가 만든 codex `restored/` 파일이 같은 sid 로 같은 보존본을 공유한다
+      - 앱과 CLI 가 동시에 색인하면 서로의 숫자로 잘라낸다
+    보존본 경로를 키로 쓰면 '그 파일의 크기'와 '그 파일에 대한 기록'이 항상 같은 대상을 가리킨다.
+    (0010 의 컬럼은 append-only 규칙상 남겨두되 더는 쓰지 않는다)
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS raw_mirrors(
+      mirror_path TEXT PRIMARY KEY, ok_bytes INTEGER, updated_at REAL
+    )""")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -204,6 +223,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0008_session_titles,
     _mig_0009_core_indexes,
     _mig_0010_raw_mirror_bytes,
+    _mig_0011_raw_mirrors,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -564,24 +584,40 @@ class ArchiveDB:
         ).fetchone()
         return row["mirrored_offset"] if row else 0
 
-    def raw_mirror_bytes(self, file_path: str) -> int | None:
-        """마지막으로 성공한 append 직후의 보존본(.gz) 크기. 모르면 None.
+    # --- 보존본(.gz) 무결 경계 ---
+    # 키는 반드시 '보존본 파일 경로'다. 소스 로그 경로로 키를 잡으면(0010 이 그랬다) 보존소를
+    # 옮겼다 되돌리거나 한 세션에 소스 파일이 둘 생길 때 남의 숫자로 파일을 잘라낸다.
+    def mirror_ok_bytes(self, mirror_path: str) -> int | None:
+        """이 보존본에 마지막으로 성공한 append 직후의 크기. 모르면 None.
         실제 파일이 이보다 크면 그 뒤는 중단된 append 의 잔재(잘린 gzip 멤버)다."""
         row = self.conn.execute(
-            "SELECT mirror_bytes FROM raw_cursors WHERE file_path=?", (file_path,)
-        ).fetchone()
-        return row["mirror_bytes"] if row else None
+            "SELECT ok_bytes FROM raw_mirrors WHERE mirror_path=?", (mirror_path,)).fetchone()
+        return row["ok_bytes"] if row else None
 
-    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str,
-                       mirror_bytes: int | None = None) -> None:
+    def set_mirror_ok_bytes(self, mirror_path: str, ok_bytes: int) -> None:
         self.conn.execute(
-            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at,mirror_bytes)
-                 VALUES(?,?,?,?,?,?)
+            """INSERT INTO raw_mirrors(mirror_path, ok_bytes, updated_at) VALUES(?,?,?)
+               ON CONFLICT(mirror_path) DO UPDATE SET
+                 ok_bytes=excluded.ok_bytes, updated_at=excluded.updated_at""",
+            (mirror_path, ok_bytes, time.time()))
+
+    def clear_mirror_ok_bytes(self, mirror_paths: list[str]) -> int:
+        """보존본을 지웠으면 그 경계 기록도 지운다(같은 경로에 새 파일이 생겼을 때 옛 숫자를 안 쓰게)."""
+        n = 0
+        for p in mirror_paths:
+            n += self.conn.execute(
+                "DELETE FROM raw_mirrors WHERE mirror_path=?", (p,)).rowcount or 0
+        self.conn.commit()
+        return n
+
+    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str) -> None:
+        self.conn.execute(
+            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at)
+                 VALUES(?,?,?,?,?)
                ON CONFLICT(file_path) DO UPDATE SET
                  mirrored_offset=excluded.mirrored_offset, session_id=excluded.session_id,
-                 source=excluded.source, updated_at=excluded.updated_at,
-                 mirror_bytes=excluded.mirror_bytes""",
-            (file_path, mirrored_offset, session_id, source, time.time(), mirror_bytes),
+                 source=excluded.source, updated_at=excluded.updated_at""",
+            (file_path, mirrored_offset, session_id, source, time.time()),
         )
 
     def clear_raw_cursors(self, source: str, session_ids: list[str]) -> int:
