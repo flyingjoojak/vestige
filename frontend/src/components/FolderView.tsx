@@ -14,6 +14,7 @@ import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { childrenOf, flattenTree } from "@/lib/foldertree"
+import { useDebounced } from "@/lib/useDebounced"
 import { fmtTime } from "@/lib/format"
 import type { Folder, FolderDetail, FolderItem, Hit } from "@/lib/types"
 
@@ -339,14 +340,20 @@ export function FolderView() {
   async function removeItem(kind: "turn" | "session", ref: string) {
     if (sel == null) return
     try {
-      await removeFromFolder(sel, kind === "turn" ? { turnId: ref } : { sessionId: ref })
+      const r = await removeFromFolder(sel, kind === "turn" ? { turnId: ref } : { sessionId: ref })
+      // changed=0 = 이미 없던 항목(다른 창에서 먼저 뺐다든지). 조용히 넘기면 항목이 그대로
+      // 남은 채 성공처럼 보여 "X 가 안 먹힌다"가 된다 → 알리고 목록을 새로 받는다.
+      if (!r.changed) setErr(t("folders.alreadyGone"))
       reload()
     } catch (e) { setErr(errText(t, e, "folders.saveFailed")) }
   }
 
   // 폴더 안에서만 검색(서버가 그 폴더+하위의 턴으로 범위를 좁힌다).
+  // 입력(q)과 실행(dq)을 분리한다 — 타자는 즉시 반영되고, 서버 호출만 멈춘 뒤에 나간다.
+  const dq = useDebounced(q, 300)
+  useEffect(() => { void runSearch(dq) }, [dq, sel])   // eslint-disable-line react-hooks/exhaustive-deps
+
   async function runSearch(term: string) {
-    setQ(term)
     if (sel == null) return
     if (!term.trim()) { reqId.current++; setHits(null); return }
     const my = ++reqId.current
@@ -504,7 +511,7 @@ export function FolderView() {
               </div>
               <div className="relative mt-2">
                 <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input value={q} onChange={(e) => runSearch(e.target.value)}
+                <Input value={q} onChange={(e) => setQ(e.target.value)}
                   aria-label={t("folders.searchPlaceholder", { name: cur!.name })}
                   placeholder={t("folders.searchPlaceholder", { name: cur!.name })}
                   className="h-8 rounded-lg pl-8 text-[13px]" />

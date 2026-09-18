@@ -540,6 +540,8 @@
     "pickItemPrompt": "Pick an item in the middle to read it here.",
     "foldItem": "Fold (hide from search & map)",
     "moveFailed": "Couldn't move the folder",
-    "dropToRootHint": "Drop here to move to top level"
+    "dropToRootHint": "Drop here to move to top level",
+    "createdButNotAdded": "Created the folder, but adding to it failed",
+    "alreadyGone": "That item was already removed"
   }
 }

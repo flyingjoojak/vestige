@@ -794,8 +794,9 @@ def api_folder_remove(payload: dict):
     fid = _folder_id_arg(payload, "folder_id")
     _folder_or_404(db, fid)
     kind, ref = _folder_target(payload)
-    db.remove_from_folder(fid, kind, ref)
-    return {"ok": True}
+    # changed=0 은 '이미 없던 항목'이다. ok:true 만 주면 화면은 성공으로 보이는데 항목이
+    # 그대로 남아 "X 버튼이 안 먹힌다"가 된다 → 호출부가 구분할 수 있게 내려준다.
+    return {"ok": True, "changed": db.remove_from_folder(fid, kind, ref)}
 
 
 @app.post("/api/folders/item/rename")
@@ -826,8 +827,8 @@ def api_folder_item_reorder(payload: dict):
         if kind not in ("turn", "session") or not isinstance(ref, str) or not ref:
             raise HTTPException(status_code=400, detail={"code": "invalid_order", "msg": "잘못된 항목이 있습니다"})
         order.append((kind, ref))
-    db.reorder_folder(fid, order)
-    return {"ok": True, "count": len(order)}
+    # count 는 '시도한 개수', changed 는 '실제 갱신된 개수'. 다르면 그 사이 항목이 바뀐 것이다.
+    return {"ok": True, "count": len(order), "changed": db.reorder_folder(fid, order)}
 
 
 @app.get("/api/folder")
@@ -1359,7 +1360,7 @@ def api_config():
         "index_time": getattr(C, "INDEX_TIME", "03:00"),
         "embed_model": C.EMBED_MODEL,
         "raw_archive_max_mb": C.RAW_ARCHIVE_MAX_MB,   # 빈값=무제한
-        "raw_archive_bytes": raw_archive.mirror_size_bytes(),
+        "raw_archive_bytes": _raw_size_cached(),
         # 원본 보존소 경로(직접 지정 가능 — 용량이 커서 외장/별도 디스크로 뺄 수 있게).
         "raw_archive_dir": str(C.RAW_ARCHIVE_DIR),
         "raw_archive_exists": C.RAW_ARCHIVE_DIR.exists(),
@@ -1434,6 +1435,27 @@ def api_config_put(payload: dict):
                 invalid.append("VESTIGE_INDEX_TIME")
         except (ValueError, AttributeError):
             invalid.append("VESTIGE_INDEX_TIME")
+    # 보존소 상한: 숫자·0 이상만. 검증을 안 하면 잘못된 값이 indexer 의 int() 에서 터지고,
+    # 그 예외는 로그로만 사라져 '상한을 켰다고 믿는데 영구히 미적용'인 상태가 된다.
+    _mb = updates.get("VESTIGE_RAW_ARCHIVE_MAX_MB")
+    if _mb not in (None, ""):
+        try:
+            if int(str(_mb).strip()) < 0:
+                invalid.append("VESTIGE_RAW_ARCHIVE_MAX_MB")
+        except (ValueError, TypeError):
+            invalid.append("VESTIGE_RAW_ARCHIVE_MAX_MB")
+    # 보존소 경로: 실제로 만들 수 있고 쓸 수 있는 디렉터리여야 한다. 쓸 수 없는 경로를 저장하면
+    # 이후 모든 미러링이 실패하고, 사용자는 설정 화면에 그 경로가 멀쩡히 적혀 있는 걸 본다.
+    _dir = updates.get("VESTIGE_RAW_ARCHIVE_DIR")
+    if _dir not in (None, ""):
+        try:
+            p = Path(str(_dir).strip())
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".vestige-write-test"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        except OSError:
+            invalid.append("VESTIGE_RAW_ARCHIVE_DIR")
     if invalid:
         return {"ok": False, "code": "invalid_config_value", "invalid": invalid, "rejected": rejected}
 
@@ -1444,6 +1466,8 @@ def api_config_put(payload: dict):
         else:
             os.environ[k] = v
     importlib.reload(C)                            # 3) config 모듈 재평가(새 env 반영)
+    if "VESTIGE_RAW_ARCHIVE_DIR" in updates:
+        _raw_size_cache["at"] = 0.0                # 경로가 바뀌었으니 용량 캐시 폐기 → 즉시 반영
 
     # 4) 스케줄 관련 키가 바뀌면 스케줄러 재등록
     timing_keys = {"VESTIGE_ENRICH_TIME", "VESTIGE_INDEX_INTERVAL"}
@@ -1502,6 +1526,24 @@ def _pending_snapshot() -> dict:
         return _pending_cache
     _pending_cache.update(at=now, index=idx, enrich_turns=enr)
     return _pending_cache
+
+
+# 보존소 용량 캐시 — /api/config 가 3s 폴링되는데 mirror_size_bytes 는 보존소 전체를
+# rglob+stat 한다(세션당 파일 1개라 수천 세션이면 초 단위). 옆의 jsonl_count 와 같은 TTL 공유.
+_raw_size_cache: dict = {"at": 0.0, "n": 0}
+
+
+def _raw_size_cached() -> int:
+    from . import raw_archive
+    now = time.time()
+    if now - _raw_size_cache["at"] < _PENDING_TTL:
+        return _raw_size_cache["n"]
+    try:
+        n = raw_archive.mirror_size_bytes()
+    except Exception:  # noqa: BLE001 — 실패 시 이전 값 유지(설정 화면이 500 나지 않게)
+        return _raw_size_cache["n"]
+    _raw_size_cache.update(at=now, n=n)
+    return n
 
 
 # JSONL 총개수 캐시 — /api/config가 3s 폴링돼도 매번 전체 폴더 walk 안 하게(TTL 공유).
