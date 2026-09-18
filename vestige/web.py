@@ -1976,8 +1976,10 @@ def _graph3d_data(refresh: bool = False) -> dict:
     벡터 수가 달라졌으면 백그라운드로 재계산(여는 순간 대기 없음)."""
     from . import config as C
 
-    vi = make_index()
-    n = len(vi)
+    # 개수만 필요하다(캐시가 낡았는지 판정용). make_index() 를 쓰면 npy 백엔드에서 벡터 행렬을
+    # 통째로 올리는데, 이 함수는 예열 스레드가 3분마다 + /api/graph3d 요청마다 부른다.
+    # 실제 행렬이 필요한 쪽은 _graph3d_compute_and_cache 뿐이고, 거기서 따로 만든다.
+    n = vector_count()
     if n == 0:
         return {"points": [], "clusters": [], "method": None, "dims": 3}
 
