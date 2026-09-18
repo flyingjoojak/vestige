@@ -81,12 +81,19 @@ export function SearchView() {
       setSrcOpts(r.sources)
       setSrcSel(new Set(r.sources.map((s) => s.source)))   // 기본=전체 선택
     }).catch(() => { /* 소스 목록 실패 시 필터만 숨김(검색은 전체로 동작) */ })
-    // 검색 전 화면용 최근 대화. 실패하면 그 블록만 안 뜨고 검색은 그대로 된다(장식용 데이터).
+    // 검색 전 화면용 최근 세션. 실패하면 그 블록만 안 뜨고 검색은 그대로 된다(장식용 데이터).
     listSessions()
       .then((r) => { if (alive) setRecentSessions(r.sessions.filter((s) => !s.subagent).slice(0, 6)) })
       .catch(() => { if (alive) setRecentSessions([]) })
     return () => { alive = false }
   }, [])
+
+  // 검색 전에는 오른쪽 패널을 '고르세요'로 두지 않고 가장 최근 세션의 마지막 대화를 띄운다.
+  // 마운트뿐 아니라 '검색어를 지웠을 때'(state 가 idle 로 돌아오고 sel 이 풀릴 때)도 다시 채운다.
+  useEffect(() => {
+    if (state !== "idle" || sel != null || !recentSessions?.length) return
+    setSel({ session: recentSessions[0].session, turn: "" })
+  }, [state, sel, recentSessions])
 
   const hasMultipleSources = srcOpts.length > 1
 

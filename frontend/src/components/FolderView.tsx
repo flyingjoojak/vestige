@@ -182,6 +182,17 @@ export function FolderView() {
     getFolder(sel).then(setDetail).catch((e) => setErr(errText(t, e, "folders.loadFailed")))
   }, [sel, t])
 
+  // 폴더만 열고 오른쪽을 '고르세요'로 두지 않는다 — 첫 항목의 대화를 미리 띄운다.
+  // 원문이 사라진 항목(유령 참조)은 열 수 없으니 건너뛰고, 열 수 있는 첫 항목을 고른다.
+  useEffect(() => {
+    if (openConv != null || !detail?.items.length) return
+    const first = detail.items.find((it) => !!it.session_id)
+    if (!first) return
+    setOpenConv(first.kind === "turn"
+      ? { session: first.session_id!, turn: first.ref }
+      : { session: first.session_id! })       // 세션 항목은 turn 없이 → 마지막 대화로 착지
+  }, [detail, openConv])
+
   function reload() {
     loadFolders()
     if (sel != null) getFolder(sel).then(setDetail).catch(() => {})
