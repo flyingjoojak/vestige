@@ -232,10 +232,12 @@ export function SearchView() {
                         className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/50 ${
                           sel?.session === s.session ? "border-primary/60 bg-primary/5" : "bg-card"}`}>
                         <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
-                          {s.headline || t("search.untitledSession")}
+                          {s.headline || t("browse.untitled")}
                         </span>
+                        {/* 표기는 세션 탭과 같은 키를 쓴다 — 같은 값이 화면마다 다르게 보이지 않게
+                            ('대화 N개' = 턴 N개. 이 앱에서 세션 ⊃ 대화(턴)) */}
                         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                          {fmtTime(s.ended)} · {t("search.turnCount", { count: s.count })}
+                          {fmtTime(s.ended)} · {t("chat.turnCount", { count: s.count })}
                         </span>
                       </button>
                     ))}

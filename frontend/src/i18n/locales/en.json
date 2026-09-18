@@ -305,9 +305,7 @@
     "foldFailed": "Couldn't fold",
     "recentQueries": "Recent searches",
     "clearRecent": "Clear",
-    "recentSessions": "Recent conversations",
-    "untitledSession": "(untitled)",
-    "turnCount": "{{count}} turns"
+    "recentSessions": "Recent sessions"
   },
   "onboarding": {
     "title": "Choose an embedding model",

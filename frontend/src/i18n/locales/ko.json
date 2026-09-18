@@ -305,9 +305,7 @@
     "foldFailed": "접기에 실패했어요",
     "recentQueries": "최근 검색",
     "clearRecent": "지우기",
-    "recentSessions": "최근 대화",
-    "untitledSession": "(제목 없음)",
-    "turnCount": "{{count}}턴"
+    "recentSessions": "최근 세션"
   },
   "onboarding": {
     "title": "임베딩 모델 선택",
