@@ -349,7 +349,7 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
         try:
             n = raw_archive.enforce_quota(int(C.RAW_ARCHIVE_MAX_MB) * 1024 * 1024, db)
             if n:
-                log_fn(f"raw archive 용량 초과 - 오래된 세션 {n}개 정리")
+                log_fn(f"ERROR raw archive 용량 초과 - 오래된 세션 {n}개 정리(보존본 삭제)")
         except Exception as ex:  # noqa: BLE001
             log_fn(f"ERROR raw archive quota 정리 실패: {ex}")
     return total
