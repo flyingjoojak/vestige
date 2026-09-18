@@ -542,6 +542,11 @@
     "moveFailed": "Couldn't move the folder",
     "dropToRootHint": "Drop here to move to top level",
     "createdButNotAdded": "Created the folder, but adding to it failed",
-    "alreadyGone": "That item was already removed"
+    "alreadyGone": "That item was already removed",
+    "move": "Move",
+    "moveHint": "Move without dragging:",
+    "moveIn": "Move in",
+    "moveOut": "Move out",
+    "toggle": "Expand/collapse {{name}}"
   }
 }
