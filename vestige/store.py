@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS cursors(
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS raw_cursors(
-  file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL
+  file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL,
+  mirror_bytes INTEGER
 );
 CREATE TABLE IF NOT EXISTS hidden_turns(
   turn_id TEXT PRIMARY KEY, hidden_at REAL
@@ -165,6 +166,32 @@ def _mig_0008_session_titles(conn: sqlite3.Connection) -> None:
     )""")
 
 
+def _mig_0009_core_indexes(conn: sqlite3.Connection) -> None:
+    """_SCHEMA 에만 있고 마이그레이션에는 없던 핵심 인덱스 3개를 보강.
+
+    마이그레이션 시스템 이전(user_version=0)부터 쓰던 DB 는 이 인덱스 없이 올라온다.
+    신규 설치는 _SCHEMA 로 만들어지니 있고, 기존 사용자에게만 없는 상태였다 —
+    같은 앱인데 DB 모양이 갈리는, append-only 패턴에서 가장 위험한 종류의 누락이다.
+    특히 idx_turns_session 이 없으면 세션 조회마다 turns 풀스캔이 된다.
+    (test_migrated_db_schema_matches_fresh_schema 가 이걸 잡아냈다)
+    """
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_turn ON chunks(turn_id)")
+
+
+def _mig_0010_raw_mirror_bytes(conn: sqlite3.Connection) -> None:
+    """raw_cursors.mirror_bytes — 마지막으로 성공한 append 직후의 보존본 크기.
+
+    멀티멤버 gzip 에 append 하다 프로세스가 죽으면 트레일러 없는 잘린 멤버가 꼬리에 남고,
+    gzip.open 은 그 지점에서 EOFError 를 던지며 '앞의 멀쩡한 멤버까지 전부' 못 읽게 된다.
+    성공 크기를 알고 있으면 다음 미러링 때 그 지점으로 잘라내고 이어 쓸 수 있다.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(raw_cursors)")}
+    if "mirror_bytes" not in cols:
+        conn.execute("ALTER TABLE raw_cursors ADD COLUMN mirror_bytes INTEGER")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -175,6 +202,8 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0006_folder_item_alias_position,
     _mig_0007_folder_position,
     _mig_0008_session_titles,
+    _mig_0009_core_indexes,
+    _mig_0010_raw_mirror_bytes,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -535,14 +564,24 @@ class ArchiveDB:
         ).fetchone()
         return row["mirrored_offset"] if row else 0
 
-    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str) -> None:
+    def raw_mirror_bytes(self, file_path: str) -> int | None:
+        """마지막으로 성공한 append 직후의 보존본(.gz) 크기. 모르면 None.
+        실제 파일이 이보다 크면 그 뒤는 중단된 append 의 잔재(잘린 gzip 멤버)다."""
+        row = self.conn.execute(
+            "SELECT mirror_bytes FROM raw_cursors WHERE file_path=?", (file_path,)
+        ).fetchone()
+        return row["mirror_bytes"] if row else None
+
+    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str,
+                       mirror_bytes: int | None = None) -> None:
         self.conn.execute(
-            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at)
-                 VALUES(?,?,?,?,?)
+            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at,mirror_bytes)
+                 VALUES(?,?,?,?,?,?)
                ON CONFLICT(file_path) DO UPDATE SET
                  mirrored_offset=excluded.mirrored_offset, session_id=excluded.session_id,
-                 source=excluded.source, updated_at=excluded.updated_at""",
-            (file_path, mirrored_offset, session_id, source, time.time()),
+                 source=excluded.source, updated_at=excluded.updated_at,
+                 mirror_bytes=excluded.mirror_bytes""",
+            (file_path, mirrored_offset, session_id, source, time.time(), mirror_bytes),
         )
 
     def clear_raw_cursors(self, source: str, session_ids: list[str]) -> int:
@@ -667,50 +706,72 @@ class ArchiveDB:
         self.conn.commit()
 
     def folder_items(self, folder_id: int) -> list[dict]:
-        """폴더에 '직접' 담긴 항목(하위 폴더 제외). 표시용 헤드라인을 붙여 돌려준다."""
-        rows = self.conn.execute(
-            # 사용자가 정한 순서(position) 우선, 아직 없으면 담은 순. NULL 은 뒤로.
-            "SELECT kind, ref, added_at, alias, position FROM folder_items WHERE folder_id=? "
-            "ORDER BY (position IS NULL), position, added_at",
-            (folder_id,)).fetchall()
+        """폴더에 '직접' 담긴 항목(하위 폴더 제외). 표시용 헤드라인을 붙여 돌려준다.
+
+        종류별로 쿼리 1회씩, 총 2회만 쓴다(항목마다 2~3회 돌면 100개짜리 폴더가 300 왕복).
+        세션 쪽은 web.api_sessions 와 같은 윈도우 함수 패턴 — 같은 값을 같은 방식으로 뽑아
+        두 화면의 제목이 갈리지 않게 한다.
+        """
+        # 턴 항목: 턴 본문 + 접힘 여부를 조인 한 번으로.
+        turn_rows = self.conn.execute(
+            "SELECT fi.kind, fi.ref, fi.added_at, fi.alias, fi.position,"
+            "       t.session_id, t.summary, t.question, t.timestamp,"
+            "       (h.turn_id IS NOT NULL) AS hidden"
+            "  FROM folder_items fi"
+            "  LEFT JOIN turns t ON t.id = fi.ref"                  # 없는 턴(유령)도 목록에서 빠지지 않게
+            "  LEFT JOIN hidden_turns h ON h.turn_id = fi.ref"
+            " WHERE fi.folder_id=? AND fi.kind='turn'", (folder_id,)).fetchall()
+
+        # 세션 항목: 담긴 건 참조뿐이라 개수·대표 제목을 현재 기준으로 매번 계산한다.
+        # PARTITION BY 를 fi.ref 로 잡는 이유 — 턴이 0개인 참조는 t.* 가 NULL 인데, t.session_id 로
+        # 묶으면 그 NULL 들이 한 파티션에 뭉쳐 개수가 틀어진다. COUNT(t.id) 도 같은 이유(NULL 제외).
+        sess_rows = self.conn.execute(
+            "SELECT ref, added_at, alias, position, summary, question, n, n_hidden, ended, title FROM ("
+            "  SELECT fi.ref, fi.added_at, fi.alias, fi.position, t.summary, t.question, st.title,"
+            "         COUNT(t.id) OVER (PARTITION BY fi.ref) AS n,"
+            "         SUM(h.turn_id IS NOT NULL) OVER (PARTITION BY fi.ref) AS n_hidden,"
+            "         MAX(t.timestamp) OVER (PARTITION BY fi.ref) AS ended,"
+            # 대표 헤드라인은 '접히지 않은' 턴에서 먼저 고른다(api_sessions 와 동일 기준 —
+            # 접은 첫 턴이 계속 제목으로 뜨면 접은 의미가 없다). 턴이 없는 참조는 뒤로.
+            "         ROW_NUMBER() OVER (PARTITION BY fi.ref"
+            "           ORDER BY (t.id IS NULL), (h.turn_id IS NOT NULL), t.timestamp, t.id) AS rn"
+            "    FROM folder_items fi"
+            "    LEFT JOIN turns t ON t.session_id = fi.ref"
+            "    LEFT JOIN hidden_turns h ON h.turn_id = t.id"
+            "    LEFT JOIN session_titles st ON st.session_id = fi.ref"
+            "   WHERE fi.folder_id=? AND fi.kind='session'"
+            ") WHERE rn = 1", (folder_id,)).fetchall()
+
         out = []
-        for r in rows:
-            item = {"kind": r["kind"], "ref": r["ref"], "added_at": r["added_at"],
-                    "alias": r["alias"], "position": r["position"]}
-            if r["kind"] == "turn":
-                t = self.conn.execute(
-                    "SELECT session_id, summary, question, timestamp FROM turns WHERE id=?",
-                    (r["ref"],)).fetchone()
-                folded = self.conn.execute(
-                    "SELECT 1 FROM hidden_turns WHERE turn_id=?", (r["ref"],)).fetchone() is not None
-                item |= {"session_id": t["session_id"] if t else None,
-                         "headline": ((t["summary"] or t["question"]) if t else "") or "",
-                         "timestamp": t["timestamp"] if t else None,
-                         "hidden": folded}   # 접힘(#128) — 폴더에서도 접기/펼치기 하도록
-            else:   # session — 담긴 건 참조뿐이라 현재 기준으로 개수·대표 제목을 매번 계산
-                t = self.conn.execute(
-                    "SELECT COUNT(*) n, MIN(timestamp) started, MAX(timestamp) ended FROM turns "
-                    "WHERE session_id=?", (r["ref"],)).fetchone()
-                head = self.conn.execute(
-                    "SELECT summary, question FROM turns WHERE session_id=? ORDER BY timestamp, id LIMIT 1",
-                    (r["ref"],)).fetchone()
-                n_hidden = self.conn.execute(
-                    "SELECT COUNT(*) c FROM turns t JOIN hidden_turns h ON h.turn_id = t.id "
-                    "WHERE t.session_id=?", (r["ref"],)).fetchone()["c"]
-                n = t["n"] if t else 0
+        for r in turn_rows:
+            out.append({
+                "kind": "turn", "ref": r["ref"], "added_at": r["added_at"],
+                "alias": r["alias"], "position": r["position"],
+                "session_id": r["session_id"],
+                "headline": (r["summary"] or r["question"] or ""),
+                "timestamp": r["timestamp"],
+                "hidden": bool(r["hidden"]),   # 접힘(#128) — 폴더에서도 접기/펼치기 하도록
+            })
+        for r in sess_rows:
+            n = r["n"] or 0
+            out.append({
+                "kind": "session", "ref": r["ref"], "added_at": r["added_at"],
+                "alias": r["alias"], "position": r["position"],
+                "session_id": r["ref"], "count": n,
                 # 사용자가 지은 세션 제목이 있으면 그게 우선(/api/sessions 와 같은 기준).
                 # 안 보면 제목을 바꿔도 폴더 화면에만 옛 제목이 남는다.
-                custom = self.session_title(r["ref"])
-                item |= {"session_id": r["ref"], "count": n,
-                         "headline": custom or (((head["summary"] or head["question"]) if head else "") or ""),
-                         "timestamp": t["ended"] if t else None,
-                         # 세션은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)
-                         "hidden": n > 0 and n_hidden == n}
+                "headline": (r["title"] or r["summary"] or r["question"] or ""),
+                "timestamp": r["ended"],
+                # 세션은 전 턴이 접혔을 때만 '접힘'(세션 목록과 같은 기준)
+                "hidden": n > 0 and (r["n_hidden"] or 0) == n,
+            })
+        # 사용자가 정한 순서(position) 우선, 아직 없으면 담은 순. NULL 은 뒤로.
+        out.sort(key=lambda i: (i["position"] is None, i["position"] or 0, i["added_at"] or 0))
+        for item in out:
             # 폴더에서 붙인 이름이 있으면 그걸 제목으로(원본은 original_headline 으로 함께 내려줌).
             item["original_headline"] = item["headline"]
-            if r["alias"]:
-                item["headline"] = r["alias"]
-            out.append(item)
+            if item["alias"]:
+                item["headline"] = item["alias"]
         return out
 
     def folder_turn_ids(self, folder_id: int, include_descendants: bool = True) -> set[str]:

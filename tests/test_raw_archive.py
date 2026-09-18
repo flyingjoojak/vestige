@@ -475,3 +475,92 @@ def test_marker_not_claimed_on_folder_with_existing_archives(tmp_path, monkeypat
     with pytest.raises(RuntimeError):              # 정리는 영영 거부
         R.enforce_quota(1, db)
     assert mine.exists()                           # 남의 파일 그대로
+
+
+# ── gz 꼬리 손상 복구(중단된 append) ─────────────────────────
+def test_mirror_file_repairs_truncated_tail_member(tmp_path, monkeypatch):
+    """append 중 죽어 잘린 멤버가 남았으면, 다음 미러링이 그 잔재를 걷어내고 이어 쓴다.
+
+    잘린 멤버를 그냥 두고 이어 쓰면 gzip.open 이 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지'
+    못 읽는다(전부 유실). mirror_bytes(마지막 성공 크기)를 기준으로 잘라낸다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+
+    f.write_bytes(b'{"a":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    good_size = out.stat().st_size
+    assert db.raw_mirror_bytes(str(f)) == good_size
+
+    # 두 번째 append 가 중간에 죽은 상황: 잘린 멤버가 꼬리에 남고 커서는 안 올라감.
+    f.write_bytes(b'{"a":1}\n{"b":2}\n')
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00deadbeef")      # 트레일러 없는 쓰레기 멤버
+    assert out.stat().st_size > good_size
+
+    R.mirror_file(db, f, "claude-code")             # 다음 회차
+    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'   # 온전히 복원
+    assert db.raw_mirror_bytes(str(f)) == out.stat().st_size
+
+
+def test_read_mirror_returns_partial_bytes_on_corrupt_tail(tmp_path, monkeypatch):
+    """꼬리가 손상된 보존본도 읽은 만큼은 돌려준다(EOFError 로 전부 날리지 않는다)."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    with open(f, "ab") as fh:
+        fh.write(b'{"b":2}\n')
+    R.mirror_file(db, f, "claude-code")             # 멤버 2개
+
+    out = R.raw_path("claude-code", sid)
+    out.write_bytes(out.read_bytes()[:-3])          # 마지막 멤버 트레일러 절단
+
+    got = R.read_mirror("claude-code", sid)
+    assert got is not None
+    assert got.startswith(b'{"a":1}\n')             # 앞 멤버는 살아서 온다
+
+
+# ── Syncthing 충돌본 분리 ────────────────────────────────────
+def test_mirror_file_skips_syncthing_conflict_copies(tmp_path, monkeypatch):
+    """충돌본은 미러링하지 않는다.
+
+    파일명에 원본과 같은 UUID 가 박혀 있어 session_id_for 가 같은 값을 낸다 → 그대로 두면
+    원본과 충돌본의 바이트가 한 보존본에 각자의 커서로 섞여, 복구본에 중복 줄이 생긴다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    base = tmp_path / f"{sid}.jsonl"
+    base.write_bytes(b'{"a":1}\n{"b":2}\n')
+    R.mirror_file(db, base, "claude-code")
+
+    # 같은 세션의 충돌 사본(원본의 줄 prefix 관계 — Syncthing 이 만드는 실제 모양)
+    conflict = tmp_path / f"{sid}.sync-conflict-20260101-120000-ABCDEFG.jsonl"
+    conflict.write_bytes(b'{"a":1}\n{"b":2}\n{"c":3}\n')
+    assert R.session_id_for(conflict) == sid          # 같은 세션으로 매핑되는 게 문제의 씨앗
+    assert R.mirror_file(db, conflict, "claude-code") == 0      # 건너뜀
+    assert db.get_raw_cursor(str(conflict)) == 0                # 커서도 안 생김
+
+    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'   # 섞이지 않았다
+
+    # 해소기가 conflict_wins 로 정리하면(원본 ← 충돌본) 원본 커서로 delta 만 이어진다.
+    base.write_bytes(conflict.read_bytes())
+    R.mirror_file(db, base, "claude-code")
+    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n{"c":3}\n'
+
+
+def test_mirror_file_still_mirrors_forked_session(tmp_path, monkeypatch):
+    """fork 로 새 세션 id 를 받은 파일은 정상 미러링된다(충돌본 스킵에 걸리지 않게)."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    forked = "129e80dc-1754-7422-b72f-2d176635efb3"
+    f = tmp_path / f"{forked}.jsonl"
+    f.write_bytes(b'{"x":9}\n')
+    assert R.mirror_file(db, f, "claude-code") > 0
+    assert R.read_mirror("claude-code", forked) == b'{"x":9}\n'

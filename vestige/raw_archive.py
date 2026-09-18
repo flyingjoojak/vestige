@@ -23,6 +23,7 @@ import gzip
 import json
 import logging
 import re
+import zlib
 from pathlib import Path
 
 from . import config as C
@@ -98,6 +99,15 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     예외를 삼키지 않고 그대로 던진다(호출자의 try/except 격리에 맡김).
     """
     path = str(path)
+    # Syncthing 충돌본(`<sid>.sync-conflict-...jsonl`)은 미러링하지 않는다.
+    # 파일명에 원본과 같은 UUID 가 박혀 있어 session_id_for 가 같은 값을 내고, 그대로 두면
+    # 원본과 충돌본의 바이트가 한 보존본에 각자의 커서로 섞여 들어간다(복구 시 중복 줄).
+    # 충돌 해소기(session_sync)가 곧 정리하고, 그 결과는 어느 쪽이든 안전하다 —
+    # conflict_wins/base_wins 는 한쪽이 다른 쪽의 줄 prefix 라 원본 커서가 그대로 유효하고,
+    # fork 는 새 세션 id 파일로 떨어져 별도 보존본이 된다. 여기서 건너뛰어 잃는 건 없다.
+    from .session_sync import base_for_conflict
+    if base_for_conflict(path) is not None:
+        return 0
     size = Path(path).stat().st_size
     mirrored = db.get_raw_cursor(path)
     if mirrored > size:
@@ -113,12 +123,20 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     out = raw_path(source, sid)
     out.parent.mkdir(parents=True, exist_ok=True)
     _ensure_marker(raw_dir())
+    # 중단된 append 의 잔재를 먼저 걷어낸다. 앞서 죽었다면 꼬리에 트레일러 없는 gzip 멤버가
+    # 남아 있고, 그대로 이어 쓰면 gzip.open 이 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지' 못 읽는다.
+    # 마지막 성공 크기를 알고 있으니 거기까지 잘라내면 된다(그 뒤는 커서가 안 올라간 구간이라
+    # 아래 append 가 다시 채운다).
+    known = db.raw_mirror_bytes(path)
+    if known is not None and out.exists() and out.stat().st_size > known:
+        with open(out, "r+b") as f:
+            f.truncate(known)
     with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
         gz.write(chunk)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
-    db.set_raw_cursor(path, mirrored + len(chunk), sid, source)
+    db.set_raw_cursor(path, mirrored + len(chunk), sid, source, mirror_bytes=out.stat().st_size)
     db.commit()
     return len(chunk)
 
@@ -128,12 +146,40 @@ def has_mirror(source: str, session_id: str) -> bool:
 
 
 def read_mirror(source: str, session_id: str) -> bytes | None:
-    """이 세션의 보존된 원본 바이트 전체(압축 해제). 없으면 None."""
+    """이 세션의 보존된 원본 바이트 전체(압축 해제). 없으면 None.
+
+    꼬리가 손상돼 있으면(중단된 append 의 잘린 멤버) 거기서 멈추고 **그때까지 읽은 만큼을
+    돌려준다**. gzip.open(...).read() 한 방이면 EOFError 로 앞의 멀쩡한 멤버까지 전부 날아간다 —
+    복구는 일부라도 되는 쪽이 낫다. mirror_file 이 다음 회차에 잔재를 잘라내고 이어 쓰므로
+    보통은 여기까지 오지 않는다(이 경로는 그 전에 만들어진 파일·외부 손상용 안전망).
+    """
     p = raw_path(source, session_id)
     if not p.exists():
         return None
-    with gzip.open(p, "rb") as gz:   # 멀티멤버를 이어서 투명하게 풀어 읽음
-        return gz.read()
+    raw = p.read_bytes()
+    out = bytearray()
+    pos, bad = 0, None
+    # 멤버를 하나씩 직접 푼다. gzip.open(...).read() 는 버퍼를 채우려고 손상 지점까지 넘어가서
+    # 앞의 멀쩡한 멤버까지 통째로 날린다(EOFError). zlib 으로 끊어 읽으면 어디까지 온전한지 안다.
+    while pos < len(raw):
+        d = zlib.decompressobj(31)       # 31 = gzip 헤더 포함
+        try:
+            chunk = d.decompress(raw[pos:]) + d.flush()
+        except zlib.error as ex:
+            bad = ex
+            break
+        if not d.eof:                    # 멤버가 제대로 끝나지 않았다 = 잘림
+            bad = "트레일러 없음(중단된 append)"
+            break
+        out += chunk
+        consumed = len(raw) - pos - len(d.unused_data)
+        if consumed <= 0:                # 진행이 없으면 무한루프 방지
+            bad = "진행 불가"
+            break
+        pos += consumed
+    if bad is not None:
+        logger.warning("보존본 꼬리 손상 - 온전한 %d바이트만 반환합니다 (%s): %s", len(out), p.name, bad)
+    return bytes(out)
 
 
 def mirror_size_bytes() -> int:
