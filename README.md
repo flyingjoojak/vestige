@@ -217,10 +217,33 @@ claude mcp add vestige -- vestige-mcp
 
 태그(`vX.Y.Z`)를 push하면 GitHub Actions가 Windows/Linux/macOS 설치본을 빌드해 릴리스에 첨부합니다(자동 업데이트용 `latest.yml` 포함):
 
-1. `electron/package.json`의 `version`과 **[homebrew-vestige](https://github.com/flyingjoojak/homebrew-vestige) tap 저장소의 `Casks/vestige.rb` `version`**을 함께 올리고, `CHANGELOG.md`에 변경 정리(날짜 포함). 카스크 버전을 빠뜨리면 이후 `brew install --cask`가 옛 dmg를 받아 404가 납니다. (cask는 tap 저장소에 있습니다 - 이 저장소가 아님)
-2. `git tag v0.2.0 && git push origin v0.2.0`.
+1. 버전 문자열을 **네 곳 모두** 올리고 `CHANGELOG.md`에 변경 정리(날짜 포함). 각각 하는 일이 달라, 빠뜨리면 깨지는 것도 다릅니다:
+
+   | 위치 | 역할 | 빠뜨리면 |
+   |---|---|---|
+   | `electron/package.json` | `app.getVersion()` → 자동 업데이트 비교 기준 | Windows 사용자가 업데이트를 못 받음 |
+   | **tap 저장소** [homebrew-vestige](https://github.com/flyingjoojak/homebrew-vestige) `Casks/vestige.rb` | macOS 설치·업데이트 경로 (**정본**) | mac 사용자가 계속 옛 버전을 받음 |
+   | `pyproject.toml` | pip 설치 메타데이터 | pip 사용자가 옛 버전 |
+   | `Casks/vestige.rb` (이 저장소) | tap 사본 — 이 저장소를 직접 tap 한 경우 | 그 경로 사용자만 옛 버전 |
+
+   `vestige/__init__.py`의 `__version__`은 어디서도 읽지 않지만(참조 0건) 혼동을 막기 위해 같이 맞춥니다.
+
+   > **가장 흔한 실수: tap 저장소를 빼먹는 것.** 이 저장소의 `Casks/vestige.rb`만 올리면 다 한 것처럼 보이는데, 실제 `brew install --cask vestige`는 tap 저장소를 읽습니다. macOS는 미서명 앱의 자동 업데이트가 막혀 Homebrew가 유일한 업데이트 경로라 조용히 갈라집니다(v0.3.0에서 실제로 발생).
+
+2. `git tag vX.Y.Z && git push origin vX.Y.Z` (1번에서 올린 버전과 같은 값).
 3. 릴리스가 만들어지면 **macOS `.dmg`가 실제로 첨부됐는지 확인**하세요 - mac 빌드는 미서명이라 CI에서 비차단(`continue-on-error`)이어서, 조용히 실패해도 릴리스는 green으로 생성됩니다(그러면 Homebrew가 404).
 4. **릴리스 본문이 앱 업데이트 배너에 표시**됩니다 - `<!--lang:en-->` / `<!--lang:ko-->` 마커로 나누면 배너가 사용자 언어 섹션만 보여줍니다.
+5. **배포 경로에 실제로 도달했는지 확인**하세요. dmg 첨부(3번)까지 됐어도 tap 이 옛 버전을 가리키면 mac 사용자에게는 아무 일도 일어나지 않습니다:
+
+   ```bash
+   # tap 정본이 새 버전인지
+   gh api repos/flyingjoojak/homebrew-vestige/contents/Casks/vestige.rb -q .content | base64 -d | grep version
+   # cask 가 만드는 URL 이 실제로 살아있는지(200 이어야 함 - 404 면 dmg 누락/버전 불일치)
+   curl -sIL -o /dev/null -w '%{http_code}\n' \
+     https://github.com/flyingjoojak/vestige/releases/download/vX.Y.Z/Vestige-X.Y.Z-macOS.dmg
+   ```
+
+   자동 업데이트 매니페스트(`latest.yml` / `latest-mac.yml` / `latest-linux.yml`)도 릴리스 자산에 함께 올라와 있어야 합니다.
 
 macOS: 미서명 앱은 자동 업데이트가 막혀 **Homebrew로 설치/업데이트**(Gatekeeper 경고 없음). Windows는 미서명이어도 배너에서 자동 업데이트됩니다.
 

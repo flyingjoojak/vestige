@@ -188,6 +188,24 @@ v0.2.1 → 다음 릴리스(0.3.0 후보) 사이에 들어간 변경을 손으�
       (수정 전엔 한국어가 그대로 노출됐다)
 - [ ] 빈 이름으로 폴더 만들기, 없는 폴더 조작 등도 영어로 뜬다
 
+## 9. 릴리스 배포 검증 (태그 push 후)
+
+기능이 아니라 **배포 경로**를 확인하는 단계. 여기까지 안 보면 "빌드는 green인데 사용자에게는
+안 닿는" 상태를 놓친다(v0.3.0에서 tap 버전을 빼먹어 mac 사용자가 계속 0.2.1을 받았다).
+
+- [ ] 릴리스에 **OS별 설치본 3개**가 첨부됐다 (`.exe` / `.dmg` / `.AppImage`)
+      — mac 잡은 `continue-on-error`라 조용히 실패해도 릴리스는 green으로 만들어진다
+- [ ] 자동 업데이트 매니페스트 3개가 있다 (`latest.yml` / `latest-mac.yml` / `latest-linux.yml`)
+- [ ] **tap 저장소**([homebrew-vestige](https://github.com/flyingjoojak/homebrew-vestige))의
+      `Casks/vestige.rb` `version`이 새 버전이다 ← **가장 자주 빠뜨리는 곳**
+- [ ] cask가 만드는 dmg URL이 HTTP 200이다 (404면 버전 불일치 또는 dmg 누락)
+- [ ] 릴리스 본문에 `<!--lang:ko-->` / `<!--lang:en-->` 마커가 있다(앱 업데이트 배너용)
+- [ ] 다운로드한 설치본의 크기·sha512가 `latest.yml`에 적힌 값과 같다
+- [ ] 이전 버전이 깔린 기기에서 **업데이트 배너가 새 버전을 감지**한다(Windows)
+- [ ] `brew upgrade --cask vestige`로 mac이 새 버전을 받는다
+
+> README의 '릴리스 & 버저닝' 섹션에 버전 문자열 네 곳의 역할표와 확인용 명령이 있다.
+
 ---
 
 ## 알려진 제약 (버그 아님)
