@@ -302,7 +302,12 @@
     "sourceCount": "{{n}}개",
     "sourceFilterAria": "검색 소스",
     "foldTurn": "이 턴 접기(검색에서 빼기)",
-    "foldFailed": "접기에 실패했어요"
+    "foldFailed": "접기에 실패했어요",
+    "recentQueries": "최근 검색",
+    "clearRecent": "지우기",
+    "recentSessions": "최근 대화",
+    "untitledSession": "(제목 없음)",
+    "turnCount": "{{count}}턴"
   },
   "onboarding": {
     "title": "임베딩 모델 선택",

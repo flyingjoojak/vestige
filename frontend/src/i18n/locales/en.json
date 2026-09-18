@@ -302,7 +302,12 @@
     "sourceCount": "{{n}}",
     "sourceFilterAria": "Search sources",
     "foldTurn": "Fold this turn (remove from search)",
-    "foldFailed": "Couldn't fold"
+    "foldFailed": "Couldn't fold",
+    "recentQueries": "Recent searches",
+    "clearRecent": "Clear",
+    "recentSessions": "Recent conversations",
+    "untitledSession": "(untitled)",
+    "turnCount": "{{count}} turns"
   },
   "onboarding": {
     "title": "Choose an embedding model",
