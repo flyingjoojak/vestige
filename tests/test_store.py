@@ -418,3 +418,117 @@ def test_folder_turn_item_ignores_session_title(tmp_path):
     db.add_to_folder(f, "turn", "s1:u1")
     db.set_session_title("s1", "내가 지은 세션 제목")
     assert db.folder_items(f)[0]["headline"] == "턴 자신의 질문"
+
+
+def _schema_fingerprint(conn):
+    """스키마 전체 지문: 테이블·인덱스 목록 + 각 테이블의 컬럼 정의.
+
+    sqlite_master 의 sql 원문을 그대로 비교하면 주석·공백 차이로 깨지므로,
+    PRAGMA 로 읽은 '구조'만 본다.
+    """
+    out = {}
+    names = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    for t in names:
+        cols = [(r["name"], (r["type"] or "").upper(), bool(r["notnull"]), r["pk"])
+                for r in conn.execute(f"PRAGMA table_info({t})")]
+        idx = sorted(
+            (r["name"], bool(r["unique"]),
+             tuple(c["name"] for c in conn.execute(f"PRAGMA index_info({r['name']})")))
+            for r in conn.execute(f"PRAGMA index_list({t})")
+        )
+        fks = sorted((r["table"], r["from"], r["to"]) for r in conn.execute(f"PRAGMA foreign_key_list({t})"))
+        out[t] = {"cols": cols, "idx": idx, "fks": fks}
+    return out
+
+
+def test_migrated_db_schema_matches_fresh_schema(tmp_path):
+    """레거시 DB에 마이그레이션을 전부 적용한 결과 == _SCHEMA 로 새로 만든 DB.
+
+    append-only 마이그레이션 패턴에서 실제로 위험한 건 user_version 숫자가 아니라
+    "_SCHEMA 에만 컬럼/인덱스를 추가하고 마이그레이션을 빼먹는 것"이다. 그러면 신규 사용자와
+    기존 사용자의 DB 모양이 갈리고, 기존 사용자에게서만 터진다. 기존 테스트는 버전 숫자만 봐서
+    이걸 못 잡는다.
+    """
+    import sqlite3
+    p = tmp_path / "legacy.db"
+    con = sqlite3.connect(str(p))
+    con.executescript(
+        "CREATE TABLE turns(id TEXT PRIMARY KEY, session_id TEXT, uuid TEXT, parent_uuid TEXT,"
+        " timestamp TEXT, project TEXT, question TEXT, answer TEXT, actions TEXT, summary TEXT, tags TEXT);"
+        "CREATE TABLE chunks(chunk_key TEXT PRIMARY KEY, turn_id TEXT, idx INTEGER, text TEXT);"
+        "CREATE TABLE cursors(file_path TEXT PRIMARY KEY, offset INTEGER, size INTEGER, mtime REAL, updated_at REAL);"
+        "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+    )
+    con.commit(); con.close()
+
+    migrated = ArchiveDB(p)                      # v0 → 최신까지 마이그레이션
+    fresh = ArchiveDB(tmp_path / "fresh.db")     # _SCHEMA 로 바로 생성
+
+    a, b = _schema_fingerprint(migrated.conn), _schema_fingerprint(fresh.conn)
+    assert set(a) == set(b), f"테이블 목록 불일치: 마이그레이션만={set(a)-set(b)}, _SCHEMA만={set(b)-set(a)}"
+    for t in sorted(a):
+        assert a[t]["cols"] == b[t]["cols"], f"{t} 컬럼 불일치\n  마이그레이션={a[t]['cols']}\n  _SCHEMA={b[t]['cols']}"
+        assert a[t]["idx"] == b[t]["idx"], f"{t} 인덱스 불일치\n  마이그레이션={a[t]['idx']}\n  _SCHEMA={b[t]['idx']}"
+        assert a[t]["fks"] == b[t]["fks"], f"{t} 외래키 불일치\n  마이그레이션={a[t]['fks']}\n  _SCHEMA={b[t]['fks']}"
+
+
+def test_folder_items_uses_constant_number_of_queries(tmp_path):
+    """항목 수와 무관하게 쿼리는 2회(종류별 1회). 항목마다 돌면 100개 폴더가 300 왕복이 된다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    for si in range(20):
+        for ti in range(3):
+            db.upsert_turn(_turn(f"s{si}:u{ti}", session=f"s{si}",
+                                 ts=f"2026-07-{si % 28 + 1:02d}T0{ti}:00:00Z", q=f"질문{si}-{ti}"))
+    db.commit()
+    f = db.create_folder("big")
+    for si in range(20):
+        db.add_to_folder(f, "session", f"s{si}")
+        for ti in range(3):
+            db.add_to_folder(f, "turn", f"s{si}:u{ti}")
+
+    n = [0]
+    db.conn.set_trace_callback(lambda _s: n.__setitem__(0, n[0] + 1))
+    items = db.folder_items(f)
+    db.conn.set_trace_callback(None)
+
+    assert len(items) == 80          # 세션 20 + 턴 60
+    assert n[0] == 2
+
+
+def test_folder_items_keeps_dangling_refs_visible(tmp_path):
+    """없는 턴·세션을 가리키는 항목도 목록에서 빠지지 않는다(빼면 지울 방법이 사라진다)."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1")); db.commit()
+    f = db.create_folder("F")
+    db.add_to_folder(f, "session", "없는세션")
+    db.add_to_folder(f, "turn", "없는턴")
+
+    by = {(i["kind"], i["ref"]): i for i in db.folder_items(f)}
+    assert len(by) == 2
+    ghost_s = by[("session", "없는세션")]
+    assert ghost_s["count"] == 0 and ghost_s["headline"] == "" and ghost_s["hidden"] is False
+    assert ghost_s["timestamp"] is None
+    ghost_t = by[("turn", "없는턴")]
+    assert ghost_t["headline"] == "" and ghost_t["session_id"] is None
+
+
+def test_folder_session_headline_prefers_unfolded_turn(tmp_path):
+    """접은 첫 턴이 계속 제목으로 뜨면 접은 의미가 없다 — /api/sessions 와 같은 기준."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("s1:u1", ts="2026-07-24T00:00:00Z", q="접을 첫 질문"))
+    db.upsert_turn(_turn("s1:u2", ts="2026-07-24T01:00:00Z", q="두 번째 질문"))
+    db.commit()
+    f = db.create_folder("F")
+    db.add_to_folder(f, "session", "s1")
+    assert db.folder_items(f)[0]["headline"] == "접을 첫 질문"
+
+    db.hide_turns(["s1:u1"])
+    it = db.folder_items(f)[0]
+    assert it["headline"] == "두 번째 질문"   # 접힌 턴은 제목 후보에서 밀린다
+    assert it["hidden"] is False              # 전부 접힌 게 아니라 세션은 '접힘' 아님
+
+    db.hide_turns(["s1:u2"])
+    it = db.folder_items(f)[0]
+    assert it["hidden"] is True               # 전 턴이 접히면 세션도 접힘
+    assert it["headline"] == "접을 첫 질문"    # 다 접혔으면 그중 첫 턴(대안 없음)
