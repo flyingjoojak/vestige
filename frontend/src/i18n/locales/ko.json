@@ -542,6 +542,11 @@
     "moveFailed": "폴더를 옮기지 못했어요",
     "dropToRootHint": "여기에 놓으면 맨 바깥으로 빼냅니다",
     "createdButNotAdded": "폴더는 만들었지만 담는 데 실패했어요",
-    "alreadyGone": "이미 목록에서 빠진 항목이에요"
+    "alreadyGone": "이미 목록에서 빠진 항목이에요",
+    "move": "이동",
+    "moveHint": "드래그 없이 옮기기:",
+    "moveIn": "안으로",
+    "moveOut": "밖으로",
+    "toggle": "{{name}} 펼치기/접기"
   }
 }

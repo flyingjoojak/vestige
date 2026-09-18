@@ -1,9 +1,9 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, FolderPlus,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, FolderPlus,
   Folder as FolderIcon, GripVertical, Loader2,
-  MessagesSquare, Pencil, Search as SearchIcon, Tag, Trash2, X,
+  MessagesSquare, Move, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
@@ -13,7 +13,7 @@ import {
 import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
-import { childrenOf, flattenTree } from "@/lib/foldertree"
+import { childrenOf, flattenTree, treeMoves, type TreeMoves } from "@/lib/foldertree"
 import { useDebounced } from "@/lib/useDebounced"
 import { fmtTime } from "@/lib/format"
 import type { Folder, FolderDetail, FolderItem, Hit } from "@/lib/types"
@@ -47,7 +47,7 @@ function TreeGuide({ lines, last }: { lines: boolean[]; last: boolean }) {
   )
 }
 
-function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPick, onToggle, drag }: {
+function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPick, onToggle, drag, onMove }: {
   parent: number | null
   byParent: Map<number | null, Folder[]>
   sel: number | null
@@ -68,7 +68,10 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
     blocked: Set<number>                     // 놓을 수 없는 대상(자기 자신 + 자기 하위)
     end: () => void
   }
+  // 키보드로 옮기기(Alt+화살표). 드래그를 못 쓰는 경우의 경로 — 클릭 수단은 헤더의 '이동'.
+  onMove: (id: number, dir: keyof TreeMoves) => void
 }) {
+  const { t: tr } = useTranslation()
   const rows = byParent.get(parent) ?? []
   return (
     <>
@@ -113,11 +116,23 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
               style={{ paddingLeft: "4px" }}
             >
               <TreeGuide lines={lines} last={isLast} />
-              <button type="button" onClick={() => onToggle(f.id)} aria-label={String(f.name)}
+              {/* 펼침 토글. 이름을 aria-label 로 쓰면 옆 선택 버튼과 똑같이 읽혀 무슨 버튼인지
+                  알 수 없다 → 동작을 이름으로 주고 상태는 aria-expanded 로 알린다.
+                  자식이 없으면 포커스 가능한 빈 버튼이 남지 않게 disabled. */}
+              <button type="button" onClick={() => onToggle(f.id)} disabled={!kids.length}
+                aria-label={tr("folders.toggle", { name: f.name })} aria-expanded={!isCollapsed}
                 className={`grid size-4 shrink-0 place-items-center rounded ${kids.length ? "hover:bg-muted-foreground/20" : "invisible"}`}>
                 <ChevronRight className={`size-3 transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
               </button>
               <button type="button" onClick={() => onPick(f.id)}
+                onKeyDown={(e) => {
+                  // Alt+화살표로 옮긴다. Alt 없이는 브라우저 기본 이동(탭/스크롤)을 건드리지 않는다.
+                  if (!e.altKey) return
+                  const dir = ({ ArrowUp: "up", ArrowDown: "down", ArrowRight: "indent", ArrowLeft: "outdent" } as const)[e.key]
+                  if (!dir) return
+                  e.preventDefault()
+                  onMove(f.id, dir)
+                }}
                 className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left">
                 <FolderIcon className="size-3.5 shrink-0" />
                 <span className="min-w-0 flex-1 truncate">{f.name}</span>
@@ -127,7 +142,7 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
             {!isCollapsed && kids.length > 0 && (
               <FolderTree parent={f.id} byParent={byParent} sel={sel} collapsed={collapsed}
                 depth={depth + 1} lines={[...lines, !isLast]}
-                onPick={onPick} onToggle={onToggle} drag={drag} />
+                onPick={onPick} onToggle={onToggle} drag={drag} onMove={onMove} />
             )}
           </div>
         )
@@ -149,6 +164,8 @@ export function FolderView() {
   const [searching, setSearching] = useState(false)
   // 이 화면 안에서 열어 볼 대화(세션 탭으로 넘어가지 않는다 — 폴더를 보다가 맥락이 끊기지 않게).
   const [openConv, setOpenConv] = useState<{ session: string; turn?: string } | null>(null)
+  const [moveOpen, setMoveOpen] = useState(false)   // 드래그 없이 옮기기 줄 펼침
+  const movePanelId = useId()
   // 드래그 정렬 상태: drag=집어든 항목, over=지금 놓일 자리(그 위에 표시선).
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [overIdx, setOverIdx] = useState<number | null>(null)
@@ -273,6 +290,23 @@ export function FolderView() {
     const next = [...detail.items]
     ;[next[idx], next[to]] = [next[to], next[idx]]
     applyOrder(next)
+  }
+
+  // 드래그 없이 폴더 옮기기(WCAG 2.5.7). 터치 화면에서는 HTML5 드래그 이벤트가 아예 안 와서
+  // 실질적으로도 이 경로가 유일하다. 목표 위치 계산은 foldertree.treeMoves 가 한다.
+  // 헤더 버튼용(선택한 폴더 기준) — 어느 방향이 가능한지 표시하는 데도 쓴다.
+  const moves = folders && sel != null ? treeMoves(folders, sel) : null
+  // id 를 받는 이유: Alt+화살표는 '지금 포커스된 행'을 옮긴다(선택 여부와 무관하게 바로 동작).
+  async function moveTree(dir: keyof TreeMoves, id: number | null = sel) {
+    if (id == null || !folders) return
+    const target = treeMoves(folders, id)[dir]
+    if (!target) return
+    try {
+      await moveFolder(id, target.parentId, target.beforeId)
+      loadFolders()
+    } catch (e) {
+      setErr(errText(t, e, "folders.saveFailed"))
+    }
   }
 
   // 놓은 위치를 '부모 + 그 앞에 올 형제'로 번역한다.
@@ -440,6 +474,7 @@ export function FolderView() {
                       },
                       end: () => { setDragFolder(null); setOverFolder(null) } }}
               onPick={setSel}
+              onMove={(id, dir) => moveTree(dir, id)}
               onToggle={(id) => setCollapsed((prev) => {
                 const next = new Set(prev)
                 if (next.has(id)) next.delete(id)
@@ -504,11 +539,37 @@ export function FolderView() {
                   className="inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
                   <Pencil className="size-3.5" />{t("folders.rename")}
                 </button>
+                <button type="button" onClick={() => setMoveOpen((v) => !v)}
+                  aria-expanded={moveOpen} aria-controls={movePanelId}
+                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted ${
+                    moveOpen ? "border-primary/50 bg-primary/5 text-primary" : ""}`}>
+                  <Move className="size-3.5" />{t("folders.move")}
+                </button>
                 <button type="button" onClick={() => remove(cur!)}
                   className="inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] text-destructive transition-colors hover:bg-destructive/10">
                   <Trash2 className="size-3.5" />{t("folders.delete")}
                 </button>
               </div>
+
+              {/* 드래그 없이 옮기기. 열어둔 채로 여러 번 누를 수 있게 모달이 아닌 인라인 줄로 둔다
+                  (한 칸씩 여러 번 옮기는 게 흔한데 모달이면 매번 다시 열어야 한다). */}
+              {moveOpen && (
+                <div id={movePanelId} className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg border bg-muted/30 p-2">
+                  <span className="mr-0.5 text-[11px] text-muted-foreground">{t("folders.moveHint")}</span>
+                  {([
+                    ["up", ChevronUp, "folders.moveUp"],
+                    ["down", ChevronDown, "folders.moveDown"],
+                    ["indent", ChevronRight, "folders.moveIn"],
+                    ["outdent", ChevronLeft, "folders.moveOut"],
+                  ] as const).map(([dir, Icon, key]) => (
+                    <button key={dir} type="button" onClick={() => moveTree(dir)} disabled={!moves?.[dir]}
+                      title={t(key)}
+                      className="inline-flex min-h-6 items-center gap-1 rounded-md border bg-card px-2 py-1 text-[11px] transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40">
+                      <Icon className="size-3.5" />{t(key)}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="relative mt-2">
                 <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input value={q} onChange={(e) => setQ(e.target.value)}
