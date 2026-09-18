@@ -323,7 +323,7 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
         except Exception:  # noqa: BLE001 — 커서/스탯 실패가 색인 회차를 중단시키지 않게(파일별 격리와 동일)
             pass
         try:   # 원본 미러링(#163 P1): 턴 추출과 완전히 별개 — 여기서 실패해도 색인은 계속.
-            raw_archive.mirror_file(db, f, getattr(adapter, "source_name", adapter.name))
+            raw_archive.mirror_file(db, f, getattr(adapter, "source_name", adapter.name), log_fn=log_fn)
         except Exception as ex:  # noqa: BLE001
             # "ERROR " 접두사는 _capture_log 가 /api/index/status 로 올리는 규약이다.
             # 이게 빠지면 보존 실패가 어디에도 안 남아, 원본이 지워진 뒤에야 발견된다.
@@ -349,7 +349,7 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
         try:
             n = raw_archive.enforce_quota(int(C.RAW_ARCHIVE_MAX_MB) * 1024 * 1024, db)
             if n:
-                log_fn(f"raw archive 용량 초과 - 오래된 세션 {n}개 정리")
+                log_fn(f"ERROR raw archive 용량 초과 - 오래된 세션 {n}개 정리(보존본 삭제)")
         except Exception as ex:  # noqa: BLE001
             log_fn(f"ERROR raw archive quota 정리 실패: {ex}")
     return total

@@ -300,7 +300,7 @@ def test_restore_claude_code_writes_to_encoded_project_dir(tmp_path, monkeypatch
     f.write_bytes(raw_bytes)
     R.mirror_file(db, f, "claude-code")
 
-    target = R.restore("claude-code", sid)
+    target, _intact = R.restore("claude-code", sid)
     assert target == config.PROJECTS_DIR / "C--growth-report" / f"{sid}.jsonl"
     assert target.read_bytes() == raw_bytes
 
@@ -319,7 +319,7 @@ def test_restore_does_not_overwrite_existing_original(tmp_path, monkeypatch):
     existing = existing_dir / f"{sid}.jsonl"
     existing.write_bytes(b"ALREADY THERE - DO NOT TOUCH")
 
-    target = R.restore("claude-code", sid)
+    target, _intact = R.restore("claude-code", sid)
     assert target == existing
     assert existing.read_bytes() == b"ALREADY THERE - DO NOT TOUCH"   # 안 덮어씀
 
@@ -345,7 +345,7 @@ def test_restore_codex_writes_under_restored_subdir(tmp_path, monkeypatch):
     f.write_bytes(raw_bytes)
     R.mirror_file(db, f, "codex")
 
-    target = R.restore("codex", sid)
+    target, _intact = R.restore("codex", sid)
     assert target == config.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{sid}.jsonl"
     assert target.read_bytes() == raw_bytes
 
@@ -493,7 +493,7 @@ def test_mirror_file_repairs_truncated_tail_member(tmp_path, monkeypatch):
     R.mirror_file(db, f, "claude-code")
     out = R.raw_path("claude-code", sid)
     good_size = out.stat().st_size
-    assert db.raw_mirror_bytes(str(f)) == good_size
+    assert db.mirror_ok_bytes(str(out)) == good_size
 
     # 두 번째 append 가 중간에 죽은 상황: 잘린 멤버가 꼬리에 남고 커서는 안 올라감.
     f.write_bytes(b'{"a":1}\n{"b":2}\n')
@@ -503,7 +503,7 @@ def test_mirror_file_repairs_truncated_tail_member(tmp_path, monkeypatch):
 
     R.mirror_file(db, f, "claude-code")             # 다음 회차
     assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'   # 온전히 복원
-    assert db.raw_mirror_bytes(str(f)) == out.stat().st_size
+    assert db.mirror_ok_bytes(str(out)) == out.stat().st_size
 
 
 def test_read_mirror_returns_partial_bytes_on_corrupt_tail(tmp_path, monkeypatch):
@@ -564,3 +564,305 @@ def test_mirror_file_still_mirrors_forked_session(tmp_path, monkeypatch):
     f.write_bytes(b'{"x":9}\n')
     assert R.mirror_file(db, f, "claude-code") > 0
     assert R.read_mirror("claude-code", forked) == b'{"x":9}\n'
+
+
+# ── 보존본 잘라내기 회귀(데이터 유실) ────────────────────────
+def test_switching_archive_dir_does_not_truncate_the_other_mirror(tmp_path, monkeypatch):
+    """보존소를 바꿨다 되돌려도 원래 보존본이 잘리면 안 된다.
+
+    예전엔 경계값이 '소스 로그 파일 경로'로 키가 잡혀 있어, 보존소 A 의 크기 기록을 들고
+    보존소 B 로 갔다가 다시 A 로 오면 B 기준 숫자로 A 를 잘랐다. 실측으로 510→142바이트,
+    복원 가능한 내용 0바이트(전손)를 확인한 경로다. 키를 보존본 경로로 옮겨 막는다.
+    """
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    src = tmp_path / f"{sid}.jsonl"
+    A, B = tmp_path / "A", tmp_path / "B"
+
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", A)
+    lines = b""
+    for i in range(6):
+        lines += b'{"n":%d,"pad":"%s"}\n' % (i, b"x" * 400)
+        src.write_bytes(lines)
+        R.mirror_file(db, src, "claude-code")
+    a_mirror = R.raw_path("claude-code", sid)
+    a_size, a_content = a_mirror.stat().st_size, R.read_mirror("claude-code", sid)
+    assert a_content == lines
+
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", B)      # 보존소 변경
+    lines += b'{"n":6}\n'
+    src.write_bytes(lines)
+    R.mirror_file(db, src, "claude-code")
+
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", A)      # 되돌리기
+    lines += b'{"n":7}\n'
+    src.write_bytes(lines)
+    R.mirror_file(db, src, "claude-code")
+
+    assert a_mirror.stat().st_size >= a_size            # 잘리지 않았다
+    restored = R.read_mirror("claude-code", sid)
+    assert restored is not None and len(restored) >= len(a_content)
+    assert restored.startswith(a_content[:2000])        # 앞부분 보존
+
+
+def test_two_source_files_sharing_one_mirror_do_not_truncate_each_other(tmp_path, monkeypatch):
+    """한 세션에 소스 파일이 둘(복구본 등)이면 같은 보존본을 공유한다 — 서로 자르면 안 된다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    a = tmp_path / f"rollout-2026-08-21T10-00-00-{sid}.jsonl"
+    b = tmp_path / "restored" / f"rollout-restored-{sid}.jsonl"
+    b.parent.mkdir(parents=True, exist_ok=True)
+    assert R.session_id_for(a) == R.session_id_for(b)   # 같은 보존본을 쓴다
+
+    a.write_bytes(b'{"from":"a"}\n')
+    R.mirror_file(db, a, "codex")
+    b.write_bytes(b'{"from":"b"}\n')
+    R.mirror_file(db, b, "codex")
+    a.write_bytes(b'{"from":"a"}\n{"a2":1}\n')
+    R.mirror_file(db, a, "codex")
+
+    got = R.read_mirror("codex", sid)
+    assert b'{"from":"b"}' in got     # b 가 보존한 멤버가 살아있다
+    assert b'{"a2":1}' in got
+
+
+def test_restore_refuses_when_mirror_is_unreadable(tmp_path, monkeypatch):
+    """첫 멤버부터 손상이면 복구가 아니다 — 빈 파일을 써놓고 '완료'라고 하면 안 된다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "CODEX_SESSIONS_DIR", tmp_path / "codex")
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    p = R.raw_path("codex", sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\x1f\x8b\x08\x00not-a-valid-member")
+
+    assert R.read_mirror("codex", sid) == b""
+    assert R.restore("codex", sid) is None                     # 복구 거부
+    assert not (tmp_path / "codex" / "restored").exists()      # 빈 파일도 안 만든다
+
+
+def test_restore_reports_partial_when_tail_is_damaged(tmp_path, monkeypatch):
+    """앞부분만 온전하면 복구는 하되 '온전하지 않다'고 알려야 한다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "CODEX_SESSIONS_DIR", tmp_path / "codex")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"rollout-{sid}.jsonl"
+    f.write_bytes(b'{"ok":1}\n')
+    R.mirror_file(db, f, "codex")
+    out = R.raw_path("codex", sid)
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00broken-tail")   # 손상된 꼬리 추가
+
+    got = R.restore("codex", sid)
+    assert got is not None
+    target, intact = got
+    assert intact is False                          # 손상 사실을 알린다
+    assert target.read_bytes() == b'{"ok":1}\n'     # 온전한 앞부분은 복구
+
+
+def test_repairs_broken_tail_even_without_db_record(tmp_path, monkeypatch):
+    """경계 기록이 없어도(업그레이드 직후) 깨진 꼬리를 걷어내야 한다.
+
+    기록이 없을 때 가드를 꺼버리면, 꼬리가 깨진 보존본을 가진 사용자 — 즉 이 기능이 가장
+    필요한 사용자 — 에게만 정확히 작동하지 않는다. 잘라낼 지점은 DB 가 아니라 파일에서 구한다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00truncated-member")     # 중단된 append 잔재
+    db.conn.execute("DELETE FROM raw_mirrors")            # 업그레이드 직후 = 기록 없음
+    db.commit()
+    assert db.mirror_ok_bytes(str(out)) is None
+
+    f.write_bytes(b'{"a":1}\n{"b":2}\n')
+    R.mirror_file(db, f, "claude-code")
+    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'
+
+
+def test_repairs_when_mirror_shrank_below_record(tmp_path, monkeypatch):
+    """파일이 기록보다 작아져도(전원 차단·동기화로 꼬리 유실) 그 위에 그냥 덧붙이면 안 된다.
+
+    cur_size < ok 는 '끝이 이미 깨졌다'는 가장 강한 신호다. 예전 구현은 이 방향을 아예 안 봐서
+    그 뒤 모든 멤버가 영구히 안 읽혔다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"n":0}\n')
+    R.mirror_file(db, f, "claude-code")
+    f.write_bytes(b'{"n":0}\n{"n":1}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+
+    out.write_bytes(out.read_bytes()[:-5])                # 꼬리 5바이트 유실
+    for i in range(2, 6):                                 # 이후 회차들
+        f.write_bytes(f.read_bytes() + b'{"n":%d}\n' % i)
+        R.mirror_file(db, f, "claude-code")
+
+    got = R.read_mirror("claude-code", sid)
+    assert got is not None
+    # n=1 까지 포함해 '전부' 들어 있어야 한다. 손상 구간을 잘라내기만 하고 커서를 그대로 두면
+    # 소스에 멀쩡히 남아 있는 n=1 이 영영 안 돌아오고, 남은 파일은 gzip 으로 온전해서
+    # '복구 완료'로 보고된다(가운데가 뚫린 대화). range(2,6) 으로 두면 그 유실을 지나친다.
+    for i in range(6):
+        assert b'{"n":%d}\n' % i in got, i
+    assert R.read_mirror_checked("claude-code", sid)[1] is True   # 되살렸으니 온전하다
+
+
+def _mirror_member_ends(raw: bytes) -> list[int]:
+    import zlib
+    pos, ends = 0, []
+    while pos < len(raw):
+        d = zlib.decompressobj(31)
+        d.decompress(memoryview(raw)[pos:]); d.flush()
+        pos = len(raw) - len(d.unused_data)
+        ends.append(pos)
+    return ends
+
+
+def test_recovers_mirror_truncated_by_old_bug(tmp_path, monkeypatch):
+    """옛 버그로 이미 잘린 보존본(업그레이드 직후 = 기록 없음)도 되살려야 한다.
+
+    이게 이 수정의 실제 대상이다. 잘린 결과는 gzip 으로 온전하고(good_end == 크기) 기록도
+    없어서(ok is None), '기록 대비' 판정만으로는 둘 다 빠져나간다. 그러면 커서가 앞선 채
+    다음 회차가 그 뒤에 덧붙여 가운데가 뚫린 보존본이 되고 소스의 대화가 영영 안 돌아온다.
+    판정 기준은 커서다 — 보존본에는 소스의 [0, cursor) 가 들어 있어야 한다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    body = b""
+    for i in range(3):
+        body += b'{"n":%d}\n' % i
+        f.write_bytes(body)
+        R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+
+    ends = _mirror_member_ends(out.read_bytes())
+    out.write_bytes(out.read_bytes()[: ends[-2]])            # 마지막 멤버를 잘라냄(=옛 버그 결과)
+    db.conn.execute("DELETE FROM raw_mirrors"); db.commit()  # 업그레이드 직후 = 기록 없음
+    assert R.read_mirror_checked("claude-code", sid) == (b'{"n":0}\n{"n":1}\n', True)  # 겉보기 온전
+
+    logs: list[str] = []
+    body += b'{"n":3}\n'
+    f.write_bytes(body)
+    R.mirror_file(db, f, "claude-code", log_fn=logs.append)
+
+    got, intact = R.read_mirror_checked("claude-code", sid)
+    assert got == body and intact is True                    # 잃었던 {"n":2} 까지 되살아남
+    # 데이터를 다시 만들었다는 사실이 UI 로 가는 경로("ERROR " 접두사)에 남아야 한다.
+    assert any(x.startswith("ERROR ") for x in logs), logs
+
+
+def test_read_marks_damage_so_next_mirror_repairs_it(tmp_path, monkeypatch):
+    """크기가 그대로인 손상은 읽기가 표시를 남겨, 다음 미러링의 빠른 경로가 내려오게 한다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"n":0}\n'); R.mirror_file(db, f, "claude-code")
+    f.write_bytes(b'{"n":0}\n{"n":1}\n'); R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+
+    # 크기는 그대로 두고 두 번째 멤버를 훼손한다. 헤더 앞부분(MTIME 등)은 zlib 이 검증하지
+    # 않으므로 실제로 깨지는 자리 — 멤버 끝의 CRC/길이 트레일러 — 를 뒤집는다.
+    raw = bytearray(out.read_bytes())
+    ends = _mirror_member_ends(bytes(raw))
+    raw[ends[1] - 3] ^= 0xFF
+    out.write_bytes(bytes(raw))
+    assert db.mirror_ok_bytes(str(out)) == out.stat().st_size   # 크기만으로는 못 잡는 상태
+    assert R.read_mirror_checked("claude-code", sid)[1] is False  # 읽기는 손상을 본다
+
+    R.read_mirror_checked("claude-code", sid)       # 읽기가 손상을 발견 → 표시를 남긴다
+    assert R._lost_marker(out).exists()
+
+    f.write_bytes(f.read_bytes() + b'{"n":2}\n')
+    R.mirror_file(db, f, "claude-code")
+    got, intact = R.read_mirror_checked("claude-code", sid)
+    assert got == f.read_bytes() and intact is True             # 전체 재보존으로 복구
+    assert not R._lost_marker(out).exists()
+
+
+def test_damaged_tail_does_not_destroy_other_sources_bytes(tmp_path, monkeypatch):
+    """한 보존본에 소스가 둘일 때, 한쪽을 수리하면서 다른 쪽 보존분을 지우면 안 된다.
+
+    보존본을 통째로 비우는 방식은 여기서 전손을 만든다(다른 소스의 커서는 전진한 채라
+    다시 안 채워진다). 걷어내는 건 '깨진 꼬리'까지여야 한다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    a = tmp_path / f"rollout-{sid}.jsonl"
+    b = tmp_path / "restored" / f"rollout-restored-{sid}.jsonl"
+    b.parent.mkdir(parents=True, exist_ok=True)
+
+    a.write_bytes(b'{"A":1}\n'); R.mirror_file(db, a, "codex")
+    b.write_bytes(b'{"B_ONLY":"only in b"}\n'); R.mirror_file(db, b, "codex")
+    a.write_bytes(b'{"A":1}\n{"A":3}\n'); R.mirror_file(db, a, "codex")
+
+    out = R.raw_path("codex", sid)
+    out.write_bytes(out.read_bytes()[:-3])          # 꼬리 손상
+    R.mirror_file(db, a, "codex")
+    R.mirror_file(db, b, "codex")
+
+    got = R.read_mirror("codex", sid)
+    assert b'{"B_ONLY":"only in b"}\n' in got       # 다른 소스의 보존분이 살아있다
+    assert b'{"A":1}\n' in got
+
+
+def test_damaged_tail_keeps_old_bytes_when_source_rotated(tmp_path, monkeypatch):
+    """소스가 회전으로 짧아진 상태에서 손상이 겹쳐도 옛 보존분을 잃지 않는다.
+
+    mirror_file docstring 이 약속하는 불변식이다 — 보존본을 비우는 수리는 이 약속을 깬다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    body = b""
+    for i in range(20):
+        body += b'{"n":%d,"pad":"%s"}\n' % (i, b"x" * 40)
+        f.write_bytes(body)
+        R.mirror_file(db, f, "claude-code")
+    before = R.read_mirror("claude-code", sid)
+    out = R.raw_path("claude-code", sid)
+
+    f.write_bytes(b'{"rotated":1}\n')               # 회전(훨씬 짧아짐)
+    out.write_bytes(out.read_bytes()[:-3])          # + 꼬리 손상
+    R.mirror_file(db, f, "claude-code")
+
+    after = R.read_mirror("claude-code", sid)
+    assert after.startswith(before[:1000])          # 옛 보존분 유지
+    assert b'{"rotated":1}\n' in after              # 회전 후 내용도 이어붙음
+
+
+def test_finished_session_records_verified_size_once(tmp_path, monkeypatch):
+    """더 자라지 않는 세션이 매 회차 전체 압축해제를 반복하지 않아야 한다.
+
+    검증한 크기를 기록해두지 않으면 기록이 영영 안 생겨(업그레이드 직후 = 기록 없음),
+    유휴 색인마다 보존본 전체를 읽고 푼다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"n":0}\n')
+    R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    db.conn.execute("DELETE FROM raw_mirrors"); db.commit()   # 업그레이드 직후
+
+    calls = []
+    real = R._walk_members
+    monkeypatch.setattr(R, "_walk_members", lambda *a, **k: calls.append(1) or real(*a, **k))
+    for _ in range(5):                                        # 새 바이트 없는 유휴 회차들
+        R.mirror_file(db, f, "claude-code")
+    assert len(calls) == 1, calls                             # 첫 회차만 스캔
+    assert db.mirror_ok_bytes(str(out)) == out.stat().st_size

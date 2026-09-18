@@ -22,7 +22,9 @@ import contextlib
 import gzip
 import json
 import logging
+import os
 import re
+import time
 import zlib
 from pathlib import Path
 
@@ -82,13 +84,58 @@ def _ensure_marker(root: Path) -> None:
     m.write_text("vestige raw archive\n", encoding="utf-8")
 
 
+def _lost_marker(mirror: Path) -> Path:
+    """이 보존본에서 '확정 구간'이 유실됐다는 표시. 있으면 복구는 반드시 부분 복구로 보고한다."""
+    return mirror.with_name(mirror.name + ".lost")
+
+
 def raw_path(source: str, session_id: str) -> Path:
     """이 세션의 압축 원본 경로. source/session_id 는 파일명·UUID에서만 나와 경로이탈 위험이
     없지만, 방어적으로 한 번 더 sanitize."""
     return raw_dir() / _sanitize(source) / f"{_sanitize(session_id)}.jsonl.gz"
 
 
-def mirror_file(db, path: str | Path, source: str) -> int:
+def _repair_mirror(db, out: Path, log_fn=None) -> int | None:
+    """보존본의 깨진 꼬리를 걷어내고, **이 보존본이 실제로 담고 있는 소스 바이트 수**를 돌려준다.
+    (손댈 필요가 없으면 None — 빠른 경로)
+
+    이 함수가 존재하는 이유는 하나다 — **잘라낸 바이트와 커서가 따로 놀면 안 된다.**
+    이 파일의 유실은 지금까지 전부 그 불변식이 깨져서 났다. 잘라낸 구간은 "아직 안 읽은 것"이
+    아니라 "이미 읽었는데 보존에 실패한 것"이라, 커서를 그대로 두면 소스에 멀쩡히 남아 있는
+    대화가 영영 안 돌아온다(그리고 남은 파일은 gzip 으로 온전해서 '복구 완료'로 보고된다).
+
+    그래서 호출부가 커서를 여기에 맞출 수 있도록 '담고 있는 양'을 돌려준다.
+    **보존본을 통째로 비우는 연산은 절대 넣지 않는다.** 한 보존본에 소스가 둘 붙을 수 있고
+    (codex 복구본), 소스가 회전으로 짧아졌을 수도 있어서, 비우는 순간 되살릴 수 없는 것까지
+    잃는다(실측으로 두 경우 모두 전손을 확인했다). 걷어내는 건 '깨진 꼬리'까지만이다.
+    """
+    if not out.exists():
+        return None
+    cur_size = out.stat().st_size
+    # 빠른 경로: 우리가 마지막으로 쓴 그대로(크기 일치)이고 손상 표시도 없으면 손대지 않는다.
+    # 마커를 함께 보는 이유 — 크기가 그대로인 손상(전원 차단으로 마지막 블록이 0으로 채워지는
+    # 경우 등)은 크기만으로는 안 잡힌다. 읽기 경로가 손상을 발견하면 마커를 남겨두므로,
+    # 값싼 존재 확인만으로 전체 검사로 내려올 수 있다.
+    if db.mirror_ok_bytes(str(out)) == cur_size and not _lost_marker(out).exists():
+        return None
+    data, good_end, intact = _walk_members(out.read_bytes(), out.name)
+    if not intact and good_end < cur_size:
+        msg = f"보존본 꼬리 {cur_size - good_end}바이트를 걷어냅니다(손상): {out.name}"
+        if log_fn:   # 색인 로그 규약: "ERROR " 접두사만 /api/index/status 로 UI 에 올라간다
+            log_fn(f"ERROR raw mirror {msg}")
+        logger.warning("%s", msg)
+        with open(out, "r+b") as f:
+            f.truncate(good_end)
+        cur_size = good_end
+        _lost_marker(out).unlink(missing_ok=True)   # 걷어냈으니 표시도 지운다
+    # 방금 검증한 크기를 기록해 다음부터 빠른 경로를 타게 한다. 이게 없으면 더 자라지 않는
+    # (끝난) 세션은 기록이 영영 안 생겨 매 색인 회차마다 전체 압축해제를 반복한다.
+    db.set_mirror_ok_bytes(str(out), cur_size)
+    db.commit()
+    return len(data)
+
+
+def mirror_file(db, path: str | Path, source: str, log_fn=None) -> int:
     """path 의 새 바이트(마지막 미러링 이후분)를 세션별 압축 원본에 append.
 
     반환: 이번에 미러링한 바이트 수(0이면 새 바이트 없음 — 멱등).
@@ -109,9 +156,24 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     if base_for_conflict(path) is not None:
         return 0
     size = Path(path).stat().st_size
+    sid = session_id_for(path)
+    out = raw_path(source, sid)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_marker(raw_dir())
     mirrored = db.get_raw_cursor(path)
     if mirrored > size:
         mirrored = 0
+    # 깨진 꼬리를 걷어내고, 보존본이 실제로 담고 있는 양을 받는다.
+    held = _repair_mirror(db, out, log_fn)
+    if held is not None and held < mirrored:
+        # 걷어낸 만큼 커서를 되감아 소스에서 그 구간을 다시 채운다. 이걸 안 하면 잘라낸 구간이
+        # '이미 미러링함'으로 남아 소스에 멀쩡히 있는 대화가 영영 안 돌아온다(가운데 구멍).
+        # held > mirrored 인 경우(한 보존본에 소스가 둘)는 건드리지 않는다 — 남의 몫이다.
+        msg = f"보존본이 {mirrored - held}바이트 모자라 소스에서 다시 채웁니다: {out.name}"
+        if log_fn:   # 색인 로그 규약: "ERROR " 접두사만 /api/index/status 로 UI 에 올라간다
+            log_fn(f"ERROR raw mirror {msg}")
+        logger.warning("%s", msg)
+        mirrored = held
     if mirrored == size:
         return 0
     with open(path, "rb") as f:
@@ -119,24 +181,19 @@ def mirror_file(db, path: str | Path, source: str) -> int:
         chunk = f.read()
     if not chunk:
         return 0
-    sid = session_id_for(path)
-    out = raw_path(source, sid)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_marker(raw_dir())
-    # 중단된 append 의 잔재를 먼저 걷어낸다. 앞서 죽었다면 꼬리에 트레일러 없는 gzip 멤버가
-    # 남아 있고, 그대로 이어 쓰면 gzip.open 이 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지' 못 읽는다.
-    # 마지막 성공 크기를 알고 있으니 거기까지 잘라내면 된다(그 뒤는 커서가 안 올라간 구간이라
-    # 아래 append 가 다시 채운다).
-    known = db.raw_mirror_bytes(path)
-    if known is not None and out.exists() and out.stat().st_size > known:
-        with open(out, "r+b") as f:
-            f.truncate(known)
-    with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
-        gz.write(chunk)
+    with open(out, "ab") as raw_f:
+        with gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
+            gz.write(chunk)
+        # 디스크까지 내려보낸 뒤에야 크기를 '정상'으로 기록한다. 이게 없으면 전원이 나갔을 때
+        # DB 커밋(fsync)만 살아남고 .gz 꼬리는 0으로 채워진 채 크기만 맞는 상태가 되어,
+        # 빠른 경로가 '기록==크기니 온전하다'고 오판할 수 있다.
+        raw_f.flush()
+        os.fsync(raw_f.fileno())   # 실패하면 던진다 — 삼키고 크기를 '정상'으로 적으면 안 된다
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
-    db.set_raw_cursor(path, mirrored + len(chunk), sid, source, mirror_bytes=out.stat().st_size)
+    db.set_raw_cursor(path, mirrored + len(chunk), sid, source)
+    db.set_mirror_ok_bytes(str(out), out.stat().st_size)
     db.commit()
     return len(chunk)
 
@@ -153,33 +210,63 @@ def read_mirror(source: str, session_id: str) -> bytes | None:
     복구는 일부라도 되는 쪽이 낫다. mirror_file 이 다음 회차에 잔재를 잘라내고 이어 쓰므로
     보통은 여기까지 오지 않는다(이 경로는 그 전에 만들어진 파일·외부 손상용 안전망).
     """
+    got = read_mirror_checked(source, session_id)
+    return None if got is None else got[0]
+
+
+def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | None:
+    """(온전하게 읽은 바이트, 전부 온전한가). 보존본이 아예 없으면 None.
+
+    손상 여부를 반환값으로 내보내는 이유: 부분만 읽고도 '성공'으로 처리하면 복구가 잘린 대화를
+    써놓고 완료라고 말한다(실제로 그랬다). 판단은 호출부가 해야 한다.
+    """
     p = raw_path(source, session_id)
     if not p.exists():
         return None
-    raw = p.read_bytes()
+    data, _end, intact = _walk_members(p.read_bytes(), p.name)
+    if intact and _lost_marker(p).exists():
+        intact = False       # gzip 으로는 멀쩡해도 가운데가 뚫린 상태 — 완료로 보고하면 안 된다
+    elif not intact:
+        # 손상을 '실제로 감지하는 유일한 지점'이 여기다. 표시를 남겨두면 (a) 다음 미러링의
+        # 빠른 경로가 값싼 존재 확인만으로 전체 검사로 내려오고(크기가 그대로인 손상도 잡힌다),
+        # (b) 복구 가능 여부 표시도 같은 표시를 볼 수 있다.
+        with contextlib.suppress(OSError):
+            _lost_marker(p).write_text(f"{time.time():.0f}\n", encoding="utf-8")
+    return data, intact
+
+
+def _walk_members(raw: bytes, name: str = "") -> tuple[bytes, int, bool]:
+    """멀티멤버 gzip 을 멤버 단위로 푼다.
+
+    반환: (온전하게 푼 바이트, **마지막 온전한 멤버의 끝 오프셋**, 전부 온전한가)
+
+    두 번째 값이 핵심이다 — 잘라낼 지점을 DB 숫자가 아니라 파일 자신에서 구하기 위한 것.
+    지금까지 이 파일의 유실은 두 번 다 'DB 에 적어둔 숫자를 믿고 파일을 잘라서' 났다.
+    gzip.open(...).read() 한 방이면 버퍼를 채우려 손상 지점을 넘어가 EOFError 로 앞의 멀쩡한
+    멤버까지 전부 날린다. zlib 으로 끊어 읽으면 어디까지가 온전한지 정확히 알 수 있다.
+    """
+    mv = memoryview(raw)                 # 멤버마다 raw[pos:] 를 복사하면 O(멤버수 × 파일크기)
     out = bytearray()
     pos, bad = 0, None
-    # 멤버를 하나씩 직접 푼다. gzip.open(...).read() 는 버퍼를 채우려고 손상 지점까지 넘어가서
-    # 앞의 멀쩡한 멤버까지 통째로 날린다(EOFError). zlib 으로 끊어 읽으면 어디까지 온전한지 안다.
     while pos < len(raw):
         d = zlib.decompressobj(31)       # 31 = gzip 헤더 포함
         try:
-            chunk = d.decompress(raw[pos:]) + d.flush()
+            chunk = d.decompress(mv[pos:]) + d.flush()
         except zlib.error as ex:
-            bad = ex
+            bad = str(ex)
             break
         if not d.eof:                    # 멤버가 제대로 끝나지 않았다 = 잘림
             bad = "트레일러 없음(중단된 append)"
             break
-        out += chunk
         consumed = len(raw) - pos - len(d.unused_data)
         if consumed <= 0:                # 진행이 없으면 무한루프 방지
             bad = "진행 불가"
             break
+        out += chunk                     # 멤버가 온전할 때만 확정한다(pos 와 out 이 늘 짝)
         pos += consumed
     if bad is not None:
-        logger.warning("보존본 꼬리 손상 - 온전한 %d바이트만 반환합니다 (%s): %s", len(out), p.name, bad)
-    return bytes(out)
+        logger.warning("보존본 꼬리 손상 - %d바이트까지만 온전합니다 (%s): %s", pos, name or "?", bad)
+    return bytes(out), pos, bad is None
 
 
 def mirror_size_bytes() -> int:
@@ -215,13 +302,15 @@ def enforce_quota(max_bytes: int, db=None) -> int:
 
     files = sorted(root.rglob("*.jsonl.gz"), key=lambda p: (p.stat().st_mtime if p.exists() else 0.0))
     total = sum(_size(p) for p in files)
-    removed, dropped = 0, []
+    removed, dropped, paths = 0, [], []
     for p in files:
         if total <= max_bytes:
             break
         total -= _size(p)
         dropped.append((p.parent.name, p.name[: -len(".jsonl.gz")]))
+        paths.append(str(p))
         p.unlink(missing_ok=True)
+        _lost_marker(p).unlink(missing_ok=True)   # 보존본을 지웠으면 유실 표시도 함께
         removed += 1
     if db is not None:
         by_source: dict[str, list[str]] = {}
@@ -229,6 +318,8 @@ def enforce_quota(max_bytes: int, db=None) -> int:
             by_source.setdefault(src, []).append(sid)
         for src, sids in by_source.items():
             db.clear_raw_cursors(src, sids)
+        # 경계 기록도 같이 — 같은 경로에 새 보존본이 생겼을 때 옛 숫자로 자르지 않게.
+        db.clear_mirror_ok_bytes(paths)
     return removed
 
 
@@ -269,15 +360,23 @@ def _first_cwd(raw: bytes, *, key_path: tuple[str, ...]) -> str | None:
     return None
 
 
-def restore(source: str, session_id: str) -> Path | None:
+def restore(source: str, session_id: str) -> tuple[Path, bool] | None:
     """보존된 원본을 실제 로그 위치로 되써넣어 재개 가능하게 만든다.
 
+    반환: (되써넣은 경로, 보존본이 온전했는가). 손상돼 일부만 복구했으면 두 번째가 False —
+    호출부가 "복구 완료"로 뭉개지 말고 잘렸다는 걸 알려야 한다.
     이미 원본이 있으면(다른 경로로 복구됐거나 아직 안 지워졌으면) 건드리지 않고 그 경로를
     그대로 반환(덮어쓰지 않음 - 실수로 최신본을 과거 보존분으로 되돌리는 사고 방지).
-    cwd 를 못 찾거나 지원 안 하는 source면 None.
+    한 바이트도 못 읽거나, cwd 를 못 찾거나, 지원 안 하는 source면 None.
     """
-    raw = read_mirror(source, session_id)
-    if raw is None:
+    got = read_mirror_checked(source, session_id)
+    if got is None:
+        return None
+    raw, intact = got
+    # 한 바이트도 못 읽었으면 복구가 아니다. 예전엔 여기서 빈 파일을 써놓고 '복구 완료'를
+    # 돌려줬다(첫 멤버부터 손상된 보존본). 원본이 이미 지워진 세션이라 되돌릴 수도 없다.
+    if not raw:
+        logger.warning("보존본을 한 바이트도 읽지 못해 복구를 중단합니다: %s/%s", source, session_id)
         return None
     if source == "codex":
         target = C.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{session_id}.jsonl"
@@ -289,7 +388,7 @@ def restore(source: str, session_id: str) -> Path | None:
     else:
         return None
     if target.exists():
-        return target
+        return target, intact
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(raw)
-    return target
+    return target, intact
