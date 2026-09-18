@@ -654,8 +654,9 @@ export function FolderView() {
       {/* 오른쪽: 고른 항목의 대화를 이 화면 안에서(세션 탭으로 넘어가지 않는다 — 맥락이 끊기지 않게) */}
       <div className="min-h-0 overflow-hidden">
         {openConv?.session
+          // 턴 항목은 그 턴으로, 세션 항목은(지목한 턴 없음) 마지막 대화로.
           ? <ChatThread key={`${openConv.session}:${openConv.turn ?? ""}`}
-              session={openConv.session} focusTurn={openConv.turn} />
+              session={openConv.session} focusTurn={openConv.turn} focusLast={!openConv.turn} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("folders.pickItemPrompt")}
             </div>}

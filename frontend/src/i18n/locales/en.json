@@ -236,7 +236,6 @@
     "actions": "Actions ({{count}})",
     "sessionLabel": "Session {{id}}",
     "turnCount": "{{count}} conversations",
-    "error": "Error: {{err}}",
     "loadPrev": "Show {{count}} earlier",
     "loadNext": "Show {{count}} more",
     "folded": "Folded",
@@ -246,7 +245,8 @@
     "foldSession": "Fold entire session",
     "foldedCount": "{{count}} folded",
     "foldFailed": "Couldn't fold",
-    "foldSessionConfirm": "Fold every turn in this session? Folded turns drop out of search and the map, and you can unfold them anytime by opening the session."
+    "foldSessionConfirm": "Fold every turn in this session? Folded turns drop out of search and the map, and you can unfold them anytime by opening the session.",
+    "loadFailed": "Couldn't load the conversation"
   },
   "graph": {
     "title": "3D Semantic Map",

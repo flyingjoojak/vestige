@@ -317,7 +317,9 @@ export function SearchView() {
       {/* 오른쪽: 선택한 결과의 세션을 채팅 스레드로 */}
       <div className="min-h-0 overflow-hidden">
         {sel
-          ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session} focusTurn={sel.turn} />
+          // 검색 결과로 들어오면 그 턴으로, '최근 세션'으로 들어오면(지목한 턴 없음) 마지막 대화로.
+          ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session}
+              focusTurn={sel.turn} focusLast={!sel.turn} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("search.detailPlaceholder")}
             </div>}
