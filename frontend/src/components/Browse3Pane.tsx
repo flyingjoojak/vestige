@@ -72,10 +72,12 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     if (copyTimer.current) clearTimeout(copyTimer.current)
     if (msgTimer.current) clearTimeout(msgTimer.current)
   }, [])
-  function flashMsg(m: { ok: boolean; text: string }) {
+  // sticky=true 면 자동으로 지우지 않는다. 데이터가 영구히 사라졌다는 고지를 4초 토스트로
+  // 흘려보내면, 못 본 사용자는 그 사실을 다시 확인할 방법이 없다.
+  function flashMsg(m: { ok: boolean; text: string }, sticky = false) {
     setResumeMsg(m)
     if (msgTimer.current) clearTimeout(msgTimer.current)
-    msgTimer.current = setTimeout(() => setResumeMsg(null), 4000)
+    if (!sticky) msgTimer.current = setTimeout(() => setResumeMsg(null), 4000)
   }
 
   // 세션 재개 커맨드(출처별: claude --resume / codex resume). 상세 로드 전엔 판단 보류.
@@ -137,11 +139,18 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     try {
       const r = await restoreSession(sel)
       if (r.ok) {
-        flashMsg({ ok: true, text: t("browse.restoreDone") })
-        const d = await getSession(sel)
-        setDetail(d)
+        // 부분 복구를 '완료'로 표시하면 사용자는 뒷부분이 왜 없는지 알 수 없다.
+        flashMsg(r.partial
+          ? { ok: false, text: errText(t, r, "browse.restorePartial") }
+          : { ok: true, text: t("browse.restoreDone") }, r.partial === true)
+        // 상세 재조회는 따로 감싼다 — 실패해도 위 유실 고지를 덮어쓰지 않게.
+        try {
+          setDetail(await getSession(sel))
+        } catch { /* 목록은 그대로 두고 고지를 유지 */ }
       } else {
-        flashMsg({ ok: false, text: errText(t, r, "browse.restoreFailed") })
+        // 손상 고지도 사용자가 행동해야 하는 문구라(파일을 지우지 마세요) 자동으로 지우지 않는다.
+        flashMsg({ ok: false, text: errText(t, r, "browse.restoreFailed") },
+                 r.code === "restore_corrupt")
       }
     } catch (e) {
       flashMsg({ ok: false, text: errText(t, e, "browse.execFailed") })
@@ -214,6 +223,9 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   // 선택 그룹의 대화 목록
   useEffect(() => {
     setConvs(null); setHits(null); setQ(""); setDetail(null); setDetailErr(false)
+    // 안내 메시지도 지운다. 자동 소멸하던 때는 무해했지만 유실 고지가 sticky 가 되면서,
+    // A 세션의 "앞부분만 복구했어요"가 B 세션 화면에 남아 엉뚱한 대화에 딱지가 붙는다.
+    setResumeMsg(null)
     if (sel == null) return
     if (kind === "sessions") {
       let cancelled = false   // 다른 세션으로 빠르게 전환 시, 늦게 온 응답이 덮어쓰지 않게
@@ -432,7 +444,16 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
                 </button>
               </div>
               {resumeMsg && (
-                <div className={`mt-1 text-[10.5px] ${resumeMsg.ok ? "text-muted-foreground" : "text-destructive"}`}>{resumeMsg.text}</div>
+                // 실패/유실 고지는 role="alert" 로 보조기술에도 전달하고, sticky 인 경우를 위해
+                // 사용자가 닫을 수단을 둔다(자동으로 안 사라지므로 닫기가 없으면 갇힌다).
+                <div role={resumeMsg.ok ? "status" : "alert"}
+                  className={`mt-1 flex items-start gap-1 text-[10.5px] ${resumeMsg.ok ? "text-muted-foreground" : "text-destructive"}`}>
+                  <span className="min-w-0 flex-1">{resumeMsg.text}</span>
+                  <button type="button" onClick={() => setResumeMsg(null)} aria-label={t("common.close")}
+                    className="mt-px shrink-0 rounded p-0.5 hover:bg-muted">
+                    <X className="size-3" />
+                  </button>
+                </div>
               )}
               {detailErr && !resumeMsg && (
                 <div className="mt-1 text-[10.5px] text-destructive">{t("browse.detailLoadFailed")}</div>
