@@ -83,6 +83,7 @@ export interface RestoreResult {
   path?: string
   already_exists?: boolean
   missing?: boolean            // 보존된 원본도 없음(이 기능 이전에 유실됨)
+  partial?: boolean            // 보존본이 손상돼 앞부분만 복구됨 — 성공으로 뭉개면 안 된다
   subagent?: boolean
   warning?: string
   code?: string

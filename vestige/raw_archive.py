@@ -123,20 +123,23 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     out = raw_path(source, sid)
     out.parent.mkdir(parents=True, exist_ok=True)
     _ensure_marker(raw_dir())
-    # 중단된 append 의 잔재를 먼저 걷어낸다. 앞서 죽었다면 꼬리에 트레일러 없는 gzip 멤버가
-    # 남아 있고, 그대로 이어 쓰면 gzip.open 이 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지' 못 읽는다.
-    # 마지막 성공 크기를 알고 있으니 거기까지 잘라내면 된다(그 뒤는 커서가 안 올라간 구간이라
-    # 아래 append 가 다시 채운다).
-    known = db.raw_mirror_bytes(path)
-    if known is not None and out.exists() and out.stat().st_size > known:
-        with open(out, "r+b") as f:
-            f.truncate(known)
+    # 보존본 파일은 **절대 잘라내지 않는다(append 전용).**
+    #
+    # 중단된 append 가 남긴 깨진 멤버를 '고쳐보려고' 잘라내는 코드를 다섯 번 시도했고, 다섯 번
+    # 다 새로운 영구 유실을 만들었다(키 불일치, 마이그레이션 백필 누락, 커서 미되감기,
+    # 소스가 둘일 때 전손, 단위 불일치). 근본 이유는 자료구조다 — 보존본은 세션당 하나인데
+    # 소스는 1:N 이고, 멀티멤버 gzip 에는 '이 멤버가 어느 소스의 어느 오프셋인지'가 없다.
+    # 그 관계를 스칼라 하나로 근사하는 한 되감을 지점을 옳게 고를 수 없다.
+    #
+    # 그래서 실패 방향을 '닫히는 쪽'으로 둔다: 손상은 고치지 않고 read_mirror_checked 가
+    # intact=False 로 정직하게 보고한다(앞부분까지는 복구되고, UI 가 잘렸다고 알린다).
+    # 자르는 코드는 실패하면 '열리는 쪽'이었다 — 데이터를 없애고 '복구 완료'라고 말했다.
     with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
         gz.write(chunk)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
-    db.set_raw_cursor(path, mirrored + len(chunk), sid, source, mirror_bytes=out.stat().st_size)
+    db.set_raw_cursor(path, mirrored + len(chunk), sid, source)
     db.commit()
     return len(chunk)
 
@@ -148,38 +151,61 @@ def has_mirror(source: str, session_id: str) -> bool:
 def read_mirror(source: str, session_id: str) -> bytes | None:
     """이 세션의 보존된 원본 바이트 전체(압축 해제). 없으면 None.
 
-    꼬리가 손상돼 있으면(중단된 append 의 잘린 멤버) 거기서 멈추고 **그때까지 읽은 만큼을
-    돌려준다**. gzip.open(...).read() 한 방이면 EOFError 로 앞의 멀쩡한 멤버까지 전부 날아간다 —
-    복구는 일부라도 되는 쪽이 낫다. mirror_file 이 다음 회차에 잔재를 잘라내고 이어 쓰므로
-    보통은 여기까지 오지 않는다(이 경로는 그 전에 만들어진 파일·외부 손상용 안전망).
+    손상 여부까지 알아야 하면 read_mirror_checked 를 쓴다.
+    """
+    got = read_mirror_checked(source, session_id)
+    return None if got is None else got[0]
+
+
+def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | None:
+    """(온전하게 읽은 바이트, 전부 온전한가). 보존본이 아예 없으면 None.
+
+    손상 여부를 **반환값으로** 내보낸다. 부분만 읽고도 '성공'으로 처리하면 복구가 잘린 대화를
+    써놓고 완료라고 말한다(실제로 그랬다). 판단은 호출부가 한다.
+    이 함수는 보존소에 아무것도 쓰지 않는다 — 읽기 경로가 파일을 만들면 색인과 경합해
+    멀쩡한 보존본에 가짜 손상 표시를 남긴다.
     """
     p = raw_path(source, session_id)
     if not p.exists():
         return None
-    raw = p.read_bytes()
+    data, _end, intact = _walk_members(p.read_bytes(), p.name)
+    return data, intact
+
+
+def _walk_members(raw: bytes, name: str = "") -> tuple[bytes, int, bool]:
+    """멀티멤버 gzip 을 멤버 단위로 푼다.
+
+    반환: (온전하게 푼 바이트, 마지막 온전한 멤버의 끝 오프셋, 전부 온전한가)
+
+    gzip.open(...).read() 한 방이면 버퍼를 채우려고 손상 지점을 넘어가 EOFError 를 던지며
+    **그 앞의 멀쩡한 멤버까지 전부** 날린다. zlib 으로 끊어 읽으면 어디까지가 온전한지 안다.
+    """
+    # ponytail: 멤버 수에 대해 O(n²). memoryview 는 decompress 에 넘기는 슬라이스 복사만
+    # 없애고, 실제 지배 비용인 zlib 의 unused_data(매 멤버마다 남은 전체를 bytes 로 복사)는
+    # 그대로다. 복원 버튼을 눌렀을 때만 도는 경로라 지금은 충분하다(멤버 2만개 = 2초).
+    # 더 빨라져야 하면 decompress 에 전체를 한 번에 넘기지 말고 청크로 먹여야 한다.
+    mv = memoryview(raw)
     out = bytearray()
     pos, bad = 0, None
-    # 멤버를 하나씩 직접 푼다. gzip.open(...).read() 는 버퍼를 채우려고 손상 지점까지 넘어가서
-    # 앞의 멀쩡한 멤버까지 통째로 날린다(EOFError). zlib 으로 끊어 읽으면 어디까지 온전한지 안다.
     while pos < len(raw):
         d = zlib.decompressobj(31)       # 31 = gzip 헤더 포함
         try:
-            chunk = d.decompress(raw[pos:]) + d.flush()
+            chunk = d.decompress(mv[pos:]) + d.flush()
         except zlib.error as ex:
-            bad = ex
+            bad = str(ex)
             break
         if not d.eof:                    # 멤버가 제대로 끝나지 않았다 = 잘림
             bad = "트레일러 없음(중단된 append)"
             break
-        out += chunk
         consumed = len(raw) - pos - len(d.unused_data)
         if consumed <= 0:                # 진행이 없으면 무한루프 방지
             bad = "진행 불가"
             break
+        out += chunk                     # 멤버가 온전할 때만 확정한다(pos 와 out 이 늘 짝)
         pos += consumed
     if bad is not None:
-        logger.warning("보존본 꼬리 손상 - 온전한 %d바이트만 반환합니다 (%s): %s", len(out), p.name, bad)
-    return bytes(out)
+        logger.warning("보존본 꼬리 손상 - %d바이트까지만 온전합니다 (%s): %s", pos, name or "?", bad)
+    return bytes(out), pos, bad is None
 
 
 def mirror_size_bytes() -> int:
@@ -269,15 +295,21 @@ def _first_cwd(raw: bytes, *, key_path: tuple[str, ...]) -> str | None:
     return None
 
 
-def restore(source: str, session_id: str) -> Path | None:
+def restore(source: str, session_id: str) -> tuple[Path, bool] | None:
     """보존된 원본을 실제 로그 위치로 되써넣어 재개 가능하게 만든다.
 
     이미 원본이 있으면(다른 경로로 복구됐거나 아직 안 지워졌으면) 건드리지 않고 그 경로를
     그대로 반환(덮어쓰지 않음 - 실수로 최신본을 과거 보존분으로 되돌리는 사고 방지).
     cwd 를 못 찾거나 지원 안 하는 source면 None.
     """
-    raw = read_mirror(source, session_id)
-    if raw is None:
+    got = read_mirror_checked(source, session_id)
+    if got is None:
+        return None
+    raw, intact = got
+    # 한 바이트도 못 읽었으면 복구가 아니다. 예전엔 빈 파일을 써놓고 '복구 완료'를 돌려줬다
+    # (첫 멤버부터 손상된 보존본). 원본이 이미 지워진 세션이라 되돌릴 수도 없다.
+    if not raw:
+        logger.warning("보존본을 한 바이트도 읽지 못해 복구를 중단합니다: %s/%s", source, session_id)
         return None
     if source == "codex":
         target = C.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{session_id}.jsonl"
@@ -289,7 +321,7 @@ def restore(source: str, session_id: str) -> Path | None:
     else:
         return None
     if target.exists():
-        return target
+        return target, intact
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(raw)
-    return target
+    return target, intact

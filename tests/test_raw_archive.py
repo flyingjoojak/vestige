@@ -300,7 +300,7 @@ def test_restore_claude_code_writes_to_encoded_project_dir(tmp_path, monkeypatch
     f.write_bytes(raw_bytes)
     R.mirror_file(db, f, "claude-code")
 
-    target = R.restore("claude-code", sid)
+    target, _intact = R.restore("claude-code", sid)
     assert target == config.PROJECTS_DIR / "C--growth-report" / f"{sid}.jsonl"
     assert target.read_bytes() == raw_bytes
 
@@ -319,7 +319,7 @@ def test_restore_does_not_overwrite_existing_original(tmp_path, monkeypatch):
     existing = existing_dir / f"{sid}.jsonl"
     existing.write_bytes(b"ALREADY THERE - DO NOT TOUCH")
 
-    target = R.restore("claude-code", sid)
+    target, _intact = R.restore("claude-code", sid)
     assert target == existing
     assert existing.read_bytes() == b"ALREADY THERE - DO NOT TOUCH"   # 안 덮어씀
 
@@ -345,7 +345,7 @@ def test_restore_codex_writes_under_restored_subdir(tmp_path, monkeypatch):
     f.write_bytes(raw_bytes)
     R.mirror_file(db, f, "codex")
 
-    target = R.restore("codex", sid)
+    target, _intact = R.restore("codex", sid)
     assert target == config.CODEX_SESSIONS_DIR / "restored" / f"rollout-restored-{sid}.jsonl"
     assert target.read_bytes() == raw_bytes
 
@@ -478,34 +478,6 @@ def test_marker_not_claimed_on_folder_with_existing_archives(tmp_path, monkeypat
 
 
 # ── gz 꼬리 손상 복구(중단된 append) ─────────────────────────
-def test_mirror_file_repairs_truncated_tail_member(tmp_path, monkeypatch):
-    """append 중 죽어 잘린 멤버가 남았으면, 다음 미러링이 그 잔재를 걷어내고 이어 쓴다.
-
-    잘린 멤버를 그냥 두고 이어 쓰면 gzip.open 이 그 지점에서 멈춰 '앞의 멀쩡한 멤버까지'
-    못 읽는다(전부 유실). mirror_bytes(마지막 성공 크기)를 기준으로 잘라낸다.
-    """
-    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
-    db = _db(tmp_path)
-    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
-    f = tmp_path / f"{sid}.jsonl"
-
-    f.write_bytes(b'{"a":1}\n')
-    R.mirror_file(db, f, "claude-code")
-    out = R.raw_path("claude-code", sid)
-    good_size = out.stat().st_size
-    assert db.raw_mirror_bytes(str(f)) == good_size
-
-    # 두 번째 append 가 중간에 죽은 상황: 잘린 멤버가 꼬리에 남고 커서는 안 올라감.
-    f.write_bytes(b'{"a":1}\n{"b":2}\n')
-    with open(out, "ab") as fh:
-        fh.write(b"\x1f\x8b\x08\x00deadbeef")      # 트레일러 없는 쓰레기 멤버
-    assert out.stat().st_size > good_size
-
-    R.mirror_file(db, f, "claude-code")             # 다음 회차
-    assert R.read_mirror("claude-code", sid) == b'{"a":1}\n{"b":2}\n'   # 온전히 복원
-    assert db.raw_mirror_bytes(str(f)) == out.stat().st_size
-
-
 def test_read_mirror_returns_partial_bytes_on_corrupt_tail(tmp_path, monkeypatch):
     """꼬리가 손상된 보존본도 읽은 만큼은 돌려준다(EOFError 로 전부 날리지 않는다)."""
     monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
@@ -564,3 +536,82 @@ def test_mirror_file_still_mirrors_forked_session(tmp_path, monkeypatch):
     f.write_bytes(b'{"x":9}\n')
     assert R.mirror_file(db, f, "claude-code") > 0
     assert R.read_mirror("claude-code", forked) == b'{"x":9}\n'
+
+
+# ── 손상 보존본: 고치지 않고 '정직하게' 보고한다 ─────────────
+def test_damaged_tail_still_yields_intact_prefix(tmp_path, monkeypatch):
+    """꼬리가 깨져도 앞의 멀쩡한 멤버는 읽어낸다.
+
+    gzip.open(...).read() 한 방이면 EOFError 로 앞부분까지 전부 날아간다 — 그게 이 기능의
+    존재 이유(마지막 사본)를 통째로 무너뜨린다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n'); R.mirror_file(db, f, "claude-code")
+    f.write_bytes(b'{"a":1}\n{"b":2}\n'); R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    out.write_bytes(out.read_bytes()[:-3])          # 꼬리 손상
+
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert data == b'{"a":1}\n'                     # 앞부분은 살아서 온다
+    assert intact is False                          # 그리고 손상을 숨기지 않는다
+
+
+def test_mirror_file_never_truncates_the_archive(tmp_path, monkeypatch):
+    """보존본은 append 전용이다 — 손상이 있어도 파일을 줄이지 않는다.
+
+    '고쳐보려고' 잘라내는 코드를 다섯 번 시도해 다섯 번 다 영구 유실을 만들었다.
+    자르지 않으면 최악이 '뒷부분을 못 읽음'(파일은 남아 나중에 복구 가능)이고,
+    자르면 최악이 '되돌릴 수 없는 삭제'다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"{sid}.jsonl"
+    f.write_bytes(b'{"a":1}\n'); R.mirror_file(db, f, "claude-code")
+    out = R.raw_path("claude-code", sid)
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00broken-tail")    # 중단된 append 잔재
+    before = out.read_bytes()
+
+    f.write_bytes(b'{"a":1}\n{"b":2}\n')
+    R.mirror_file(db, f, "claude-code")
+    # 크기 비교로는 못 잡는다: 잘라낸 뒤 더 큰 멤버를 붙이면 크기는 늘어난다.
+    # 기존 바이트가 **한 바이트도 안 변하고 prefix 로 남는지**를 봐야 회귀를 잡는다.
+    assert out.read_bytes().startswith(before)
+
+
+def test_restore_refuses_when_mirror_is_unreadable(tmp_path, monkeypatch):
+    """첫 멤버부터 손상이면 복구가 아니다 — 빈 파일을 써놓고 '완료'라고 하면 안 된다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "CODEX_SESSIONS_DIR", tmp_path / "codex")
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    p = R.raw_path("codex", sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\x1f\x8b\x08\x00not-a-valid-member")
+
+    assert R.read_mirror("codex", sid) == b""
+    assert R.restore("codex", sid) is None                     # 복구 거부
+    assert not (tmp_path / "codex" / "restored").exists()       # 빈 파일도 안 만든다
+
+
+def test_restore_reports_partial_when_tail_is_damaged(tmp_path, monkeypatch):
+    """앞부분만 온전하면 복구는 하되 '온전하지 않다'고 알려야 한다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    monkeypatch.setattr(R.C, "CODEX_SESSIONS_DIR", tmp_path / "codex")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    f = tmp_path / f"rollout-{sid}.jsonl"
+    f.write_bytes(b'{"ok":1}\n')
+    R.mirror_file(db, f, "codex")
+    out = R.raw_path("codex", sid)
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00broken-tail")
+
+    got = R.restore("codex", sid)
+    assert got is not None
+    target, intact = got
+    assert intact is False                          # 손상 사실을 알린다
+    assert target.read_bytes() == b'{"ok":1}\n'     # 온전한 앞부분은 복구

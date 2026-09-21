@@ -373,7 +373,8 @@
     "filterNoMatch": "No matching items.",
     "renameSession": "Rename session",
     "renameSessionHint": "A name for this session. The conversation itself is unchanged; leave empty to restore the original title.",
-    "searchFailed": "Search failed"
+    "searchFailed": "Search failed",
+    "restorePartial": "The archive was damaged; only the earlier part was restored"
   },
   "mcp": {
     "sectionTitle": "MCP integration",
@@ -485,6 +486,8 @@
     "no_embed_model": "Choose an embedding model first.",
     "pair_failed": "Connection failed: {{detail}}",
     "reindex_already_running": "Indexing is already running.",
+    "restore_corrupt": "The archive is damaged and cannot be read. Don't delete the file.",
+    "restore_partial": "The archive was partly damaged, so only the earlier part was restored. The rest of the conversation is gone.",
     "resume_active": "This session was modified about {{seconds}}s ago - if it's running on another device, resuming now may split it into two.",
     "resume_launch_failed": "Failed to launch the terminal: {{detail}}",
     "resume_missing_log": "Can't open the session - its source log is missing (it may have been deleted or moved).",

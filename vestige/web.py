@@ -1063,12 +1063,23 @@ def api_session_restore(session: str = Query(...)):
 
     from . import raw_archive
     try:
-        target = raw_archive.restore(source, sid)
+        got = raw_archive.restore(source, sid)
     except Exception as e:  # noqa: BLE001 — 파일시스템 오류 등을 사용자에게 그대로 전달
         raise HTTPException(status_code=500, detail={"code": "restore_failed", "msg": f"복구 실패: {e}", "detail": str(e)})
-    if target is None:
+    if got is None:
+        # 보존본 파일이 있는데 None 이면 '없음'이 아니라 '읽을 수 없음'이다. 뭉뚱그려
+        # "원본이 없어요"라고 하면 사용자가 살아있을지도 모르는 .gz 를 지운다.
+        if raw_archive.has_mirror(source, sid):
+            return {"ok": False, "code": "restore_corrupt",
+                    "warning": "보존본이 손상돼 읽을 수 없어요. 파일은 지우지 마세요 - 나중에 복구 방법이 생길 수 있어요."}
         return {"ok": False, "missing": True, "code": "restore_no_mirror",
                 "warning": "보존된 원본이 없어 복구할 수 없어요(이 기능 이전에 유실된 세션일 수 있어요)."}
+    target, intact = got
+    # 보존본이 손상돼 일부만 복구된 경우를 '완료'로 뭉개지 않는다 — 잘린 대화를 그대로
+    # 재개하면 사용자는 뒷부분이 왜 없는지 알 수 없다.
+    if not intact:
+        return {"ok": True, "path": str(target), "partial": True, "code": "restore_partial",
+                "warning": "보존본 일부가 손상돼 앞부분만 복구했어요. 뒷부분 대화는 남아있지 않아요."}
     return {"ok": True, "path": str(target)}
 
 

@@ -181,11 +181,14 @@ def _mig_0009_core_indexes(conn: sqlite3.Connection) -> None:
 
 
 def _mig_0010_raw_mirror_bytes(conn: sqlite3.Connection) -> None:
-    """raw_cursors.mirror_bytes — 마지막으로 성공한 append 직후의 보존본 크기.
+    """raw_cursors.mirror_bytes — (지금은 쓰지 않는다)
 
-    멀티멤버 gzip 에 append 하다 프로세스가 죽으면 트레일러 없는 잘린 멤버가 꼬리에 남고,
-    gzip.open 은 그 지점에서 EOFError 를 던지며 '앞의 멀쩡한 멤버까지 전부' 못 읽게 된다.
-    성공 크기를 알고 있으면 다음 미러링 때 그 지점으로 잘라내고 이어 쓸 수 있다.
+    보존본의 깨진 꼬리를 이 값 기준으로 잘라내려고 넣었는데, 키가 틀렸다(소스 로그 경로 기준
+    인데 잘라낼 대상은 보존본이라 1:N). 그 잘라내기가 실제 데이터 유실을 만들어 제거했고,
+    지금은 보존본 파일을 아예 건드리지 않는다(append 전용 — raw_archive.mirror_file 주석 참고).
+
+    컬럼은 append-only 규칙상 남긴다. **다시 쓰지 말 것** — 이 값 하나로는 '어느 소스가
+    보존본의 어느 구간을 넣었는지'를 표현할 수 없고, 그게 유실 5건의 공통 원인이었다.
     """
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(raw_cursors)")}
     if "mirror_bytes" not in cols:
@@ -564,24 +567,14 @@ class ArchiveDB:
         ).fetchone()
         return row["mirrored_offset"] if row else 0
 
-    def raw_mirror_bytes(self, file_path: str) -> int | None:
-        """마지막으로 성공한 append 직후의 보존본(.gz) 크기. 모르면 None.
-        실제 파일이 이보다 크면 그 뒤는 중단된 append 의 잔재(잘린 gzip 멤버)다."""
-        row = self.conn.execute(
-            "SELECT mirror_bytes FROM raw_cursors WHERE file_path=?", (file_path,)
-        ).fetchone()
-        return row["mirror_bytes"] if row else None
-
-    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str,
-                       mirror_bytes: int | None = None) -> None:
+    def set_raw_cursor(self, file_path: str, mirrored_offset: int, session_id: str, source: str) -> None:
         self.conn.execute(
-            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at,mirror_bytes)
-                 VALUES(?,?,?,?,?,?)
+            """INSERT INTO raw_cursors(file_path,mirrored_offset,session_id,source,updated_at)
+                 VALUES(?,?,?,?,?)
                ON CONFLICT(file_path) DO UPDATE SET
                  mirrored_offset=excluded.mirrored_offset, session_id=excluded.session_id,
-                 source=excluded.source, updated_at=excluded.updated_at,
-                 mirror_bytes=excluded.mirror_bytes""",
-            (file_path, mirrored_offset, session_id, source, time.time(), mirror_bytes),
+                 source=excluded.source, updated_at=excluded.updated_at""",
+            (file_path, mirrored_offset, session_id, source, time.time()),
         )
 
     def clear_raw_cursors(self, source: str, session_ids: list[str]) -> int:
