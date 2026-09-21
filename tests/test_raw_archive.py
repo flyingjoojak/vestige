@@ -574,11 +574,13 @@ def test_mirror_file_never_truncates_the_archive(tmp_path, monkeypatch):
     out = R.raw_path("claude-code", sid)
     with open(out, "ab") as fh:
         fh.write(b"\x1f\x8b\x08\x00broken-tail")    # 중단된 append 잔재
-    before = out.stat().st_size
+    before = out.read_bytes()
 
     f.write_bytes(b'{"a":1}\n{"b":2}\n')
     R.mirror_file(db, f, "claude-code")
-    assert out.stat().st_size > before              # 줄지 않고 늘어난다
+    # 크기 비교로는 못 잡는다: 잘라낸 뒤 더 큰 멤버를 붙이면 크기는 늘어난다.
+    # 기존 바이트가 **한 바이트도 안 변하고 prefix 로 남는지**를 봐야 회귀를 잡는다.
+    assert out.read_bytes().startswith(before)
 
 
 def test_restore_refuses_when_mirror_is_unreadable(tmp_path, monkeypatch):

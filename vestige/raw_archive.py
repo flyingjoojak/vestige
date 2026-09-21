@@ -180,7 +180,11 @@ def _walk_members(raw: bytes, name: str = "") -> tuple[bytes, int, bool]:
     gzip.open(...).read() 한 방이면 버퍼를 채우려고 손상 지점을 넘어가 EOFError 를 던지며
     **그 앞의 멀쩡한 멤버까지 전부** 날린다. zlib 으로 끊어 읽으면 어디까지가 온전한지 안다.
     """
-    mv = memoryview(raw)                 # 멤버마다 raw[pos:] 를 복사하면 O(멤버수 × 파일크기)
+    # ponytail: 멤버 수에 대해 O(n²). memoryview 는 decompress 에 넘기는 슬라이스 복사만
+    # 없애고, 실제 지배 비용인 zlib 의 unused_data(매 멤버마다 남은 전체를 bytes 로 복사)는
+    # 그대로다. 복원 버튼을 눌렀을 때만 도는 경로라 지금은 충분하다(멤버 2만개 = 2초).
+    # 더 빨라져야 하면 decompress 에 전체를 한 번에 넘기지 말고 청크로 먹여야 한다.
+    mv = memoryview(raw)
     out = bytearray()
     pos, bad = 0, None
     while pos < len(raw):
