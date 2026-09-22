@@ -7,6 +7,40 @@
 만들어지고, **그 릴리스 본문이 앱의 업데이트 배너에 그대로 표시**됩니다. 아래처럼
 `<!--lang:ko-->` / `<!--lang:en-->` 마커로 나눠 두면, 배너가 사용자 언어에 맞는 섹션만 보여줍니다.
 
+## [0.3.1] - 2026-09-22
+
+<!--lang:ko-->
+
+### Fixed
+- **검색이 훨씬 빨라졌습니다.** 결과 한 건의 앞뒤 대화를 가져올 때 그 세션의 모든 대화를 읽고 있었습니다. 결과가 20건이면 세션 20개를 통째로 읽던 셈입니다(검색 시간의 92%). 실측 467ms → 64ms.
+- **3D 지도가 즉시 뜹니다.** 지도를 열 때마다 점 구름 전체를 다시 만들어 보내고 있었습니다. 내용이 그대로면 만들어둔 것을 재사용합니다. 실측 206ms → 5ms.
+- **보존해둔 원본 로그가 손상됐을 때 그 부분을 지우지 않습니다.** 깨진 자리를 고쳐보려고 파일을 잘라내던 코드가 있었는데, 그게 오히려 멀쩡한 부분까지 없앨 수 있었습니다. 이제 보존본은 덧붙이기만 하고, 읽을 수 없는 부분이 있으면 "일부만 복구했습니다"라고 알려줍니다.
+- 복구가 일부만 됐을 때 그 알림이 4초 뒤 사라져 놓칠 수 있었습니다. 이제 직접 닫기 전까지 남아있습니다.
+
+### Added
+- **폴더를 드래그 없이 옮길 수 있습니다.** 키보드와 버튼으로 위/아래 이동, 상위/하위로 넣기가 됩니다(드래그가 어려운 환경을 위해).
+- **검색 전·폴더 선택 전 화면이 비어있지 않습니다.** 가장 최근 대화와 최근 검색어를 먼저 보여줍니다.
+
+### Changed
+- 색인하지 않을 때 메모리 사용이 줄었습니다(지도 캐시 판정에 벡터 전체를 올리지 않게).
+- 조용히 실패하던 경로 6곳이 이제 화면에 오류를 표시합니다.
+
+<!--lang:en-->
+
+### Fixed
+- **Search is much faster.** Fetching the conversations around a result was reading every turn in that session - with 20 results, that meant reading 20 whole sessions (92% of search time). Measured 467ms → 64ms.
+- **The 3D map opens instantly.** The whole point cloud was rebuilt and re-sent on every open. It is now reused when nothing changed. Measured 206ms → 5ms.
+- **A damaged raw-log archive no longer loses data.** Code that tried to repair a broken spot by truncating the file could remove intact data along with it. The archive is now append-only, and unreadable parts are reported as "partially restored" instead.
+- A partial-restore notice disappeared after 4 seconds and could be missed. It now stays until you dismiss it.
+
+### Added
+- **Folders can be moved without dragging** - keyboard and buttons for up/down and in/out.
+- **Search and folder tabs are no longer empty before you act** - the most recent conversation and your recent searches are shown first.
+
+### Changed
+- Lower memory use when not indexing (the map cache check no longer loads the full vector matrix).
+- Six silently failing paths now surface errors in the UI.
+
 ## [0.3.0] - 2026-09-17
 
 <!--lang:ko-->
