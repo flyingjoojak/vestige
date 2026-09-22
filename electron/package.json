@@ -1,6 +1,6 @@
 {
   "name": "vestige-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Vestige 데스크탑 앱 (Electron 셸 + 파이썬 사이드카)",
   "main": "main.js",
   "author": "flyingjoojak",
