@@ -2075,10 +2075,39 @@ def _graph3d_invalidate() -> None:
         cache_path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
 
 
+_graph3d_body: dict = {"key": None, "body": b""}
+
+
 @app.get("/api/graph3d")
 def api_graph3d(refresh: bool = False):
-    """의미 지도 3D: UMAP 3성분 투영 점 구름."""
-    return _graph3d_data(refresh)
+    """의미 지도 3D: UMAP 3성분 투영 점 구름.
+
+    점이 14,014개(5MB)라 매 요청마다 캐시 파일을 파싱하고 FastAPI 가 다시 직렬화하는 데
+    206ms 가 들었다. 내용이 그대로면 직렬화 결과를 그냥 돌려준다.
+
+    캐시 키는 파일의 (mtime, size) — 재계산이든 stale 표시든 파일이 바뀌면 키가 달라져
+    _graph3d_data() 를 다시 타므로, 신선도 판정을 건너뛰지 않는다.
+    """
+    from . import config as C
+
+    cache_path = C.DATA_DIR / "graph3d_cache.json"
+
+    def key_of() -> tuple[int, int] | None:
+        try:
+            st = cache_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    key = None if refresh else key_of()
+    if key is not None and _graph3d_body["key"] == key:
+        return Response(content=_graph3d_body["body"], media_type="application/json")
+
+    body = json.dumps(_graph3d_data(refresh), ensure_ascii=False).encode("utf-8")
+    after = key_of()      # _graph3d_data 가 파일을 갱신했을 수 있으니 직렬화 뒤의 상태로 키를 잡는다
+    if after is not None:
+        _graph3d_body.update(key=after, body=body)
+    return Response(content=body, media_type="application/json")
 
 
 # 상태바가 1초 주기로 물어본다. enriched 카운트는 turns 풀스캔이라 매번 돌 만한 값이 아니고,

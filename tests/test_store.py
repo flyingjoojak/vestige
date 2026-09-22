@@ -154,6 +154,28 @@ def test_thread_window(tmp_path):
     assert [t.id for t in thread] == ["s1:u1", "s1:u2", "s1:u3"]
 
 
+def test_thread_edges_ties_and_session_isolation(tmp_path):
+    """윈도우를 SQL 로 잡으므로 파이썬 슬라이싱이 공짜로 해줬던 것들을 직접 확인한다.
+
+    경계 잘림(양끝), timestamp 동률일 때 id 로 갈리는 순서, 다른 세션 턴 미포함.
+    """
+    db = ArchiveDB(tmp_path / "a.db")
+    for i in range(5):
+        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z"))
+    for i in range(3):                       # 같은 시각 - id 로 순서가 갈려야 한다
+        db.upsert_turn(_turn(f"s1:t{i}", ts="2026-07-24T00:09:00Z"))
+    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T00:02:00Z"))
+    db.commit()
+
+    ids = lambda tid, w: [t.id for t in db.thread(tid, window=w)]   # noqa: E731
+    assert ids("s1:u0", 2) == ["s1:u0", "s1:u1", "s1:u2"]          # 앞 경계 - before 없음
+    assert ids("s1:t2", 2) == ["s1:t0", "s1:t1", "s1:t2"]          # 뒤 경계 - after 자신뿐
+    assert ids("s1:t1", 1) == ["s1:t0", "s1:t1", "s1:t2"]          # 동률 - id 로 갈림
+    assert ids("s2:u0", 2) == ["s2:u0"]                            # 다른 세션 턴 안 섞임
+    assert ids("s1:u2", 2) == ["s1:u0", "s1:u1", "s1:u2", "s1:u3", "s1:u4"]
+    assert db.thread("s1:없는턴") == []
+
+
 def test_chunk_mapping(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     db.add_chunks([Chunk("s1:u1", 0, "텍스트")])

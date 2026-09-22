@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS folder_items(
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp);
+CREATE INDEX IF NOT EXISTS idx_turns_session_ts ON turns(session_id, timestamp, id);
 CREATE INDEX IF NOT EXISTS idx_chunks_turn ON chunks(turn_id);
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_folder_items_folder ON folder_items(folder_id);
@@ -195,6 +196,16 @@ def _mig_0010_raw_mirror_bytes(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE raw_cursors ADD COLUMN mirror_bytes INTEGER")
 
 
+def _mig_0011_turns_session_ts(conn: sqlite3.Connection) -> None:
+    """turns(session_id, timestamp, id) — thread() 의 앞뒤 윈도우 조회용.
+
+    idx_turns_session 은 session_id 만이라 '세션 안에서 시간순 앞뒤 N개'를 뽑을 때마다
+    매칭 행 전체를 정렬해야 했다. 826턴 세션에서 7.39ms → 0.12ms(실측).
+    """
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_session_ts "
+                 "ON turns(session_id, timestamp, id)")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -207,6 +218,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0008_session_titles,
     _mig_0009_core_indexes,
     _mig_0010_raw_mirror_bytes,
+    _mig_0011_turns_session_ts,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -502,19 +514,28 @@ class ArchiveDB:
         return cur.rowcount
 
     def thread(self, turn_id: str, window: int = 2) -> list[Turn]:
-        """같은 세션에서 시간순 앞뒤 window 개 턴을 포함해 반환."""
+        """같은 세션에서 시간순 앞뒤 window 개 턴을 포함해 반환.
+
+        세션 전체를 SELECT * 로 읽어 파이썬에서 잘라내던 코드였다. 검색 결과 한 건마다
+        호출되므로(search.py) 20건이면 세션 20개를 통째로 메모리에 올렸고, 그게 검색
+        시간의 92%였다(826턴 세션 24.85ms → 0.12ms, idx_turns_session_ts 와 함께).
+
+        (timestamp, id) 행 값 비교로 경계를 잡는다 — ORDER BY 와 같은 키라야 LIMIT 가
+        인덱스만 읽고 끝난다. 정렬 키를 바꾸면 이 인덱스도 같이 바꿔야 한다.
+        """
         turn = self.get_turn(turn_id)
         if not turn:
             return []
-        rows = self.conn.execute(
-            "SELECT * FROM turns WHERE session_id=? ORDER BY timestamp, id", (turn.session_id,)
-        ).fetchall()
-        ids = [r["id"] for r in rows]
-        if turn_id not in ids:
+        key = (turn.session_id, turn.timestamp, turn_id)
+        before = self.conn.execute(
+            "SELECT * FROM turns WHERE session_id=? AND (timestamp, id) < (?, ?) "
+            "ORDER BY timestamp DESC, id DESC LIMIT ?", (*key, window)).fetchall()
+        after = self.conn.execute(
+            "SELECT * FROM turns WHERE session_id=? AND (timestamp, id) >= (?, ?) "
+            "ORDER BY timestamp, id LIMIT ?", (*key, window + 1)).fetchall()
+        if not after:                      # 자신이 안 잡히면(행 불일치) 최소한 자기 턴은 준다
             return [turn]
-        i = ids.index(turn_id)
-        lo, hi = max(0, i - window), min(len(rows), i + window + 1)
-        return [_row_to_turn(r) for r in rows[lo:hi]]
+        return [_row_to_turn(r) for r in reversed(before)] + [_row_to_turn(r) for r in after]
 
     # --- 청크 -----------------------------------------------------------
     def add_chunks(self, chunks) -> None:
