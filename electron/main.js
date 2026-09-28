@@ -67,8 +67,37 @@ function logPath() {
   return path.join(app.getPath("userData"), "backend.log")
 }
 
+const RELEASES_URL = "https://github.com/flyingjoojak/vestige/releases/latest"
+
+// 설치가 깨져 사이드카가 통째로 없는 경우(자동 업데이트가 폴더를 비우고 중단되면 실제로 생긴다).
+// 창을 띄울 수 없으니 네이티브 대화상자로 알리고 설치본 받는 곳을 열어준다.
+function showBrokenInstall(detail) {
+  const { dialog } = require("electron")
+  const r = dialog.showMessageBoxSync({
+    type: "error",
+    title: "Vestige",
+    message: "설치가 손상되었습니다",
+    detail: `${detail}
+
+설치본을 다시 내려받아 설치해 주세요.
+로그: ${logPath()}`,
+    buttons: ["설치본 내려받기", "닫기"],
+    defaultId: 0, cancelId: 1,
+  })
+  if (r === 0) { try { shell.openExternal(RELEASES_URL) } catch (_) { /* 브라우저 없음 */ } }
+  quitting = true
+  app.quit()
+}
+
 function spawnBackend() {
   const { cmd, args, cwd } = backendCommand(port)
+  // 동봉 사이드카가 아예 없으면 spawn 이 ENOENT 로 터진다. 그대로 두면 Electron 이
+  // "A JavaScript error occurred in the main process" 를 띄우고 끝나 사용자가 할 수 있는 게 없다.
+  if (app.isPackaged && !fs.existsSync(cmd)) {
+    showBrokenInstall(`백엔드 파일이 없습니다:
+${cmd}`)
+    return
+  }
   // VESTIGE_MANAGED=1 → 백엔드가 뮤텍스·브라우저 자동열기·app.log를 끔(셸이 담당).
   const env = { ...process.env, VESTIGE_MANAGED: "1", VESTIGE_PORT: String(port) }
   backend = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
@@ -77,6 +106,20 @@ function spawnBackend() {
     backend.stdout.pipe(logStream)
     backend.stderr.pipe(logStream)
   } catch (_) { /* 로그 실패해도 진행 */ }
+  // spawn 실패(ENOENT/EACCES)는 exit 가 아니라 error 로 온다. 핸들러가 없으면 Node 가
+  // uncaught exception 으로 올려 앱이 그 자리에서 죽는다 — 실제로 그렇게 죽었다(#229).
+  backend.on("error", (err) => {
+    backend = null
+    if (quitting) return
+    if (app.isPackaged && err && err.code === "ENOENT") {
+      showBrokenInstall(`백엔드를 실행할 수 없습니다:
+${cmd}`)
+      return
+    }
+    try { fs.appendFileSync(logPath(), `
+[spawn error] ${err && err.message}
+`) } catch (_) { /* 무시 */ }
+  })
   backend.on("exit", (code) => {
     backend = null
     if (quitting) return
