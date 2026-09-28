@@ -2002,6 +2002,7 @@ def _graph3d_compute_and_cache(n: int) -> dict:
         cache_path.write_text(
             json.dumps({"n": n, "v": _GRAPH3D_VER, "data": data, "members": members}, ensure_ascii=False),
             encoding="utf-8")
+        _graph3d_stale_path().unlink(missing_ok=True)   # 새로 계산했으니 낡음 표시를 거둔다
     except Exception:
         pass
     return data
@@ -2044,7 +2045,7 @@ def _graph3d_data(refresh: bool = False) -> dict:
                 cached_n = int(cached.get("n") or 0)
                 # 임계값 이상 변했을 때만 재계산(작은 변화엔 지도 안 흔들리게) — stale-while-revalidate.
                 # stale 표시(접기/펼치기·정제)는 개수가 그대로여도 내용이 바뀐 경우라 무조건 재계산.
-                if cached.get("stale") or (
+                if cached.get("stale") or _graph3d_stale_path().exists() or (   # 옛 캐시의 stale 키도 계속 존중
                     cached_n > 0
                     and abs(n - cached_n) >= max(_GRAPH3D_MIN_DELTA, int(cached_n * _GRAPH3D_DELTA_RATIO))
                 ):
@@ -2057,6 +2058,11 @@ def _graph3d_data(refresh: bool = False) -> dict:
     return _graph3d_compute_and_cache(n)
 
 
+def _graph3d_stale_path():
+    from . import config as C
+    return C.DATA_DIR / "graph3d_cache.stale"
+
+
 def _graph3d_invalidate() -> None:
     """지도 캐시를 '낡음'으로만 표시 → 다음 조회가 옛 데이터를 즉시 주고 뒤에서 재계산한다.
 
@@ -2064,15 +2070,16 @@ def _graph3d_invalidate() -> None:
     1) 캐시가 없으면 _graph3d_data 가 동기 경로로 떨어져 UMAP+HDBSCAN 이 그 자리에서 돈다.
        접기/펼치기는 일상 클릭이라 그때마다 군집 탭이 수십 초 멈춘다.
     2) prev_members 가 같이 사라져 군집 id 승계가 끊기고, 접기 한 번에 군집 색이 전부 바뀐다.
+
+    표시는 **본문과 분리해 빈 파일로** 둔다. 예전엔 캐시 JSON 에 stale=True 를 넣으려고
+    5MB 를 통째로 읽고 파싱하고 다시 썼다(실측 85ms). 접기/펼치기는 일상 클릭이라 그 비용이
+    매번 들었고, 쓰는 중에 죽으면 캐시가 깨진 JSON 으로 남았다. 0바이트 생성은 원자적이다.
     """
-    from . import config as C
-    cache_path = C.DATA_DIR / "graph3d_cache.json"
     with contextlib.suppress(Exception):
-        if not cache_path.exists():
+        from . import config as C
+        if not (C.DATA_DIR / "graph3d_cache.json").exists():
             return
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        cached["stale"] = True
-        cache_path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+        _graph3d_stale_path().touch()
 
 
 _graph3d_body: dict = {"key": None, "body": b""}
@@ -2092,10 +2099,11 @@ def api_graph3d(refresh: bool = False):
 
     cache_path = C.DATA_DIR / "graph3d_cache.json"
 
-    def key_of() -> tuple[int, int] | None:
+    def key_of() -> tuple[int, int, bool] | None:
+        # 낡음 표시는 별도 파일이라 캐시 본문이 안 바뀐다 → 키에 같이 넣어야 무효화를 알아챈다.
         try:
             st = cache_path.stat()
-            return (st.st_mtime_ns, st.st_size)
+            return (st.st_mtime_ns, st.st_size, _graph3d_stale_path().exists())
         except OSError:
             return None
 
