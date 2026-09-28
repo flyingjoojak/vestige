@@ -374,7 +374,9 @@
     "renameSession": "Rename session",
     "renameSessionHint": "A name for this session. The conversation itself is unchanged; leave empty to restore the original title.",
     "searchFailed": "Search failed",
-    "restorePartial": "The archive was damaged; only the earlier part was restored"
+    "restorePartial": "The archive was damaged; only the earlier part was restored",
+    "subCount": "{{count}} sub-session",
+    "showSubagents": "Show sub-sessions"
   },
   "mcp": {
     "sectionTitle": "MCP integration",

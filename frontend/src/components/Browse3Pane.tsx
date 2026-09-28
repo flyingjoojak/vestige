@@ -8,6 +8,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
 import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, type SearchMode } from "@/lib/api"
+import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
@@ -28,7 +29,7 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
   try { el.showPicker?.() } catch { /* 미지원 */ }
 }
 
-type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean }
+type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean; parent?: string | null }
 type Conv = { t: string; s: string; h: string }
 
 // 세션/군집 공통 3분할 브라우저. 초기=목록(가운데), 선택 후=[검색+대화목록 | 채팅 | 목록].
@@ -43,6 +44,16 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
   // 목록 자체를 좁히는 입력. 서버 검색(대화 내용)과 달리 '제목·id'만 보는 로컬 필터다.
   const [listQ, setListQ] = useState("")
+  // 하위 에이전트 세션 노출. 기본은 숨김 — 사용자가 직접 시작한 대화가 아니라 목록만 어지럽힌다.
+  // 숨김은 한 겹만 둔다: 꺼져 있으면 '하위 N개' 줄 자체가 없고, 켜면 부모 아래 접힌 채로 나온다.
+  const [showSub, setShowSub] = useState(() => {
+    try { return localStorage.getItem("cm.showSubagents") === "1" } catch { return false }
+  })
+  const [openKids, setOpenKids] = useState<Set<string>>(new Set())   // 펼쳐둔 부모 id
+  const toggleShowSub = () => setShowSub((v) => {
+    try { localStorage.setItem("cm.showSubagents", v ? "0" : "1") } catch { /* 사생활 모드 등 */ }
+    return !v
+  })
   const [pointsByCluster, setPointsByCluster] = useState<Map<number, Conv[]>>(new Map())
   const [sel, setSel] = useState<string | null>(initialSel)
   const [selTurn, setSelTurn] = useState<{ session: string; turn: string } | null>(initialTurn)
@@ -200,6 +211,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         id: s.session, label: s.headline || t("browse.untitled"), count: s.count,
         sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
         subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
+        parent: s.parent,       // 부모 세션 아래로 접어 넣기 위해(백엔드가 경로에서 파생)
         // 전 턴이 접힌 세션(#128): 목록에서 빼지 않고 흐리게 '접힘'으로 구분 — 빼버리면 펼칠 길이 없다.
         folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
       })))).catch(() => setGroupsErr(true))
@@ -287,17 +299,23 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       ? <Bot className="size-4 shrink-0 text-muted-foreground" aria-label={t("browse.subagentBadge")} />
       : <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
 
+  // 하위 에이전트 세션을 부모 아래로 모은다(판단은 lib/subagents.ts — 단독 검증 가능).
+  const { top, kids } = nestSubagents(groups ?? [])
+
   // 그룹 목록 — 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
-  const shownGroups = (() => {
-    const q = listQ.trim().toLowerCase()
-    if (!groups || !q) return groups
-    return groups.filter((g) =>
-      g.label.toLowerCase().includes(q) || (kind === "sessions" && g.id.toLowerCase().includes(q)))
-  })()
+  const listTerm = listQ.trim().toLowerCase()
+  const hitsTerm = (g: Group) =>
+    g.label.toLowerCase().includes(listTerm) || (kind === "sessions" && g.id.toLowerCase().includes(listTerm))
+  const shownGroups = groups ? filterTop(top, kids, listTerm, hitsTerm) : null
+  const kidsOf = (g: Group) => kidsToShow(kids.get(g.id) ?? [], listTerm, hitsTerm, showSub)
+  // 검색으로 걸린 하위는 자동으로 펼친다(닫혀 있으면 맞았다는 걸 알 수 없다).
+  const kidsOpen = (g: Group) => (listTerm ? true : openKids.has(g.id))
 
   // 목록 위 검색창 — 세션은 제목·세션 id, 군집은 이름으로 좁힌다.
+  const hasKids = kids.size > 0
   const listFilter = (
-    <div className="relative">
+    <div className="flex items-center gap-1.5">
+    <div className="relative flex-1">
       <Magnifier className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input value={listQ} onChange={(e) => setListQ(e.target.value)}
         aria-label={t(kind === "sessions" ? "browse.filterSessions" : "browse.filterClusters")}
@@ -310,7 +328,52 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         </button>
       )}
     </div>
+    {kind === "sessions" && hasKids && (
+      <button type="button" onClick={toggleShowSub} aria-pressed={showSub}
+        title={t("browse.showSubagents")} aria-label={t("browse.showSubagents")}
+        className={`shrink-0 rounded-lg border p-1.5 transition-colors ${showSub
+          ? "border-primary/50 bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
+        <Bot className="size-4" />
+      </button>
+    )}
+    </div>
   )
+
+  // 한 행. 하위 에이전트 행(isKid)은 들여쓰고 세로선을 그어 부모 소속을 눈에 보이게 한다.
+  const groupRow = (g: Group, compact: boolean, isKid = false) => {
+    const indent = isKid ? "ml-5 border-l-2 border-l-muted-foreground/25" : ""
+    const body = (
+      <>
+        {groupIcon(g)}
+        <button onClick={() => pickGroup(g.id)}
+          className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
+          <span className={compact ? "block truncate text-sm font-medium" : "block truncate text-sm font-medium"}>{g.label}</span>
+          <span className={compact
+            ? "block truncate text-[11px] text-muted-foreground tabular-nums"
+            : "mt-0.5 block truncate text-[11.5px] text-muted-foreground tabular-nums"}>{g.sub}</span>
+        </button>
+        {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
+        {kind === "sessions" && (
+          <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <AddToFolder target={{ sessionId: g.id }} />
+          </span>
+        )}
+      </>
+    )
+    return compact ? (
+      <div key={g.id}
+        className={`cm-cv-row group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${indent} ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+        {body}
+      </div>
+    ) : (
+      <div key={g.id}
+        className={`cm-cv-row group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md ${indent}`}>
+        {body}
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </div>
+    )
+  }
 
   const groupList = (compact: boolean) => (
     <div className={compact ? "min-h-0 flex-1 space-y-1 overflow-y-auto p-3" : "mx-auto w-full max-w-2xl space-y-2.5 p-4"}>
@@ -329,40 +392,28 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       )}
       {/* 행 안에 '폴더에 추가' 버튼을 두려면 버튼 중첩을 피해야 한다 → 행은 div, 클릭 영역은
           겹침 레이어(after:inset-0)로 카드 전체, 담기 버튼은 z-10 으로 그 위에. */}
-      {shownGroups?.map((g) => compact ? (
-        <div key={g.id}
-          className={`cm-cv-row group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
-          {groupIcon(g)}
-          <button onClick={() => pickGroup(g.id)}
-            className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
-            <span className="block truncate text-sm font-medium">{g.label}</span>
-            <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{g.sub}</span>
-          </button>
-          {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
-          {kind === "sessions" && (
-            <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-              <AddToFolder target={{ sessionId: g.id }} />
-            </span>
-          )}
-        </div>
-      ) : (
-        <div key={g.id}
-          className="cm-cv-row group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md">
-          {groupIcon(g)}
-          <button onClick={() => pickGroup(g.id)}
-            className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
-            <div className="truncate text-sm font-medium">{g.label}</div>
-            <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground tabular-nums">{g.sub}</div>
-          </button>
-          {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
-          {kind === "sessions" && (
-            <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-              <AddToFolder target={{ sessionId: g.id }} />
-            </span>
-          )}
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </div>
-      ))}
+      {shownGroups?.map((g) => {
+        const ks = kidsOf(g)
+        if (!ks.length) return groupRow(g, compact)
+        const open = kidsOpen(g)
+        return (
+          <div key={g.id} className="space-y-1">
+            {groupRow(g, compact)}
+            <button type="button" onClick={() => setOpenKids((prev) => {
+              const next = new Set(prev)
+              if (next.has(g.id)) next.delete(g.id); else next.add(g.id)
+              return next
+            })}
+              aria-expanded={open}
+              className="ml-5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              <ChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+              <Bot className="size-3.5" />
+              {t("browse.subCount", { count: ks.length })}
+            </button>
+            {open && ks.map((k) => groupRow(k, compact, true))}
+          </div>
+        )
+      })}
     </div>
   )
 
