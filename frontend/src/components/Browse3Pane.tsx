@@ -44,16 +44,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
   // 목록 자체를 좁히는 입력. 서버 검색(대화 내용)과 달리 '제목·id'만 보는 로컬 필터다.
   const [listQ, setListQ] = useState("")
-  // 하위 에이전트 세션 노출. 기본은 숨김 — 사용자가 직접 시작한 대화가 아니라 목록만 어지럽힌다.
-  // 숨김은 한 겹만 둔다: 꺼져 있으면 '하위 N개' 줄 자체가 없고, 켜면 부모 아래 접힌 채로 나온다.
-  const [showSub, setShowSub] = useState(() => {
-    try { return localStorage.getItem("cm.showSubagents") === "1" } catch { return false }
-  })
   const [openKids, setOpenKids] = useState<Set<string>>(new Set())   // 펼쳐둔 부모 id
-  const toggleShowSub = () => setShowSub((v) => {
-    try { localStorage.setItem("cm.showSubagents", v ? "0" : "1") } catch { /* 사생활 모드 등 */ }
-    return !v
-  })
   const [pointsByCluster, setPointsByCluster] = useState<Map<number, Conv[]>>(new Map())
   const [sel, setSel] = useState<string | null>(initialSel)
   const [selTurn, setSelTurn] = useState<{ session: string; turn: string } | null>(initialTurn)
@@ -307,15 +298,13 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const hitsTerm = (g: Group) =>
     g.label.toLowerCase().includes(listTerm) || (kind === "sessions" && g.id.toLowerCase().includes(listTerm))
   const shownGroups = groups ? filterTop(top, kids, listTerm, hitsTerm) : null
-  const kidsOf = (g: Group) => kidsToShow(kids.get(g.id) ?? [], listTerm, hitsTerm, showSub)
+  const kidsOf = (g: Group) => kidsToShow(kids.get(g.id) ?? [], listTerm, hitsTerm)
   // 검색으로 걸린 하위는 자동으로 펼친다(닫혀 있으면 맞았다는 걸 알 수 없다).
   const kidsOpen = (g: Group) => (listTerm ? true : openKids.has(g.id))
 
   // 목록 위 검색창 — 세션은 제목·세션 id, 군집은 이름으로 좁힌다.
-  const hasKids = kids.size > 0
   const listFilter = (
-    <div className="flex items-center gap-1.5">
-    <div className="relative flex-1">
+    <div className="relative">
       <Magnifier className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input value={listQ} onChange={(e) => setListQ(e.target.value)}
         aria-label={t(kind === "sessions" ? "browse.filterSessions" : "browse.filterClusters")}
@@ -327,16 +316,6 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           <X className="size-3.5" />
         </button>
       )}
-    </div>
-    {kind === "sessions" && hasKids && (
-      <button type="button" onClick={toggleShowSub} aria-pressed={showSub}
-        title={t("browse.showSubagents")} aria-label={t("browse.showSubagents")}
-        className={`shrink-0 rounded-lg border p-1.5 transition-colors ${showSub
-          ? "border-primary/50 bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
-        <Bot className="size-4" />
-      </button>
-    )}
     </div>
   )
 

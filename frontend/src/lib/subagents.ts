@@ -22,12 +22,11 @@ export function nestSubagents<T extends Nestable>(list: T[]): { top: T[]; kids: 
 
 /** 목록에 실제로 그릴 하위들.
  *
- * 검색 중이면 **토글과 무관하게** 맞는 것만 보여준다. 접힌 하위가 검색어에 맞는데도
- * 안 보이면 그 세션은 검색으로 도달할 수 없다. 검색이 아니면 토글이 켜졌을 때만 전부. */
-export function kidsToShow<T>(all: T[], term: string, hits: (x: T) => boolean, showSub: boolean): T[] {
+ * 평소엔 전부(부모 아래 접힌 채로 — 펼치기 한 번이면 된다).
+ * 검색 중이면 맞는 것만. 접힌 하위가 검색어에 맞는데도 안 보이면 그 세션은 검색으로 도달할 수 없다. */
+export function kidsToShow<T>(all: T[], term: string, hits: (x: T) => boolean): T[] {
   if (!all.length) return []
-  if (term) return all.filter(hits)
-  return showSub ? all : []
+  return term ? all.filter(hits) : all
 }
 
 /** 최상위 목록 필터. 하위가 맞으면 **부모를 남긴다**(그래야 펼쳐서 보여줄 수 있다). */

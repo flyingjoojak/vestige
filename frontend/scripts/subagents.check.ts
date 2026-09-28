@@ -21,14 +21,12 @@ assert.deepEqual(top.map((x) => x.id), ["p1", "p2", "orphan"], "고아 하위는
 assert.deepEqual(kids.get("p1")!.map((x) => x.id), ["s1", "s2"])
 assert.equal(kids.has("gone"), false)
 
-// 2. 토글이 꺼져 있으면 하위 줄 자체가 없다(숨김은 한 겹만)
-assert.deepEqual(kidsToShow(kids.get("p1")!, "", hits(""), false), [])
-assert.equal(kidsToShow(kids.get("p1")!, "", hits(""), true).length, 2)
+// 2. 평소엔 하위가 전부 나온다(부모 아래 접힌 채로 — 펼치기 한 번이면 된다)
+assert.deepEqual(kidsToShow(kids.get("p1")!, "", hits("")).map((x) => x.id), ["s1", "s2"])
 
-// 3. 검색은 토글을 무시한다 — 안 그러면 접힌 하위에 도달할 수 없다
+// 3. 검색 중이면 맞는 것만 — 안 그러면 접힌 하위에 도달할 수 없다
 const term = "리서치"
-assert.deepEqual(kidsToShow(kids.get("p1")!, term, hits(term), false).map((x) => x.id), ["s1"],
-  "토글이 꺼져 있어도 검색에 맞는 하위는 보여야 한다")
+assert.deepEqual(kidsToShow(kids.get("p1")!, term, hits(term)).map((x) => x.id), ["s1"])
 
 // 4. 하위가 맞으면 부모가 목록에 남는다(부모 제목은 안 맞아도)
 assert.deepEqual(filterTop(top, kids, term, hits(term)).map((x) => x.id), ["p1"])
