@@ -527,13 +527,51 @@ def test_graph3d_invalidate_marks_stale_instead_of_deleting(tmp_path, monkeypatc
         "members": [["s1:u1"]],
     }), encoding="utf-8")
 
+    before = cache.read_bytes()
     web._graph3d_invalidate()
 
-    assert cache.exists()                      # 지우지 않는다
+    # 표시는 별도 빈 파일로 둔다 — 5MB 를 다시 쓰면 접기 한 번에 85ms 가 들고,
+    # 쓰는 중에 죽으면 캐시가 깨진 JSON 으로 남는다. 본문은 한 바이트도 건드리지 않는다.
+    assert cache.read_bytes() == before
+    stale = tmp_path / "graph3d_cache.stale"
+    assert stale.exists() and stale.stat().st_size == 0
     after = json.loads(cache.read_text(encoding="utf-8"))
-    assert after["stale"] is True
     assert after["data"]["clusters"] == [{"id": 3}]   # 옛 데이터는 그대로 제공 가능
     assert after["members"] == [["s1:u1"]]            # 군집 id 승계 기준 보존
+
+
+def test_graph3d_stale_mark_triggers_recompute_and_is_cleared(tmp_path, monkeypatch):
+    """표시 파일이 실제로 재계산을 부르고, 재계산 뒤엔 거둬진다.
+
+    표시를 본문에서 분리했으므로 '읽는 쪽이 그 파일을 보는가'가 끊기면 무효화가 조용히
+    사라진다(접어도 지도가 안 바뀜). 그 연결을 직접 건다.
+    """
+    import json
+    from vestige import config as C
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(web, "vector_count", lambda: 100)
+    cache = tmp_path / "graph3d_cache.json"
+    cache.write_text(json.dumps({"n": 100, "v": web._GRAPH3D_VER,
+                                 "data": {"points": [], "clusters": []}}), encoding="utf-8")
+
+    called: list[int] = []
+    monkeypatch.setattr(web, "_graph3d_recompute_bg", lambda n: called.append(n))
+
+    web._graph3d_data()                        # 표시 없음 → 재계산 안 부름
+    assert called == []
+
+    web._graph3d_invalidate()
+    web._graph3d_data()                        # 표시 있음 → 재계산 부름
+    assert called == [100]
+
+    # 재계산이 끝나면 표시를 거둔다 — 안 거두면 매 조회가 영원히 재계산을 부른다.
+    from vestige import graph as G
+    monkeypatch.setattr(G, "build_graph", lambda *a, **k: {"points": [], "clusters": [], "_members": []})
+    monkeypatch.setattr(web, "make_index", lambda: None)
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: None)
+    assert (tmp_path / "graph3d_cache.stale").exists()
+    web._graph3d_compute_and_cache(100)
+    assert not (tmp_path / "graph3d_cache.stale").exists()
 
 
 def test_graph3d_invalidate_survives_missing_cache(tmp_path, monkeypatch):
