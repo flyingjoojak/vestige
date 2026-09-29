@@ -895,7 +895,9 @@ def api_sessions(limit: int = 500):
         ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
     ).fetchall()
     # 사용자가 지은 제목은 한 번에 읽어와 덮어쓴다(세션마다 조회하면 N+1).
-    titles = {t["session_id"]: t["title"] for t in db.conn.execute("SELECT session_id, title FROM session_titles")}
+    # title='' 은 '지정을 지웠다'는 기록이다(#233 소프트 삭제) — 제목으로 내보내지 않는다.
+    titles = {t["session_id"]: t["title"]
+              for t in db.conn.execute("SELECT session_id, title FROM session_titles WHERE title<>''")}
     out = []
     for r in rows:
         is_sub, parent = _subagent_info(r["source_file"])

@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS raw_cursors(
   file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL,
   mirror_bytes INTEGER
 );
+CREATE TABLE IF NOT EXISTS unfolded(
+      turn_id TEXT PRIMARY KEY, at REAL NOT NULL
+    );
 CREATE TABLE IF NOT EXISTS hidden_turns(
   turn_id TEXT PRIMARY KEY, hidden_at REAL
 );
@@ -206,6 +209,19 @@ def _mig_0011_turns_session_ts(conn: sqlite3.Connection) -> None:
                  "ON turns(session_id, timestamp, id)")
 
 
+def _mig_0012_unfolded(conn: sqlite3.Connection) -> None:
+    """unfolded — '펼침'을 시각과 함께 남긴다(#233 기기 간 동기화용).
+
+    접힘은 hidden_turns 에 행이 있으면 접힘이고, 펼치면 행을 지운다. 그 구조로는 '펼쳤다'를
+    다른 기기에 전할 수 없다 — 상대에 행이 남아 있으면 다시 접힌 채로 돌아온다(#228 과 같은 문제).
+
+    hidden_turns 의 의미는 건드리지 않는다. '접힘' 판정이 7군데에 흩어져 있어 컬럼을 더하면
+    전부 고쳐야 하고, 하나만 빠뜨려도 접힘 상태가 조용히 틀어진다. 해제 시각만 여기 따로 둔다.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS unfolded("
+                 "turn_id TEXT PRIMARY KEY, at REAL NOT NULL)")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -219,6 +235,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0009_core_indexes,
     _mig_0010_raw_mirror_bytes,
     _mig_0011_turns_session_ts,
+    _mig_0012_unfolded,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -436,6 +453,7 @@ class ArchiveDB:
         for tid in turn_ids:
             cur = self.conn.execute(
                 "INSERT OR IGNORE INTO hidden_turns(turn_id, hidden_at) VALUES(?,?)", (tid, now))
+            self.conn.execute("DELETE FROM unfolded WHERE turn_id=?", (tid,))   # 최신 상태는 '접힘'
             inserted += cur.rowcount
         self.conn.commit()
         return inserted
@@ -448,8 +466,13 @@ class ArchiveDB:
     def unhide_turns(self, turn_ids: list[str]) -> None:
         if not turn_ids:
             return
+        now = time.time()
         self.conn.executemany(
             "DELETE FROM hidden_turns WHERE turn_id=?", [(tid,) for tid in turn_ids])
+        # '펼쳤다'를 시각과 함께 남긴다 — 이게 없으면 다른 기기의 접힘이 다시 이긴다(#233).
+        self.conn.executemany(
+            "INSERT INTO unfolded(turn_id, at) VALUES(?,?) "
+            "ON CONFLICT(turn_id) DO UPDATE SET at=excluded.at", [(tid, now) for tid in turn_ids])
         self.conn.commit()
 
     def unhide_session(self, session_id: str) -> None:
@@ -855,12 +878,69 @@ class ArchiveDB:
                 "ON CONFLICT(session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at",
                 (session_id, title, time.time()))
         else:
-            self.conn.execute("DELETE FROM session_titles WHERE session_id=?", (session_id,))
+            # 행을 지우면 '지웠다'를 다른 기기에 전할 수 없어 옛 제목이 되살아난다(#233).
+            # 빈 제목을 시각과 함께 남겨 '늦게 바꾼 쪽이 이김'에 그대로 태운다.
+            self.conn.execute(
+                "INSERT INTO session_titles(session_id, title, updated_at) VALUES(?,'',?) "
+                "ON CONFLICT(session_id) DO UPDATE SET title='', updated_at=excluded.updated_at",
+                (session_id, time.time()))
         self.conn.commit()
+
+    # --- 기기 간 동기화용(#233) -------------------------------------
+    # 어느 쪽이 이기는지는 '늦게 바꾼 쪽'으로 단순하게 간다. 제목·접힘은 잘못 퍼져도
+    # 되돌릴 수 있어서, 턴 삭제(#228)처럼 보수적으로 갈 이유가 없다.
+
+    def sync_title_rows(self) -> list[tuple[str, str, float]]:
+        """(session_id, title, updated_at). title='' 은 '지웠다'는 기록이라 함께 내보낸다."""
+        return [(r["session_id"], r["title"], r["updated_at"] or 0.0)
+                for r in self.conn.execute("SELECT session_id, title, updated_at FROM session_titles")]
+
+    def apply_title(self, session_id: str, title: str, at: float) -> bool:
+        """상대 기록이 더 새로우면 반영. 반영했으면 True."""
+        r = self.conn.execute(
+            "SELECT updated_at FROM session_titles WHERE session_id=?", (session_id,)).fetchone()
+        if r is not None and (r["updated_at"] or 0.0) >= at:
+            return False
+        self.conn.execute(
+            "INSERT INTO session_titles(session_id, title, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at",
+            (session_id, title, at))
+        return True
+
+    def sync_fold_rows(self) -> list[tuple[str, int, float]]:
+        """(turn_id, 접힘여부, 시각). 접힘은 hidden_turns, 펼침은 unfolded 에서 온다."""
+        rows = [(r["turn_id"], 1, r["hidden_at"] or 0.0)
+                for r in self.conn.execute("SELECT turn_id, hidden_at FROM hidden_turns")]
+        rows += [(r["turn_id"], 0, r["at"])
+                 for r in self.conn.execute("SELECT turn_id, at FROM unfolded")]
+        return rows
+
+    def _fold_at(self, turn_id: str) -> float:
+        """이 턴의 접힘/펼침 중 마지막 시각(둘 다 없으면 0)."""
+        a = self.conn.execute("SELECT hidden_at FROM hidden_turns WHERE turn_id=?", (turn_id,)).fetchone()
+        b = self.conn.execute("SELECT at FROM unfolded WHERE turn_id=?", (turn_id,)).fetchone()
+        return max((a["hidden_at"] or 0.0) if a else 0.0, (b["at"] or 0.0) if b else 0.0)
+
+    def apply_fold(self, turn_id: str, folded: int, at: float) -> bool:
+        """상대 기록이 더 새로우면 반영. 반영했으면 True."""
+        if self._fold_at(turn_id) >= at:
+            return False
+        if folded:
+            self.conn.execute(
+                "INSERT INTO hidden_turns(turn_id, hidden_at) VALUES(?,?) "
+                "ON CONFLICT(turn_id) DO UPDATE SET hidden_at=excluded.hidden_at", (turn_id, at))
+            self.conn.execute("DELETE FROM unfolded WHERE turn_id=?", (turn_id,))
+        else:
+            self.conn.execute("DELETE FROM hidden_turns WHERE turn_id=?", (turn_id,))
+            self.conn.execute(
+                "INSERT INTO unfolded(turn_id, at) VALUES(?,?) "
+                "ON CONFLICT(turn_id) DO UPDATE SET at=excluded.at", (turn_id, at))
+        return True
 
     def session_title(self, session_id: str) -> str | None:
         r = self.conn.execute(
-            "SELECT title FROM session_titles WHERE session_id=?", (session_id,)).fetchone()
+            "SELECT title FROM session_titles WHERE session_id=? AND title<>''",
+            (session_id,)).fetchone()
         return r["title"] if r else None
 
     # --- 메타 -----------------------------------------------------------
