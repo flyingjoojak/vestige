@@ -71,6 +71,15 @@ def export_archive(db, projects_dir: str | Path, did: str) -> int:
         # 모르는 키를 무시하는 옛 버전도 이 파일을 계속 읽는다.
         for sid, title, at in db.sync_title_rows():
             f.write(json.dumps({"title": [sid, title, at]}, ensure_ascii=False) + "\n")
+        fs = db.sync_folder_rows()
+        for row in fs["folders"]:
+            f.write(json.dumps({"folder": list(row)}, ensure_ascii=False) + "\n")
+        for row in fs["items"]:
+            f.write(json.dumps({"fitem": list(row)}, ensure_ascii=False) + "\n")
+        for row in fs["gone"]:
+            f.write(json.dumps({"folder_x": list(row)}, ensure_ascii=False) + "\n")
+        for row in fs["gone_items"]:
+            f.write(json.dumps({"fitem_x": list(row)}, ensure_ascii=False) + "\n")
         for tid, folded, at in db.sync_fold_rows():
             f.write(json.dumps({"fold": [tid, folded, at]}, ensure_ascii=False) + "\n")
     os.replace(tmp, d / f"{did}.ndjson")   # 원자적 교체
@@ -115,6 +124,24 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     if "fold" in rec:
                         tid, folded, at = rec["fold"]
                         meta += db.apply_fold(tid, int(folded), float(at))
+                        continue
+                    # 폴더는 uid 로 오간다(#233). 순서가 문제인데 — 항목/부모가 폴더보다
+                    # 먼저 와도 그 회차엔 붙지 않고 다음 회차에 제자리를 찾는다.
+                    if "folder" in rec:
+                        uid, nm, pu, pos, at = rec["folder"]
+                        meta += db.apply_folder(uid, nm, pu, pos, float(at))
+                        continue
+                    if "fitem" in rec:
+                        fu, kind, ref, alias, pos, at = rec["fitem"]
+                        meta += db.apply_folder_item(fu, kind, ref, alias, pos, float(at))
+                        continue
+                    if "folder_x" in rec:
+                        uid, at = rec["folder_x"]
+                        meta += db.apply_folder_removed(uid, float(at))
+                        continue
+                    if "fitem_x" in rec:
+                        fu, kind, ref, at = rec["fitem_x"]
+                        meta += db.apply_folder_item_removed(fu, kind, ref, float(at))
                         continue
                     if "t" not in rec:
                         continue            # 모르는 줄 종류(더 새 버전) — 건너뛴다
