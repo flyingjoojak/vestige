@@ -745,3 +745,48 @@ def test_partial_index_is_not_reported_as_intact(tmp_path, monkeypatch):
     data, intact = R.read_mirror_checked("claude-code", sid)
     assert intact is False                          # 앞이 색인 밖 → 온전하지 않다
     assert data == b'{"c":3}\n'
+
+
+def test_damaged_old_archive_does_not_get_a_half_index_on_append(tmp_path, monkeypatch):
+    """색인 없는 보존본의 **가운데가 이미 손상**된 상태에서 새 멤버가 붙는 경우.
+
+    백필은 (의도대로) 실패한다. 그때 그냥 흘러가면 '새 멤버 하나짜리' 색인이 만들어지고,
+    읽기가 그걸 믿어 **멀쩡한 앞부분이 통째로 사라진다.** intact=False 로 보고되긴 하지만
+    복구되는 내용 자체가 달라진다 — 앞부분을 잃고도 '일부 복구'라고 말하는 셈이다.
+    백필이 실패하면 이번 멤버도 적지 않아야 순차 폴백으로 앞부분을 살릴 수 있다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n'])
+    spans = R._idx_read(out)
+    raw = bytearray(out.read_bytes())
+    raw[spans[1][0] + spans[1][1] - 3] ^= 0xFF      # 두 번째 멤버 CRC 손상
+    out.write_bytes(bytes(raw))
+    R._idx_path(out).unlink()                        # 옛 보존본엔 색인이 없다
+
+    f = tmp_path / f"{sid}.jsonl"                    # 업그레이드 후 새 줄이 붙는다
+    f.write_bytes(b'{"a":1}\n{"b":2}\n{"c":3}\n')
+    R.mirror_file(db, f, "claude-code")
+
+    assert not R._idx_path(out).exists()             # 반쪽 색인을 만들지 않는다
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is False
+    assert b'{"a":1}' in data                        # **멀쩡한 앞부분은 살아난다**
+
+
+def test_expansion_cap_stops_a_repeated_span(tmp_path, monkeypatch):
+    """색인이 같은 멤버를 반복 가리키면 무한히 부푼다(실측 3207배). 상한에서 멈춘다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n' * 2000])
+    n = out.stat().st_size
+    raw = out.read_bytes()
+
+    one = len(R._walk_by_index(raw, [(0, n)])[0])            # 멤버 하나의 원문 크기
+    data, _end, intact = R._walk_by_index(raw, [(0, n)] * 5000)
+    assert intact is False                                   # 손상으로 본다
+    # 상한 검사는 청크를 더한 뒤 돌아 한 멤버만큼 넘칠 수 있다. 중요한 건 5000배가 아니라는 것.
+    assert len(data) <= R._MAX_EXPAND * n + R._MIN_EXPAND + one
+    assert len(data) < one * 5000                            # 무한히 부풀지 않는다

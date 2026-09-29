@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from types import SimpleNamespace
 
@@ -480,3 +482,52 @@ def _folder_state(db):
                    for r in db.conn.execute("SELECT uid, name, parent_id FROM folders")),
             sorted(tuple(r) for r in db.conn.execute(
                 "SELECT folder_id, kind, ref FROM folder_items")))
+
+
+def test_attaching_parent_does_not_clobber_local_edits(tmp_path):
+    """부모를 뒤늦게 붙일 때 **로컬에서 바꾼 이름·위치를 덮으면 안 된다.**
+
+    needs_parent 우회를 '시각 가드 전체 무력화'로 만들면, 파킹된 동안 사용자가 지은 이름이
+    옛 레코드로 되돌아가고 updated_at 까지 과거로 박힌다(실측). 부모 링크만 메워야 한다.
+
+    이 검사는 한 번 유실된 수정을 다시 지킨다 — 고쳐놓고 커밋 전에 덮여 사라진 적이 있다.
+    """
+    b = ArchiveDB(tmp_path / "b.db")
+    b.apply_folder("uidN", "옛 이름", "uidW", 1.0, 100.0)      # 부모가 없어 최상위로 파킹
+    b.commit()
+    fid = b.conn.execute("SELECT id FROM folders WHERE uid='uidN'").fetchone()["id"]
+    b.rename_folder(fid, "내가 지은 이름")                      # 파킹된 동안 로컬에서 변경
+
+    b.apply_folder("uidW", "부모", None, 1.0, 100.0)           # 이제 부모가 도착
+    b.apply_folder("uidN", "옛 이름", "uidW", 1.0, 100.0)      # 같은 옛 레코드 재전송
+    b.commit()
+
+    f = ArchiveDB(b.path).conn.execute(
+        "SELECT name, parent_id, updated_at FROM folders WHERE uid='uidN'").fetchone()
+    assert f["parent_id"] is not None          # 부모는 붙었고
+    assert f["name"] == "내가 지은 이름"        # 이름은 지켜졌고
+    assert f["updated_at"] > 100.0             # 시각도 안 되돌아갔다
+
+
+def test_non_numeric_timestamp_is_rejected_before_any_write(tmp_path):
+    """시각 자리에 숫자가 아닌 것이 오면 그 줄만 건너뛰고, 아무것도 쓰지 않는다.
+
+    예전엔 float(at) 이 안쪽에서 터져 예외 메시지에 **그 문자열이 그대로 박혔다** —
+    상대가 보낸 임의 텍스트가 설정 화면의 'ERROR' 문구로 그대로 떴다(보안 리뷰 지적).
+    쓰기 전에 걸러 그 경로를 없앤다.
+    """
+    import json
+    a, b, proj = _two_devices(tmp_path)
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "peer.ndjson").write_text(
+        json.dumps({"title": ["s1", "제목", "숫자가 아닌 시각"]}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    msgs: list[str] = []
+    A.import_archives(b, proj, "devB", log_fn=msgs.append)
+    fresh = ArchiveDB(b.path)
+    assert fresh.session_title("s1") is None        # 반영되지 않았다
+    assert any(m.startswith("ERROR ") for m in msgs)
+    # 상대가 보낸 문자열이 로그에 그대로 실려 나가지 않는다
+    assert not any("숫자가 아닌 시각" in m for m in msgs)

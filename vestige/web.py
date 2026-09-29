@@ -135,6 +135,7 @@ def _run_incremental(quick: bool = False) -> bool:
             # 로그를 버리면 동기화가 조용히 실패한다 — 색인 상태에 흘려보낸다('ERROR ' 접두만 UI 도달).
             # 동기화 오류는 별도 칸에 모은다. errors 는 아래 색인 단계가 회차마다 비우는데,
             # 같이 담으면 방금 남긴 동기화 오류가 UI 가 한 번 읽기도 전에 지워진다.
+            _autoindex_state["sync_errors"] = []   # 이번 회차 것만 — 해소된 옛 오류가 남지 않게
             import_archives(db, C.PROJECTS_DIR, device_id(db), vi=vi,
                             log_fn=_capture_log(_autoindex_state, key="sync_errors"))
         new = has_new_data(db)
@@ -1730,7 +1731,7 @@ def api_verify_enrich(payload: dict):
 
 # 수동 정제 상태.
 _enrich_state: dict = {"running": False, "phase": "대기", "done_sessions": 0, "total_sessions": 0,
-                       "enriched": 0, "last_error": None, "errors": [], "sync_errors": []}
+                       "enriched": 0, "last_error": None, "errors": []}
 
 
 def _capture_log(state: dict, *, key: str = "errors"):
