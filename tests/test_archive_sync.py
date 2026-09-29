@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from types import SimpleNamespace
 
@@ -480,3 +482,72 @@ def _folder_state(db):
                    for r in db.conn.execute("SELECT uid, name, parent_id FROM folders")),
             sorted(tuple(r) for r in db.conn.execute(
                 "SELECT folder_id, kind, ref FROM folder_items")))
+
+
+def test_attaching_parent_does_not_clobber_local_edits(tmp_path):
+    """부모를 뒤늦게 붙일 때 **로컬에서 바꾼 이름·위치를 덮으면 안 된다.**
+
+    needs_parent 우회를 '시각 가드 전체 무력화'로 만들면, 파킹된 동안 사용자가 지은 이름이
+    옛 레코드로 되돌아가고 updated_at 까지 과거로 박힌다(실측). 부모 링크만 메워야 한다.
+
+    이 검사는 한 번 유실된 수정을 다시 지킨다 — 고쳐놓고 커밋 전에 덮여 사라진 적이 있다.
+    """
+    b = ArchiveDB(tmp_path / "b.db")
+    b.apply_folder("uidN", "옛 이름", "uidW", 1.0, 100.0)      # 부모가 없어 최상위로 파킹
+    b.commit()
+    fid = b.conn.execute("SELECT id FROM folders WHERE uid='uidN'").fetchone()["id"]
+    b.rename_folder(fid, "내가 지은 이름")                      # 파킹된 동안 로컬에서 변경
+
+    b.apply_folder("uidW", "부모", None, 1.0, 100.0)           # 이제 부모가 도착
+    b.apply_folder("uidN", "옛 이름", "uidW", 1.0, 100.0)      # 같은 옛 레코드 재전송
+    b.commit()
+
+    f = ArchiveDB(b.path).conn.execute(
+        "SELECT name, parent_id, updated_at FROM folders WHERE uid='uidN'").fetchone()
+    assert f["parent_id"] is not None          # 부모는 붙었고
+    assert f["name"] == "내가 지은 이름"        # 이름은 지켜졌고
+    assert f["updated_at"] > 100.0             # 시각도 안 되돌아갔다
+
+
+def test_rollback_failure_aborts_the_file_instead_of_committing_half(tmp_path):
+    """ROLLBACK TO 자체가 실패하면 **삼키지 말고 이 파일을 중단**해야 한다.
+
+    삼키면 그 레코드의 반쪽 쓰기가 남은 채로 commit() 에 실려 가고, 로그는 '건너뛰었다'고
+    거짓말을 한다. SAVEPOINT 장치가 막으려던 바로 그 상태가 좁은 경로로 재발한다.
+    """
+    import json
+
+    class FlakyConn:
+        """ROLLBACK TO 를 한 번만 실패시키는 껍데기."""
+        def __init__(self, inner):
+            self._inner, self._failed = inner, False
+        def execute(self, sql, *a):
+            if sql.startswith("ROLLBACK TO") and not self._failed:
+                self._failed = True
+                raise sqlite3.OperationalError("모의 롤백 실패")
+            return self._inner.execute(sql, *a)
+        def __getattr__(self, k):
+            return getattr(self._inner, k)
+
+    a, b, proj = _two_devices(tmp_path)
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    bad = {"t": ["s9:u1", "s9", "u1", "", "2026-01-01", "p", "질문", "답변",
+                 "[]", None, None, "claude-code", None],
+           "c": [[0, "청크"], [1, "청크", "칸이 많다"]]}
+    ok = {"t": ["s9:u2", "s9", "u2", "", "2026-01-01", "p", "q", "a",
+                "[]", None, None, "claude-code", None], "c": []}
+    (d / "peer.ndjson").write_text(
+        json.dumps(bad, ensure_ascii=False) + "\n" + json.dumps(ok, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    real = b.conn
+    b.conn = FlakyConn(real)
+    msgs: list[str] = []
+    A.import_archives(b, proj, "devB", log_fn=msgs.append)
+    b.conn = real
+
+    fresh = ArchiveDB(b.path)
+    # 반쪽 레코드가 커밋되면 안 된다. 이 파일은 통째로 포기하고 다음 회차가 다시 읽는다.
+    assert fresh.conn.execute("SELECT 1 FROM turns WHERE id=?", ("s9:u1",)).fetchone() is None
+    assert any("롤백 실패" in m for m in msgs)          # 조용히 넘어가지 않는다

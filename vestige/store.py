@@ -1014,8 +1014,16 @@ class ArchiveDB:
         # 같은 시각이라도 **부모를 아직 못 붙인 상태면 다시 시도한다.** 안 그러면 자식이 부모보다
         # 먼저 도착했을 때 최상위로 파킹된 채 영구 고아가 된다 — 발신측이 그 폴더를 다시
         # 건드리지 않는 한 at 이 그대로라 '이미 반영됨'으로 걸러지기 때문이다(실측).
-        needs_parent = parent_uid is not None and r["parent_id"] is None and pid is not None
-        if (r["updated_at"] or 0.0) >= at and not needs_parent:
+        # 파킹된 폴더는 **부모만 따로 붙인다.**
+        #
+        # 처음엔 needs_parent 일 때 시각 가드 전체를 우회하게 했는데 그게 더 나빴다 — 그 사이
+        # 사용자가 로컬에서 바꾼 이름·위치까지 옛 레코드로 덮어쓰고 updated_at 을 과거로
+        # 되돌렸다(실측: 방금 지은 이름이 사라졌다). 부모 링크만 메우고 나머지는 건드리지 않는다.
+        if parent_uid is not None and r["parent_id"] is None and pid is not None:
+            self.conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (pid, r["id"]))
+            if (r["updated_at"] or 0.0) >= at:
+                return True        # 부모만 붙이고 이름·위치·시각은 로컬 것을 지킨다
+        if (r["updated_at"] or 0.0) >= at:
             return False
         self.conn.execute("UPDATE folders SET name=?, parent_id=?, position=?, updated_at=? WHERE id=?",
                           (name, pid, position, at, r["id"]))

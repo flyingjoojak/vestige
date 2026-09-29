@@ -693,3 +693,61 @@ def test_raw_size_cached_reuses_value_within_ttl(monkeypatch):
     web._raw_size_cache["at"] = 0.0         # 만료시키면 다시 센다
     assert web._raw_size_cached() == 123
     assert len(calls) == 2
+
+
+def test_sync_errors_reach_the_index_status_payload(tmp_path, monkeypatch):
+    """동기화 오류가 만들어지는 곳부터 /api/index/status 응답까지 배선이 살아있는가.
+
+    이 배선은 두 번 조용히 끊겼다 — 처음엔 log_fn 이 버려져서, 두 번째는 13줄 뒤
+    _autoindex_state["errors"] = [] 에 씻겨서. 둘 다 코드를 읽어야만 알 수 있었다.
+    _capture_log 의 key= 인자를 빼먹는 식의 리팩터링을 CI 가 잡게 한다.
+    """
+    from vestige import archive_sync as A
+    MSG = "ERROR 아카이브 peer.ndjson:3 건너뜀: 모의"
+
+    def fake_import(db, projects_dir, did, *, vi=None, log_fn=print):
+        log_fn(MSG)
+        log_fn("정리 상태 2건 반영")                 # ERROR 아닌 것은 안 쌓인다
+        return 0
+
+    # **실제 호출 경로**를 태운다. _capture_log 를 직접 부르면 web.py 의 배선(key= 인자)을
+    # 안 타서, 그 인자를 빼먹어도 테스트가 통과한다(실측).
+    from vestige import indexer as I
+    monkeypatch.setattr(A, "import_archives", fake_import)
+    monkeypatch.setattr(I, "has_new_data", lambda db: False)      # 함수 안에서 import 하므로 원본 모듈을 패치
+    monkeypatch.setattr(I, "reconcile", lambda *a, **k: 0)
+    monkeypatch.setattr(web, "make_index", lambda: _FakeVI())
+    web._autoindex_state["sync_errors"] = []
+    web._autoindex_state["errors"] = []
+    web._run_incremental()
+
+    assert web._autoindex_state["sync_errors"] == [MSG]
+    assert web._autoindex_state["errors"] == []      # 색인 오류와 섞이지 않는다
+    assert web.api_index_status()["sync_errors"] == [MSG]
+    web._autoindex_state["sync_errors"] = []
+
+
+def test_archive_sync_endpoint_returns_warnings(monkeypatch):
+    """수동 '지금 병합' 이 건너뛴 줄을 warnings 로 돌려주는가.
+
+    백엔드가 만든 경고를 응답에 안 실으면 사용자는 ok:true 만 본다.
+    """
+    from vestige import archive_sync as A
+
+    def fake_import(db, projects_dir, did, *, vi=None, log_fn=print):
+        log_fn("정리 상태 2건 반영(제목·접힘)")       # 정보성 — warnings 에 안 들어가야
+        log_fn("ERROR 아카이브 peer.ndjson — 읽을 수 없는 줄 1개를 건너뛰었어요")
+        return 0
+
+    monkeypatch.setattr(A, "import_archives", fake_import)
+    monkeypatch.setattr(A, "export_archive", lambda *a, **k: 0)
+    monkeypatch.setattr(web, "make_index", lambda: None)
+    r = web.api_archive_sync()
+    assert r["ok"] is True
+    assert r["warnings"] == ["아카이브 peer.ndjson — 읽을 수 없는 줄 1개를 건너뛰었어요"]
+
+
+class _FakeVI:
+    """make_index() 대역 — _run_incremental 이 len()/keys() 만 쓴다."""
+    def __len__(self): return 0
+    def keys(self): return []
