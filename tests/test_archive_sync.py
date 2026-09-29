@@ -509,45 +509,25 @@ def test_attaching_parent_does_not_clobber_local_edits(tmp_path):
     assert f["updated_at"] > 100.0             # 시각도 안 되돌아갔다
 
 
-def test_rollback_failure_aborts_the_file_instead_of_committing_half(tmp_path):
-    """ROLLBACK TO 자체가 실패하면 **삼키지 말고 이 파일을 중단**해야 한다.
+def test_non_numeric_timestamp_is_rejected_before_any_write(tmp_path):
+    """시각 자리에 숫자가 아닌 것이 오면 그 줄만 건너뛰고, 아무것도 쓰지 않는다.
 
-    삼키면 그 레코드의 반쪽 쓰기가 남은 채로 commit() 에 실려 가고, 로그는 '건너뛰었다'고
-    거짓말을 한다. SAVEPOINT 장치가 막으려던 바로 그 상태가 좁은 경로로 재발한다.
+    예전엔 float(at) 이 안쪽에서 터져 예외 메시지에 **그 문자열이 그대로 박혔다** —
+    상대가 보낸 임의 텍스트가 설정 화면의 'ERROR' 문구로 그대로 떴다(보안 리뷰 지적).
+    쓰기 전에 걸러 그 경로를 없앤다.
     """
     import json
-
-    class FlakyConn:
-        """ROLLBACK TO 를 한 번만 실패시키는 껍데기."""
-        def __init__(self, inner):
-            self._inner, self._failed = inner, False
-        def execute(self, sql, *a):
-            if sql.startswith("ROLLBACK TO") and not self._failed:
-                self._failed = True
-                raise sqlite3.OperationalError("모의 롤백 실패")
-            return self._inner.execute(sql, *a)
-        def __getattr__(self, k):
-            return getattr(self._inner, k)
-
     a, b, proj = _two_devices(tmp_path)
     d = proj / A.ARCHIVE_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
-    bad = {"t": ["s9:u1", "s9", "u1", "", "2026-01-01", "p", "질문", "답변",
-                 "[]", None, None, "claude-code", None],
-           "c": [[0, "청크"], [1, "청크", "칸이 많다"]]}
-    ok = {"t": ["s9:u2", "s9", "u2", "", "2026-01-01", "p", "q", "a",
-                "[]", None, None, "claude-code", None], "c": []}
     (d / "peer.ndjson").write_text(
-        json.dumps(bad, ensure_ascii=False) + "\n" + json.dumps(ok, ensure_ascii=False) + "\n",
+        json.dumps({"title": ["s1", "제목", "숫자가 아닌 시각"]}, ensure_ascii=False) + "\n",
         encoding="utf-8")
 
-    real = b.conn
-    b.conn = FlakyConn(real)
     msgs: list[str] = []
     A.import_archives(b, proj, "devB", log_fn=msgs.append)
-    b.conn = real
-
     fresh = ArchiveDB(b.path)
-    # 반쪽 레코드가 커밋되면 안 된다. 이 파일은 통째로 포기하고 다음 회차가 다시 읽는다.
-    assert fresh.conn.execute("SELECT 1 FROM turns WHERE id=?", ("s9:u1",)).fetchone() is None
-    assert any("롤백 실패" in m for m in msgs)          # 조용히 넘어가지 않는다
+    assert fresh.session_title("s1") is None        # 반영되지 않았다
+    assert any(m.startswith("ERROR ") for m in msgs)
+    # 상대가 보낸 문자열이 로그에 그대로 실려 나가지 않는다
+    assert not any("숫자가 아닌 시각" in m for m in msgs)
