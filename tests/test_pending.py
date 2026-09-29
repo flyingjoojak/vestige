@@ -97,3 +97,40 @@ def test_active_session_completed_turn_is_pending(tmp_path):
     # 활성 세션에 완결 턴 + 진행 중 턴 → 완결 턴은 지금 색인 가능 → 대기 1.
     _write_turns(tmp_path / "s2.jsonl", 2)
     assert count_pending(_FakeDB({}), tmp_path)["files"] == 1
+
+
+def test_concurrent_refresh_scans_once():
+    """스캔이 겹치면 한 번만 돈다.
+
+    스캔이 TTL(8초)보다 오래 걸리면 폴링마다 새 스캔이 시작돼 서로 디스크·GIL 을 뺏고
+    점점 느려진다. 실제로 같은 스캔에 갇힌 워커 스레드가 4개 이상 잡혔고 응답이 영영
+    안 나왔다. 겹친 요청은 스캔 대신 직전 값을 받아야 한다.
+    """
+    import threading
+
+    from vestige import web
+
+    calls = []
+    started = threading.Event()
+
+    def _slow(_db, *a, **k):
+        calls.append(1)
+        started.set()
+        time.sleep(0.5)          # TTL 보다 긴 스캔을 흉내
+        return {"new_sessions": 0, "updated_sessions": 0, "files": 0}
+
+    import vestige.indexer as I
+    orig = I.count_pending
+    I.count_pending = _slow
+    web._pending_cache.update(at=0.0)
+    try:
+        t = threading.Thread(target=web._pending_snapshot, daemon=True)
+        t.start()
+        assert started.wait(5), "첫 스캔이 시작되지 않았다"
+        web._pending_snapshot()   # 겹친 요청 — 즉시 직전 값을 받아야 한다
+        web._pending_snapshot()
+        t.join(10)
+    finally:
+        I.count_pending = orig
+
+    assert len(calls) == 1, f"겹친 요청이 스캔을 또 시작했다({len(calls)}회)"
