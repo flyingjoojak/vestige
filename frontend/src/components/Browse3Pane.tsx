@@ -41,7 +41,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const { t } = useTranslation()
   const { confirm, prompt } = useDialogs()
   const [groups, setGroups] = useState<Group[] | null>(null)
-  const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 — '빈 목록'과 구분
+  const [groupsErr, setGroupsErr] = useState(false)   // 목록 로드 실패 - '빈 목록'과 구분
   // 목록 자체를 좁히는 입력. 서버 검색(대화 내용)과 달리 '제목·id'만 보는 로컬 필터다.
   const [listQ, setListQ] = useState("")
   const [openKids, setOpenKids] = useState<Set<string>>(new Set())   // 펼쳐둔 부모 id
@@ -64,12 +64,12 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [detailErr, setDetailErr] = useState(false)                  // 세션 상세 로드 실패
 
   // 타이머 정리(unmount 후 setState 방지). copied 되돌림 / resumeMsg 자동 해제용.
-  // 선택된 대화 줄로 목록을 스크롤 — 마지막 대화를 자동 선택하거나 지도에서 점프해 들어오면
+  // 선택된 대화 줄로 목록을 스크롤 - 마지막 대화를 자동 선택하거나 지도에서 점프해 들어오면
   // 그 줄이 목록 밖에 있어, 오른쪽 내용과 목록 하이라이트가 어긋나 보인다.
   const selRowRef = useRef<HTMLButtonElement | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const searchReq = useRef(0)   // 최신 검색만 반영(빠른 연속 입력 시 오래된 응답 덮어쓰기 방지) — SearchView 와 동일 패턴
+  const searchReq = useRef(0)   // 최신 검색만 반영(빠른 연속 입력 시 오래된 응답 덮어쓰기 방지) - SearchView 와 동일 패턴
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current)
     if (msgTimer.current) clearTimeout(msgTimer.current)
@@ -87,7 +87,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const resumeCmd = detail?.resume_cmd || (sel ? `claude --resume ${sel}` : "")
   const fileExists = detail?.source_file_exists !== false   // 로드 후에만 의미(로드 전엔 버튼 비활성)
   const sourceLabel = detail?.source === "codex" ? "Codex" : detail?.source === "claude-code" ? "Claude Code" : ""
-  const isSubagent = detail?.subagent === true              // 배경(서브에이전트) 대화 — 직접 재개 불가
+  const isSubagent = detail?.subagent === true              // 배경(서브에이전트) 대화 - 직접 재개 불가
   const parentSid = detail?.parent || null                  // 파생된 부모 세션(역링크)
   const canRestore = detail?.can_restore === true            // 원문은 없지만 보존된 원본으로 복구 가능(#163 P1)
   async function copyResume() {
@@ -134,7 +134,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   }
 
   // 정리로 사라진 원문을 보존된 원본으로 복구(#163 P1). 성공하면 상세를 다시 불러와
-  // source_file_exists/can_restore 를 갱신 — 바로 위 "열기" 버튼이 활성화됨.
+  // source_file_exists/can_restore 를 갱신 - 바로 위 "열기" 버튼이 활성화됨.
   async function doRestore() {
     if (!sel || restoring) return
     setRestoring(true); setResumeMsg(null)
@@ -145,7 +145,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         flashMsg(r.partial
           ? { ok: false, text: errText(t, r, "browse.restorePartial") }
           : { ok: true, text: t("browse.restoreDone") }, r.partial === true)
-        // 상세 재조회는 따로 감싼다 — 실패해도 위 유실 고지를 덮어쓰지 않게.
+        // 상세 재조회는 따로 감싼다 - 실패해도 위 유실 고지를 덮어쓰지 않게.
         try {
           setDetail(await getSession(sel))
         } catch { /* 목록은 그대로 두고 고지를 유지 */ }
@@ -203,7 +203,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
         subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
         parent: s.parent,       // 부모 세션 아래로 접어 넣기 위해(백엔드가 경로에서 파생)
-        // 전 턴이 접힌 세션(#128): 목록에서 빼지 않고 흐리게 '접힘'으로 구분 — 빼버리면 펼칠 길이 없다.
+        // 전 턴이 접힌 세션(#128): 목록에서 빼지 않고 흐리게 '접힘'으로 구분 - 빼버리면 펼칠 길이 없다.
         folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
       })))).catch(() => setGroupsErr(true))
     } else {
@@ -236,7 +236,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         if (cancelled) return
         setConvs(d.turns.map((turn) => ({ t: turn.id, s: sel, h: turn.summary || turn.question || "" })))
         setDetail(d)
-        // 세션을 고르면 곧바로 마지막 대화를 띄운다 — 오른쪽 패널을 '고르세요' 안내문으로 두지
+        // 세션을 고르면 곧바로 마지막 대화를 띄운다 - 오른쪽 패널을 '고르세요' 안내문으로 두지
         // 않고, 그 세션을 다시 여는 이유(방금 하던 데)에 바로 착지시킨다.
         // cur ?? 로 채워 넣어, 지도·접힘에서 특정 턴을 지목해 들어온 경우는 덮지 않는다
         // (그 경로와 이 효과의 실행 순서에 의존하지 않게 함수형 갱신을 쓴다).
@@ -250,7 +250,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
 
   const convSet = useMemo(() => new Set((convs ?? []).map((c) => c.t)), [convs])
 
-  // block:"nearest" — 이미 보이면 건드리지 않고, 목록 밖일 때만 최소한으로 끌어온다.
+  // block:"nearest" - 이미 보이면 건드리지 않고, 목록 밖일 때만 최소한으로 끌어온다.
   useEffect(() => { selRowRef.current?.scrollIntoView({ block: "nearest" }) }, [selTurn?.turn, convs])
 
   async function runSearch(v = q, m = mode) {
@@ -285,15 +285,16 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
 
   // 그룹 아이콘: 세션=말풍선 / 군집=색점.
   const groupIcon = (g: Group) => g.color
-    ? <span className="size-3 shrink-0 rounded-full" style={{ background: g.color }} />
+    ? <span className="pointer-events-none size-3 shrink-0 rounded-full" style={{ background: g.color }} />
     : g.subagent
-      ? <Bot className="size-4 shrink-0 text-muted-foreground" aria-label={t("browse.subagentBadge")} />
-      : <MessagesSquare className="size-4 shrink-0 text-muted-foreground" />
+      ? <Bot role="img" aria-label={t("browse.subagentBadge")}
+             className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+      : <MessagesSquare aria-hidden className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
 
-  // 하위 에이전트 세션을 부모 아래로 모은다(판단은 lib/subagents.ts — 단독 검증 가능).
+  // 하위 에이전트 세션을 부모 아래로 모은다(판단은 lib/subagents.ts - 단독 검증 가능).
   const { top, kids } = nestSubagents(groups ?? [])
 
-  // 그룹 목록 — 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
+  // 그룹 목록 - 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
   const listTerm = listQ.trim().toLowerCase()
   const hitsTerm = (g: Group) =>
     g.label.toLowerCase().includes(listTerm) || (kind === "sessions" && g.id.toLowerCase().includes(listTerm))
@@ -302,7 +303,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   // 검색으로 걸린 하위는 자동으로 펼친다(닫혀 있으면 맞았다는 걸 알 수 없다).
   const kidsOpen = (g: Group) => (listTerm ? true : openKids.has(g.id))
 
-  // 목록 위 검색창 — 세션은 제목·세션 id, 군집은 이름으로 좁힌다.
+  // 목록 위 검색창 - 세션은 제목·세션 id, 군집은 이름으로 좁힌다.
   const listFilter = (
     <div className="relative">
       <Magnifier className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -332,7 +333,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
             ? "block truncate text-[11px] text-muted-foreground tabular-nums"
             : "mt-0.5 block truncate text-[11.5px] text-muted-foreground tabular-nums"}>{g.sub}</span>
         </button>
-        {g.folded && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
+        {g.folded && <span className="pointer-events-none shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
         {kind === "sessions" && (
           <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ sessionId: g.id }} />
@@ -349,7 +350,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       <div key={g.id}
         className={`cm-cv-row group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md ${indent}`}>
         {body}
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        {/* 장식이다. transform(group-hover:translate-x)이 stacking context 를 만들어
+            클릭 오버레이(after:inset-0) 위로 올라가서, 마우스를 올린 상태 - 즉 누르려는
+            바로 그때 - 클릭을 가로챘다. 행 전체가 열려야 하므로 포인터를 비운다. */}
+        <ChevronRight aria-hidden className="pointer-events-none size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
       </div>
     )
   }
@@ -424,7 +428,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               {selGroup?.color && <span className="mr-1.5 inline-block size-2.5 rounded-full align-middle" style={{ background: selGroup.color }} />}
               {selGroup?.label} · {convs?.length ?? 0}
             </span>
-            {/* 세션 제목 바꾸기 — 기본 제목은 첫 턴 요약이라 내용과 안 맞을 때가 많다.
+            {/* 세션 제목 바꾸기 - 기본 제목은 첫 턴 요약이라 내용과 안 맞을 때가 많다.
                 원문 대화는 건드리지 않고 표시 이름만 바꾼다(재색인해도 유지). */}
             {kind === "sessions" && sel && (
               <button type="button" onClick={renameSession}
