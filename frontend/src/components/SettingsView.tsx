@@ -209,9 +209,11 @@ function AutoSyncSection() {
     setArchiving(true); setArchiveMsg(null)
     try {
       const r = await archiveSync()
-      setArchiveMsg(r.imported > 0
+      const base = r.imported > 0
         ? t("sync.mergeImported", { count: r.imported.toLocaleString() })
-        : t("sync.mergeUpToDate"))
+        : t("sync.mergeUpToDate")
+      // 건너뛴 줄이 있으면 같이 보여준다 — 백엔드가 알려준 걸 버리면 부분 실패가 묻힌다.
+      setArchiveMsg(r.warnings?.length ? `${base} · ${r.warnings.join(" / ")}` : base)
     } catch (e) { setArchiveMsg(errText(t, e, "sync.mergeFailed")) }
     finally { setArchiving(false) }
   }
@@ -1112,6 +1114,7 @@ export function SettingsView() {
                     </div>
                   )}
                   <Errs errors={ixStatus?.errors} />
+                  <Errs errors={ixStatus?.sync_errors} />
                 </div>
               </Section>
 

@@ -139,7 +139,7 @@ def mirror_file(db, path: str | Path, source: str) -> int:
         gz.write(chunk)
     # 멤버 경계를 옆 파일에 남긴다(#223). 이게 있어야 중간 멤버가 깨져도 뒤를 계속 읽는다.
     # **append 가 끝난 뒤에** 적는다 — 먼저 적으면 중단됐을 때 있지도 않은 멤버를 가리킨다.
-    _idx_append(out, before, out.stat().st_size - before)
+    _idx_append(out, before, out.stat().st_size - before, backfill_from=before)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
@@ -182,6 +182,10 @@ def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | No
     if intact and end == len(raw):
         _idx_backfill(p, raw)   # 온전할 때만 색인을 만든다. 깨진 파일에서 만들면 경계가 틀린다.
     return data, intact
+
+
+_MAX_EXPAND = 200      # gzip 이 텍스트에서 내는 현실적 압축비의 넉넉한 상한
+_MIN_EXPAND = 1 << 20  # 작은 파일이 상한에 걸리지 않게 바닥값
 
 
 def _idx_backfill(out: Path, raw: bytes) -> None:
@@ -231,10 +235,26 @@ def _idx_read(out: Path) -> list[tuple[int, int]]:
     return spans
 
 
-def _idx_append(out: Path, offset: int, length: int) -> None:
-    """멤버 하나를 기록. 실패해도 조용히 넘어간다 — 색인이 없으면 예전 경로면 된다."""
+def _idx_append(out: Path, offset: int, length: int, *, backfill_from: int = 0) -> None:
+    """멤버 하나를 기록.
+
+    **색인이 없고 앞에 이미 멤버가 쌓여 있으면 먼저 그것부터 색인한다.** 이게 없으면
+    업그레이드 직후 첫 append 가 '마지막 조각 하나'짜리 색인을 만들고, 읽기가 그 색인을
+    믿어 앞 전부를 잃은 채 intact=True 로 보고한다(실측: 24바이트 중 8바이트만 복원).
+    이 저장소가 두 번 다시 하지 않기로 한 실패 — 데이터를 없애고 '복구 완료'라고 말하는 것.
+
+    앞부분 색인에 실패하면 **이번 멤버도 적지 않는다.** 반쪽 색인을 남기느니 색인이 아예
+    없는 편이 낫다(그러면 순서대로 걷는 예전 경로로 안전하게 떨어진다).
+    """
+    idx = _idx_path(out)
+    if backfill_from > 0 and not idx.exists():
+        with contextlib.suppress(Exception):
+            _idx_backfill(out, out.read_bytes()[:backfill_from])
+        if not idx.exists():
+            logger.warning("보존본 앞부분 색인 실패 — 색인 없이 둔다 (%s)", out.name)
+            return
     with contextlib.suppress(Exception):
-        with open(_idx_path(out), "a", encoding="utf-8") as f:
+        with open(idx, "a", encoding="utf-8") as f:
             f.write(f"{offset} {length}\n")
 
 
@@ -260,11 +280,29 @@ def _walk_by_index(raw: bytes, spans: list[tuple[int, int]], name: str = "") -> 
             continue                      # 이 멤버만 버리고 다음으로
         out_buf += chunk
         ok_end = max(ok_end, off + ln)
+        if len(out_buf) > _MAX_EXPAND * len(raw) + _MIN_EXPAND:
+            # 조작되거나 손상된 색인이 같은 멤버를 반복 가리키면 무한히 부푼다(실측 3207배).
+            # 압축률에 상한을 두고 그 위는 손상으로 본다 — 메모리·디스크를 지키는 쪽.
+            logger.warning("보존본 색인이 과도하게 부풀림 — 손상으로 봅니다 (%s)", name or "?")
+            bad += 1
+            break
     # 색인에 없는 **꼬리** 바이트는 정직하게 '온전하지 않음'으로 본다.
     # 중단된 append 의 잔재일 수도 있지만, 색인 기록 직전에 죽어 실제 데이터일 수도 있다.
     # (그 경우 커서도 안 올라가 다음 회차가 같은 구간을 다시 미러링하므로 유실은 아니다.)
     # 가운데 빈 구간은 다르다 — 그건 이미 건너뛰기로 판단한 잔재이고, 영원히 경고할 이유가 없다.
-    tail = len(raw) > ok_end
+    # 색인이 파일을 **빈틈없이 한 번씩** 덮어야 온전하다고 말할 수 있다.
+    #
+    # 길이 합만 보면 겹치는 span 이 합을 부풀려 검사를 통과한다 — 같은 멤버를 5000번 가리키면
+    # 53바이트가 170,000바이트로 불어나는데 intact=True 였다(실측 3207배). 가운데 멤버를
+    # 빼고 앞 멤버를 두 번 넣어도 통과했다. 정렬해 이어붙는지 직접 본다.
+    gap = False
+    nxt = 0
+    for off, ln in sorted(spans):
+        if off != nxt:          # 구멍이거나 겹침
+            gap = True
+            break
+        nxt = off + ln
+    tail = len(raw) > ok_end or gap or nxt != len(raw)
     if bad or tail:
         logger.warning("보존본 손상 — 멤버 %d개 건너뜀%s (%s)",
                        bad, ", 색인 밖 꼬리 있음" if tail else "", name or "?")

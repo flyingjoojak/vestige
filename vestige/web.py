@@ -40,7 +40,7 @@ _DIST = (Path(_MEIPASS) / "frontend" / "dist") if _MEIPASS \
 # 색인 상태(자동/수동 증분 색인 진행 — UI에 노출).
 _autoindex_state: dict = {"enabled": False, "running": False, "phase": "대기", "indexed_total": 0,
                           "done_files": 0, "total_files": 0,
-                          "done_chunks": 0, "total_chunks": 0, "last_error": None, "errors": []}
+                          "done_chunks": 0, "total_chunks": 0, "last_error": None, "errors": [], "sync_errors": []}
 # 증분색인·전체재색인 상호배제(자동 스레드/수동 트리거/재색인이 동시에 안 돌게).
 _index_lock = threading.Lock()
 
@@ -132,7 +132,11 @@ def _run_incremental(quick: bool = False) -> bool:
         # 기기 간 아카이브 병합: 다른 기기가 보존한 세션(삭제된 원본 포함)을 먼저 가져온다.
         # 새로 들어온 청크는 아래 backfill이 활성 모델로 임베딩(chunk_count>len(vi)이 됨).
         with contextlib.suppress(Exception):
-            import_archives(db, C.PROJECTS_DIR, device_id(db), vi=vi, log_fn=lambda m: None)
+            # 로그를 버리면 동기화가 조용히 실패한다 — 색인 상태에 흘려보낸다('ERROR ' 접두만 UI 도달).
+            # 동기화 오류는 별도 칸에 모은다. errors 는 아래 색인 단계가 회차마다 비우는데,
+            # 같이 담으면 방금 남긴 동기화 오류가 UI 가 한 번 읽기도 전에 지워진다.
+            import_archives(db, C.PROJECTS_DIR, device_id(db), vi=vi,
+                            log_fn=_capture_log(_autoindex_state, key="sync_errors"))
         new = has_new_data(db)
         # 활성 저장소에 빠진 청크가 있으면(백엔드 전환·유실·아카이브 import) 새 대화가 없어도 자가복구한다.
         chunk_count = db.conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
@@ -1699,11 +1703,15 @@ def api_archive_sync():
     db = ArchiveDB()
     did = device_id(db)
     vi = make_index()   # 더 완성된 상대 턴으로 갱신 시 스테일 벡터 제거용(backfill 이 재임베딩)
-    imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=lambda m: None)
+    notes: list[str] = []
+    imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=notes.append)
     exported = export_archive(db, C.PROJECTS_DIR, did)
     if imported and not _autoindex_state.get("running") and not _reindex_state.get("running"):
         threading.Thread(target=_run_incremental, daemon=True).start()   # 가져온 청크 임베딩
-    return {"ok": True, "imported": imported, "exported": exported}
+    # 건너뛴 줄이 있으면 사용자에게 알린다 — ok:true 만 주면 부분 실패가 묻힌다.
+    warn = [m for m in notes if m.startswith("ERROR ")]
+    return {"ok": True, "imported": imported, "exported": exported,
+            "warnings": [m[6:] for m in warn]}
 
 
 @app.post("/api/verify-enrich")
@@ -1722,16 +1730,16 @@ def api_verify_enrich(payload: dict):
 
 # 수동 정제 상태.
 _enrich_state: dict = {"running": False, "phase": "대기", "done_sessions": 0, "total_sessions": 0,
-                       "enriched": 0, "last_error": None, "errors": []}
+                       "enriched": 0, "last_error": None, "errors": [], "sync_errors": []}
 
 
-def _capture_log(state: dict):
+def _capture_log(state: dict, *, key: str = "errors"):
     """log_fn 래퍼: phase를 갱신하고 'ERROR' 로그는 bounded errors 목록에 모아 UI에 노출.
     (한 항목이 매 주기 조용히 실패하며 스턱되는 걸 사용자가 볼 수 있게)"""
     def log(m: str):
         state["phase"] = m
         if isinstance(m, str) and m.startswith("ERROR"):
-            errs = state.setdefault("errors", [])
+            errs = state.setdefault(key, [])
             errs.append(m)
             del errs[:-8]   # 최근 8건만 유지
     return log

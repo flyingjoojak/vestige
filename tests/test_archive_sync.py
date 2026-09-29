@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from types import SimpleNamespace
 
 from vestige import archive_sync as A
@@ -149,14 +150,21 @@ def _two_devices(tmp_path):
 
 
 def _sync(src, src_id, dst, dst_id, proj):
+    """한 방향 동기화. **반환값은 다시 연 dst 커넥션이다.**
+
+    같은 커넥션으로 검사하면 커밋이 없어도 자기가 쓴 건 보인다(sqlite 자기 쓰기 읽기).
+    앱은 호출마다 새 커넥션을 열므로, 커밋이 빠지면 실사용에서만 롤백된다 — 실제로 그
+    버그가 있었고 이 헬퍼가 같은 커넥션을 쓰는 바람에 테스트 6개가 전부 통과했다.
+    """
     A.export_archive(src, proj, src_id)
-    return A.import_archives(dst, proj, dst_id, log_fn=lambda *_: None)
+    A.import_archives(dst, proj, dst_id, log_fn=lambda *_: None)
+    return ArchiveDB(dst.path)
 
 
 def test_session_title_syncs_between_devices(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     a.set_session_title("s1", "내가 지은 제목")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.session_title("s1") == "내가 지은 제목"
 
 
@@ -168,40 +176,40 @@ def test_cleared_title_does_not_come_back(tmp_path):
     """
     a, b, proj = _two_devices(tmp_path)
     a.set_session_title("s1", "옛 제목")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.session_title("s1") == "옛 제목"
 
     a.set_session_title("s1", None)              # A 에서 지움
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.session_title("s1") is None         # B 에도 반영
 
-    _sync(b, "devB", a, "devA", proj)            # 되돌아와도
+    a = _sync(b, "devB", a, "devA", proj)            # 되돌아와도
     assert a.session_title("s1") is None         # 되살아나지 않는다
 
 
 def test_newer_title_wins_both_directions(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     a.set_session_title("s1", "먼저")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     b.set_session_title("s1", "나중")            # B 가 더 늦게 바꿈
-    _sync(b, "devB", a, "devA", proj)
+    a = _sync(b, "devB", a, "devA", proj)
     assert a.session_title("s1") == "나중"
 
-    _sync(a, "devA", b, "devB", proj)            # 옛 기록이 다시 와도 안 밀린다
+    b = _sync(a, "devA", b, "devB", proj)            # 옛 기록이 다시 와도 안 밀린다
     assert b.session_title("s1") == "나중"
 
 
 def test_fold_and_unfold_sync(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     a.hide_turns(["s1:u1"]); a.commit()
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.hidden_turn_ids() == {"s1:u1"}
 
     a.unhide_turns(["s1:u1"])                    # 펼침도 전해져야 한다
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.hidden_turn_ids() == set()
 
-    _sync(b, "devB", a, "devA", proj)            # 되돌아와도 다시 접히지 않는다
+    a = _sync(b, "devB", a, "devA", proj)            # 되돌아와도 다시 접히지 않는다
     assert a.hidden_turn_ids() == set()
 
 
@@ -224,7 +232,7 @@ def test_folder_and_items_sync(tmp_path):
     f = a.create_folder("모음")
     a.add_to_folder(f, "turn", "s1:u1")
     a.add_to_folder(f, "session", "s1")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
 
     got = b.list_folders()
     assert [x["name"] for x in got] == ["모음"]
@@ -240,20 +248,20 @@ def test_folder_id_collision_does_not_merge_two_folders(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     fa, fb = a.create_folder("A의 폴더"), b.create_folder("B의 폴더")
     assert fa == fb == 1                       # 로컬 id 가 같다
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert sorted(x["name"] for x in b.list_folders()) == ["A의 폴더", "B의 폴더"]
 
 
 def test_deleted_folder_does_not_come_back(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     f = a.create_folder("지울 폴더")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert len(b.list_folders()) == 1
 
     a.delete_folder(f)
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.list_folders() == []
-    _sync(b, "devB", a, "devA", proj)          # 되돌아와도
+    a = _sync(b, "devB", a, "devA", proj)          # 되돌아와도
     assert a.list_folders() == []
 
 
@@ -262,14 +270,14 @@ def test_removed_item_does_not_come_back(tmp_path):
     f = a.create_folder("F")
     a.add_to_folder(f, "turn", "s1:u1")
     a.add_to_folder(f, "turn", "s1:u2")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert len(b.folder_items(b.list_folders()[0]["id"])) == 2
 
     a.remove_from_folder(f, "turn", "s1:u1")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     bid = b.list_folders()[0]["id"]
     assert {i["ref"] for i in b.folder_items(bid)} == {"s1:u2"}
-    _sync(b, "devB", a, "devA", proj)
+    a = _sync(b, "devB", a, "devA", proj)
     assert {i["ref"] for i in a.folder_items(f)} == {"s1:u2"}
 
 
@@ -278,8 +286,8 @@ def test_nested_folder_finds_parent_even_if_order_is_bad(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     top = a.create_folder("부모")
     kid = a.create_folder("자식", parent_id=top)
-    _sync(a, "devA", b, "devB", proj)
-    _sync(a, "devA", b, "devB", proj)          # 두 번째 회차
+    b = _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)          # 두 번째 회차
     by = {x["name"]: x for x in b.list_folders()}
     assert by["자식"]["parent_id"] == by["부모"]["id"]
     assert a.get_folder(kid)["parent_id"] == top
@@ -288,10 +296,187 @@ def test_nested_folder_finds_parent_even_if_order_is_bad(tmp_path):
 def test_newer_folder_rename_wins(tmp_path):
     a, b, proj = _two_devices(tmp_path)
     f = a.create_folder("처음")
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     bid = b.list_folders()[0]["id"]
     b.rename_folder(bid, "나중")
-    _sync(b, "devB", a, "devA", proj)
+    a = _sync(b, "devB", a, "devA", proj)
     assert a.get_folder(f)["name"] == "나중"
-    _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)
     assert b.get_folder(bid)["name"] == "나중"
+
+
+def test_child_exported_before_parent_still_finds_parent(tmp_path):
+    """자식이 부모보다 **먼저 export 되는** 경우. export 에 ORDER BY 가 없어 실제로 생긴다.
+
+    기존 테스트는 부모를 먼저 만들고 재배치하지 않아 이 순서를 못 만들었다. 승자 판정이
+    `>=` 라, 발신측이 그 폴더를 다시 안 건드리면 파킹된 자식이 영구 고아가 됐다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    notes = a.create_folder("Notes")          # 먼저 생성 = export 에서 앞
+    work = a.create_folder("Work")
+    a.move_folder(notes, work)                # 자식이 더 최근에 바뀜
+
+    b = _sync(a, "devA", b, "devB", proj)
+    b = _sync(a, "devA", b, "devB", proj)     # 같은 스냅샷을 한 번 더
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["Notes"]["parent_id"] == by["Work"]["id"]
+
+
+def test_folder_move_after_first_sync_propagates(tmp_path):
+    """한 번 동기화한 뒤의 이동도 전해져야 한다.
+
+    move_folder 가 updated_at 을 안 찍으면 승자 판정이 옛 값을 보고 '상대가 더 낡음'으로
+    판단해 폴더 이동이 영원히 동기화되지 않는다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    par = a.create_folder("Parent")
+    kid = a.create_folder("Child")
+    b = _sync(a, "devA", b, "devB", proj)
+
+    a.move_folder(kid, par)
+    b = _sync(a, "devA", b, "devB", proj)
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["Child"]["parent_id"] == by["Parent"]["id"]
+
+
+def test_future_timestamp_record_is_rejected(tmp_path):
+    """미래를 주장하는 기록은 반영하지 않는다.
+
+    자르기(clamp)로 하면 더 나쁘다 — 매 import 마다 클램프가 새로 계산돼 사용자의 조작을
+    **항상** 이긴다. 실측으로 펼쳐도 재동기화마다 다시 접혔다.
+    """
+    import json
+    a, b, proj = _two_devices(tmp_path)
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "evil.ndjson").write_text(
+        json.dumps({"fold": ["s1:u1", 1, 9999999999.0]}) + "\n", encoding="utf-8")
+    A.import_archives(b, proj, "devB", log_fn=lambda *_: None)
+    assert ArchiveDB(b.path).hidden_turn_ids() == set()
+
+
+def test_one_broken_line_does_not_drop_the_rest(tmp_path):
+    """깨진 줄 하나가 그 뒤 전부를 버리면 안 된다.
+
+    파일 단위로 잡으면 실측으로 5턴 중 3턴이 조용히 사라졌다. 줄 단위로 잡아야 한다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    for i in range(2, 5):
+        _seed(a, f"s1:u{i}", "s1", ["본문"])
+    A.export_archive(a, proj, "devA")
+    p = proj / A.ARCHIVE_DIRNAME / "devA.ndjson"
+    lines = p.read_text(encoding="utf-8").splitlines()
+    lines.insert(2, '{"t": [BROKEN')
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    want = a.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+    msgs: list[str] = []
+    A.import_archives(b, proj, "devB", log_fn=msgs.append)
+    fresh = ArchiveDB(b.path)
+    # 깨진 줄 하나만 빠지고 나머지는 전부 들어와야 한다(A 가 가진 만큼).
+    assert fresh.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == want
+    assert any(m.startswith("ERROR ") for m in msgs)                             # 조용하지 않다
+
+
+def test_broken_record_leaves_no_half_written_state(tmp_path):
+    """레코드 하나는 전부 반영되거나 하나도 안 되거나여야 한다.
+
+    줄 단위 try 만으로는 부족했다 — 턴을 upsert 한 뒤 청크 배열에서 예외가 나면 턴은
+    '완전한' 상태로 커밋되고 청크만 반쪽이 된다. 그러면 upsert_turn 의 완성도 비교가
+    '이미 더 완전함'으로 보고 스킵해 **재동기화로도 영영 안 고쳐진다**(실측: 20회 돌려도
+    청크가 1개로 고정). SAVEPOINT 로 레코드 단위를 묶어야 한다.
+    """
+    import json
+    a, b, proj = _two_devices(tmp_path)
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    bad = {"t": ["s9:u1", "s9", "u1", "", "2026-01-01", "p", "질문" * 10, "답변" * 10,
+                 "[]", None, None, "claude-code", None],
+           "c": [[0, "청크0"], [1, "청크1", "칸이 하나 많다"], [2, "청크2"]]}
+    ok = {"t": ["s9:u2", "s9", "u2", "", "2026-01-01", "p", "q2", "a2",
+                "[]", None, None, "claude-code", None], "c": [[0, "청크"]]}
+    (d / "peer.ndjson").write_text(
+        json.dumps(bad, ensure_ascii=False) + "\n" + json.dumps(ok, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    A.import_archives(b, proj, "devB", log_fn=lambda *_: None)
+    fresh = ArchiveDB(b.path)
+    q = fresh.conn.execute
+    assert q("SELECT 1 FROM turns WHERE id=?", ("s9:u1",)).fetchone() is None    # 흔적 없음
+    assert q("SELECT COUNT(*) FROM chunks WHERE turn_id=?", ("s9:u1",)).fetchone()[0] == 0
+    assert q("SELECT 1 FROM turns WHERE id=?", ("s9:u2",)).fetchone() is not None  # 정상은 들어감
+
+
+def test_reparent_of_already_parented_folder_propagates(tmp_path):
+    """**이미 부모가 있는** 폴더를 다른 부모로 옮기는 경우.
+
+    앞의 test_folder_move_after_first_sync_propagates 는 허수였다 — '최상위 → 부모 밑'
+    이동이라 apply_folder 의 needs_parent 우회(parent_id IS NULL)가 먼저 걸려,
+    move_folder 의 updated_at 스탬프를 빼도 통과했다. 두 수정이 서로의 부재를 가렸다.
+    여기서는 parent_id 가 이미 차 있어 우회가 안 걸리므로 updated_at 만으로 판정된다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    p1, p2 = a.create_folder("부모1"), a.create_folder("부모2")
+    kid = a.create_folder("자식", parent_id=p1)
+    b = _sync(a, "devA", b, "devB", proj)
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["자식"]["parent_id"] == by["부모1"]["id"]     # 먼저 부모1 밑에 자리잡는다
+
+    a.move_folder(kid, p2)                                  # 부모1 -> 부모2 로 재이동
+    b = _sync(a, "devA", b, "devB", proj)
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["자식"]["parent_id"] == by["부모2"]["id"]
+
+
+def test_folder_position_only_change_propagates(tmp_path):
+    """부모는 그대로, 형제 순서만 바뀌는 경우도 전해져야 한다."""
+    a, b, proj = _two_devices(tmp_path)
+    f1, f2 = a.create_folder("가"), a.create_folder("나")
+    b = _sync(a, "devA", b, "devB", proj)
+    a.move_folder(f2, None, before_id=f1)                   # '나' 를 '가' 앞으로
+    b = _sync(a, "devA", b, "devB", proj)
+    assert [x["name"] for x in b.list_folders()][:2] == ["나", "가"]
+
+
+@pytest.mark.parametrize("kind", ["title", "fold", "folder", "fitem", "folder_x", "fitem_x"])
+def test_future_timestamp_rejected_on_every_record_kind(tmp_path, kind):
+    """미래 시각 가드는 **여섯 경로 전부**에 있어야 한다.
+
+    한 경로만 검사하면 나머지 다섯 곳에서 가드가 빠져도 아무도 모른다
+    (실측: apply_folder 의 가드만 지워도 61개 테스트가 전부 통과했다).
+    """
+    import json
+    FUT = 9999999999.0
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("미리")
+    a.add_to_folder(f, "turn", "s1:u1")
+    b = _sync(a, "devA", b, "devB", proj)
+    # **실제로 존재하는 uid** 를 써야 가드까지 도달한다. 없는 uid 면 그 앞에서 걸러져
+    # 가드를 지워도 테스트가 통과한다(실측: 4개 경로가 그렇게 비어 있었다).
+    uid = b.conn.execute("SELECT uid FROM folders LIMIT 1").fetchone()["uid"]
+    payload = {
+        "title": ["s1", "공격 제목", FUT],
+        "fold": ["s1:u1", 1, FUT],
+        "folder": [uid, "이름 바뀜", None, 9.0, FUT],
+        "fitem": [uid, "turn", "s1:u2", None, 9.0, FUT],
+        "folder_x": [uid, FUT],
+        "fitem_x": [uid, "turn", "s1:u1", FUT],
+    }[kind]
+    before = _folder_state(b)
+
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "evil.ndjson").write_text(json.dumps({kind: payload}) + "\n", encoding="utf-8")
+    A.import_archives(b, proj, "devB", log_fn=lambda *_: None)
+
+    fresh = ArchiveDB(b.path)
+    assert _folder_state(fresh) == before          # 폴더·항목이 바뀌지 않았다
+    assert fresh.session_title("s1") is None       # 제목도
+    assert fresh.hidden_turn_ids() == set()        # 접힘도
+
+
+def _folder_state(db):
+    return (sorted((r["uid"], r["name"], r["parent_id"])
+                   for r in db.conn.execute("SELECT uid, name, parent_id FROM folders")),
+            sorted(tuple(r) for r in db.conn.execute(
+                "SELECT folder_id, kind, ref FROM folder_items")))
