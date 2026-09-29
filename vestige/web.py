@@ -1530,20 +1530,31 @@ _pending_cache: dict = {"at": 0.0, "index": {"new_sessions": 0, "updated_session
 _PENDING_TTL = 8.0
 
 
+# 갱신은 한 번에 하나만. 스캔이 TTL 보다 길어지면 폴링마다 새 스캔이 겹쳐 디스크·GIL 을
+# 서로 뺏으며 점점 느려지고 영영 안 끝난다(실측: 같은 스캔에 갇힌 워커 스레드 4개 이상).
+_pending_lock = threading.Lock()
+
+
 def _pending_snapshot() -> dict:
     """색인·정제 대기 수를 값싸게(모델 로드 없이) 계산해 TTL 동안 캐싱."""
     now = time.time()
     if now - _pending_cache["at"] < _PENDING_TTL:
         return _pending_cache
-    from .indexer import count_pending
+    if not _pending_lock.acquire(blocking=False):
+        return _pending_cache   # 다른 요청이 갱신 중 — 겹쳐 돌지 말고 직전 값으로 답한다
     try:
-        db = ArchiveDB()
-        idx = count_pending(db)   # 활성 소스 전체(claude-code + codex …) 합산
-        enr = db.conn.execute("SELECT COUNT(*) c FROM turns WHERE summary IS NULL").fetchone()["c"]
-    except Exception:  # noqa: BLE001 — 대기 조회 실패해도 UI가 죽지 않게 이전 값 유지
+        from .indexer import count_pending
+        try:
+            db = ArchiveDB()
+            idx = count_pending(db)   # 활성 소스 전체(claude-code + codex …) 합산
+            enr = db.conn.execute(
+                "SELECT COUNT(*) c FROM turns WHERE summary IS NULL").fetchone()["c"]
+        except Exception:  # noqa: BLE001 — 대기 조회 실패해도 UI가 죽지 않게 이전 값 유지
+            return _pending_cache
+        _pending_cache.update(at=now, index=idx, enrich_turns=enr)
         return _pending_cache
-    _pending_cache.update(at=now, index=idx, enrich_turns=enr)
-    return _pending_cache
+    finally:
+        _pending_lock.release()
 
 
 # 보존소 용량 캐시 — /api/config 가 3s 폴링되는데 mirror_size_bytes 는 보존소 전체를

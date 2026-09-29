@@ -32,6 +32,14 @@ from ..parser import (
 # 일회성 헬퍼 봇 걸러내기: 사람 후속 지시가 이 수 미만이면 색인 안 함.
 _MIN_FOLLOWUPS = 2
 
+# 게이트 결과 캐시: 경로 -> ((크기, mtime), 통과 여부).
+# discover() 는 /api/index/status 폴링마다 불린다. 게이트를 통과하는 파일은 두 번째
+# 후속 지시에서 멈추지만, **통과 못 하는 파일은 조기 종료가 안 들어 매번 전문을 파싱**했다.
+# 실측(이 기기): subagents 435개 중 통과 11개, 나머지 424개 482MB 를 폴링마다 다시 읽어
+# 1회 5.9초. TTL 8초보다 길어 폴링이 겹치며 서로를 느리게 만들었다.
+# ponytail: 삭제된 파일 항목은 남는다(세션당 1개, 수백 규모라 무해).
+_gate_cache: dict[str, tuple[tuple[int, float], bool]] = {}
+
 # SendMessage 하니스 래퍼(질문 텍스트에서 제거).
 _WRAP_PRE = "The user sent a new message while you were working:"   # 콜론 뒤는 줄바꿈
 _WRAP_MARK = "This is how Claude Code surfaces messages the user sends mid-turn"
@@ -84,7 +92,26 @@ class SubagentAdapter:
                 yield p
 
     def _qualifies(self, path: Path) -> bool:
-        """사람 후속 지시가 _MIN_FOLLOWUPS 이상이면 True(조기 종료로 큰 파일도 저렴)."""
+        """사람 후속 지시가 _MIN_FOLLOWUPS 이상이면 True.
+
+        같은 (크기, mtime) 면 다시 읽지 않는다. 내용이 그대로면 답도 그대로다.
+        """
+        key = str(path)
+        try:
+            stt = path.stat()
+        except OSError:
+            return False
+        sig = (stt.st_size, stt.st_mtime)
+        hit = _gate_cache.get(key)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+        ok = self._scan(path)
+        _gate_cache[key] = (sig, ok)
+        return ok
+
+    @staticmethod
+    def _scan(path: Path) -> bool:
+        """조기 종료로 통과 파일은 저렴. 통과 못 하는 파일은 전문을 읽는다(그래서 캐시가 필요)."""
         seen = 0
         try:
             for obj, _end in iter_json_lines(path):

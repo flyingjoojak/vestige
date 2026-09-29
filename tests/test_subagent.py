@@ -1,5 +1,7 @@
 """배경(서브에이전트) 대화 어댑터: 게이트(일회성 봇 제외)·세션 분리·래퍼 제거."""
 import json
+import os
+import time
 from pathlib import Path
 
 from vestige.sources.subagent import SubagentAdapter, _strip_wrapper
@@ -87,3 +89,47 @@ def test_source_name_is_claude_code():
     # 배경 에이전트도 결국 claude-code 도구 콘텐츠 → 저장 출처는 claude-code.
     assert SubagentAdapter.source_name == "claude-code"
     assert SubagentAdapter.name == "subagent"
+
+
+def test_gate_does_not_reparse_unchanged_file(tmp_path, monkeypatch):
+    """게이트를 통과 못 하는 파일을 폴링마다 다시 읽지 않는다.
+
+    통과하는 파일은 두 번째 후속 지시에서 멈추지만, 통과 못 하는 파일은 끝까지 읽는다.
+    discover() 는 /api/index/status 폴링마다 불리므로 이게 매번 전문 파싱이 됐다.
+    """
+    from vestige.sources import subagent as S
+
+    p = tmp_path / "proj" / "subagents" / "agent-oneshot.jsonl"
+    _write(p, [_user("한 번만 시킨 헬퍼 봇"), _assistant("끝")])   # 후속 지시 0 → 통과 못 함
+
+    reads = []
+    real = S.iter_json_lines
+    monkeypatch.setattr(S, "iter_json_lines",
+                        lambda path, *a, **k: (reads.append(str(path)), real(path, *a, **k))[1])
+    S._gate_cache.clear()
+
+    a = SubagentAdapter()
+    assert a._qualifies(p) is False
+    assert len(reads) == 1, "첫 호출은 읽어야 한다"
+    assert a._qualifies(p) is False
+    assert a._qualifies(p) is False
+    assert len(reads) == 1, f"안 바뀐 파일을 다시 읽었다({len(reads)}회)"
+
+
+def test_gate_rescans_when_file_grows(tmp_path, monkeypatch):
+    """파일이 자라면 다시 읽는다 - 캐시가 '영영 제외'로 굳으면 안 된다."""
+    from vestige.sources import subagent as S
+
+    p = tmp_path / "proj" / "subagents" / "agent-grows.jsonl"
+    _write(p, [_user("최초 Task"), _assistant("시작")])
+    S._gate_cache.clear()
+
+    a = SubagentAdapter()
+    assert a._qualifies(p) is False
+
+    # 사람 후속 지시 2개가 붙어 이제 색인 대상이 된다.
+    _write(p, [_user("최초 Task"), _assistant("시작"),
+               _user("이것도 해줘", meta=True), _assistant("네"),
+               _user("저것도 해줘", meta=True), _assistant("네")])
+    os.utime(p, (time.time() + 2, time.time() + 2))   # mtime 해상도에 안 기대게 명시적으로
+    assert a._qualifies(p) is True, "자란 파일을 낡은 캐시로 계속 제외했다"
