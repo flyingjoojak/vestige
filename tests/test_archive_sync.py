@@ -134,3 +134,84 @@ def test_import_old_snapshot_without_source(tmp_path):
     dst = ArchiveDB(tmp_path / "b.db")
     assert A.import_archives(dst, proj, "devB") == 1
     assert dst.session_source("s9")[0] == "claude-code"
+
+
+# --- 정리 상태(제목·접힘) 기기 간 동기화 (#233) ---------------------------
+
+def _two_devices(tmp_path):
+    """같은 대화를 가진 기기 둘. 스냅샷 폴더는 공유한다(Syncthing 흉내)."""
+    proj = tmp_path / "projects"
+    a, b = ArchiveDB(tmp_path / "a.db"), ArchiveDB(tmp_path / "b.db")
+    for db in (a, b):
+        _seed(db, "s1:u1", "s1", ["본문"])
+        _seed(db, "s1:u2", "s1", ["본문2"])
+    return a, b, proj
+
+
+def _sync(src, src_id, dst, dst_id, proj):
+    A.export_archive(src, proj, src_id)
+    return A.import_archives(dst, proj, dst_id, log_fn=lambda *_: None)
+
+
+def test_session_title_syncs_between_devices(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    a.set_session_title("s1", "내가 지은 제목")
+    _sync(a, "devA", b, "devB", proj)
+    assert b.session_title("s1") == "내가 지은 제목"
+
+
+def test_cleared_title_does_not_come_back(tmp_path):
+    """제목을 지우면 상대의 옛 제목이 되살아나면 안 된다.
+
+    행을 지우는 방식이면 상대에 남은 제목이 다시 이긴다 — #228 과 같은 문제.
+    빈 제목을 시각과 함께 남겨 '늦게 바꾼 쪽이 이김'에 태운다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    a.set_session_title("s1", "옛 제목")
+    _sync(a, "devA", b, "devB", proj)
+    assert b.session_title("s1") == "옛 제목"
+
+    a.set_session_title("s1", None)              # A 에서 지움
+    _sync(a, "devA", b, "devB", proj)
+    assert b.session_title("s1") is None         # B 에도 반영
+
+    _sync(b, "devB", a, "devA", proj)            # 되돌아와도
+    assert a.session_title("s1") is None         # 되살아나지 않는다
+
+
+def test_newer_title_wins_both_directions(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    a.set_session_title("s1", "먼저")
+    _sync(a, "devA", b, "devB", proj)
+    b.set_session_title("s1", "나중")            # B 가 더 늦게 바꿈
+    _sync(b, "devB", a, "devA", proj)
+    assert a.session_title("s1") == "나중"
+
+    _sync(a, "devA", b, "devB", proj)            # 옛 기록이 다시 와도 안 밀린다
+    assert b.session_title("s1") == "나중"
+
+
+def test_fold_and_unfold_sync(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    a.hide_turns(["s1:u1"]); a.commit()
+    _sync(a, "devA", b, "devB", proj)
+    assert b.hidden_turn_ids() == {"s1:u1"}
+
+    a.unhide_turns(["s1:u1"])                    # 펼침도 전해져야 한다
+    _sync(a, "devA", b, "devB", proj)
+    assert b.hidden_turn_ids() == set()
+
+    _sync(b, "devB", a, "devA", proj)            # 되돌아와도 다시 접히지 않는다
+    assert a.hidden_turn_ids() == set()
+
+
+def test_old_snapshot_without_meta_still_imports(tmp_path):
+    """제목·접힘 줄이 없는 옛 스냅샷도 그대로 읽힌다(하위호환)."""
+    a, b, proj = _two_devices(tmp_path)
+    A.export_archive(a, proj, "devA")
+    p = proj / A.ARCHIVE_DIRNAME / "devA.ndjson"
+    kept = [l for l in p.read_text(encoding="utf-8").splitlines()
+            if l.strip() and '"t"' in l]
+    p.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    c = ArchiveDB(tmp_path / "c.db")
+    assert A.import_archives(c, proj, "devC", log_fn=lambda *_: None) == 2

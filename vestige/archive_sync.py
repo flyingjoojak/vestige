@@ -67,6 +67,12 @@ def export_archive(db, projects_dir: str | Path, did: str) -> int:
             }
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n += 1
+        # 대화 위에 얹은 정리 상태(#233). 줄 종류를 늘리는 방식이라 하위호환이 된다 —
+        # 모르는 키를 무시하는 옛 버전도 이 파일을 계속 읽는다.
+        for sid, title, at in db.sync_title_rows():
+            f.write(json.dumps({"title": [sid, title, at]}, ensure_ascii=False) + "\n")
+        for tid, folded, at in db.sync_fold_rows():
+            f.write(json.dumps({"fold": [tid, folded, at]}, ensure_ascii=False) + "\n")
     os.replace(tmp, d / f"{did}.ndjson")   # 원자적 교체
     return n
 
@@ -88,6 +94,7 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
         return 0
     have = {row[0] for row in db.conn.execute("SELECT id FROM turns")}
     added = 0
+    meta = 0          # 제목·접힘 등 정리 상태 반영 건수(#233)
     removed_any = False
     for p in sorted(files):
         if p.stem == my_did:
@@ -99,6 +106,18 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     if not line:
                         continue
                     rec = json.loads(line)
+                    # 정리 상태(#233) — '늦게 바꾼 쪽이 이김'. 잘못 퍼져도 되돌릴 수 있어서
+                    # 턴 삭제(#228)처럼 보수적으로 갈 이유가 없다.
+                    if "title" in rec:
+                        sid, title, at = rec["title"]
+                        meta += db.apply_title(sid, title, float(at))
+                        continue
+                    if "fold" in rec:
+                        tid, folded, at = rec["fold"]
+                        meta += db.apply_fold(tid, int(folded), float(at))
+                        continue
+                    if "t" not in rec:
+                        continue            # 모르는 줄 종류(더 새 버전) — 건너뛴다
                     t = rec["t"]
                     tid = t[0]
                     existing = tid in have
@@ -138,4 +157,6 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
         db.commit()
     if removed_any and vi is not None:
         vi.save()
+    if meta:
+        log_fn(f"정리 상태 {meta}건 반영(제목·접힘)")
     return added
