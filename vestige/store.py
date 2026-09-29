@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable
@@ -51,7 +52,9 @@ CREATE TABLE IF NOT EXISTS session_titles(
 CREATE TABLE IF NOT EXISTS folders(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
   parent_id INTEGER REFERENCES folders(id), created_at REAL,
-  position REAL             -- 같은 부모 안에서의 순서(작을수록 위)
+  position REAL,            -- 같은 부모 안에서의 순서(작을수록 위)
+  uid TEXT,                 -- 기기를 넘나드는 식별자(#233) — id 는 기기별이라 충돌한다
+  updated_at REAL           -- 병합 판정용('늦게 바꾼 쪽이 이김')
 );
 CREATE TABLE IF NOT EXISTS folder_items(
   folder_id INTEGER NOT NULL REFERENCES folders(id),
@@ -60,7 +63,16 @@ CREATE TABLE IF NOT EXISTS folder_items(
   added_at REAL,
   alias TEXT,              -- 이 폴더에서만 쓰는 표시 이름(원본 제목은 그대로)
   position REAL,           -- 폴더 안 정렬 순서(작을수록 위)
+  updated_at REAL,         -- 병합 판정용(#233)
   PRIMARY KEY(folder_id, kind, ref)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_uid ON folders(uid);
+CREATE TABLE IF NOT EXISTS folder_removed(
+  uid TEXT PRIMARY KEY, at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS folder_item_removed(
+  folder_uid TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, at REAL NOT NULL,
+  PRIMARY KEY(folder_uid, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(timestamp);
@@ -222,6 +234,39 @@ def _mig_0012_unfolded(conn: sqlite3.Connection) -> None:
                  "turn_id TEXT PRIMARY KEY, at REAL NOT NULL)")
 
 
+def _mig_0013_folder_sync(conn: sqlite3.Connection) -> None:
+    """폴더를 기기 간에 옮길 수 있게 하는 것들(#233 후반).
+
+    folders.id 는 기기별 AUTOINCREMENT 라 **다른 기기의 다른 폴더가 같은 id 를 쓴다.**
+    기기를 넘나드는 식별자(uid)를 따로 붙이고, 병합 판정용 시각을 단다.
+
+    삭제는 tombstone 으로 남긴다 — 행을 지우면 상대에 남은 폴더가 다시 이겨 되살아난다.
+    folder_items 를 읽는 곳이 12군데라 소프트 삭제 컬럼을 넣으면 전부 고쳐야 하고,
+    하나만 빠뜨려도 지운 항목이 되살아난다. 그래서 tombstone 을 옆 테이블로 둔다.
+    """
+    import secrets
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(folders)")}
+    if "uid" not in cols:
+        conn.execute("ALTER TABLE folders ADD COLUMN uid TEXT")
+    if "updated_at" not in cols:
+        conn.execute("ALTER TABLE folders ADD COLUMN updated_at REAL")
+    icols = {r["name"] for r in conn.execute("PRAGMA table_info(folder_items)")}
+    if "updated_at" not in icols:
+        conn.execute("ALTER TABLE folder_items ADD COLUMN updated_at REAL")
+    # 기존 폴더에 uid 백필. 없으면 export 에서 빠져 영영 동기화되지 않는다.
+    for r in conn.execute("SELECT id, created_at FROM folders WHERE uid IS NULL").fetchall():
+        conn.execute("UPDATE folders SET uid=?, updated_at=COALESCE(updated_at, created_at, 0) WHERE id=?",
+                     (secrets.token_hex(8), r["id"]))
+    conn.execute("UPDATE folder_items SET updated_at=COALESCE(updated_at, added_at, 0) "
+                 "WHERE updated_at IS NULL")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_uid ON folders(uid)")
+    conn.execute("CREATE TABLE IF NOT EXISTS folder_removed("
+                 "uid TEXT PRIMARY KEY, at REAL NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS folder_item_removed("
+                 "folder_uid TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, at REAL NOT NULL,"
+                 " PRIMARY KEY(folder_uid, kind, ref))")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -236,6 +281,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0010_raw_mirror_bytes,
     _mig_0011_turns_session_ts,
     _mig_0012_unfolded,
+    _mig_0013_folder_sync,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -643,6 +689,8 @@ class ArchiveDB:
         cur = self.conn.execute(
             "INSERT INTO folders(name, parent_id, created_at) VALUES(?,?,?)",
             (name, parent_id, time.time()))
+        self.conn.execute("UPDATE folders SET uid=?, updated_at=? WHERE id=?",
+                          (secrets.token_hex(8), time.time(), cur.lastrowid))
         self.conn.commit()
         return int(cur.lastrowid)
 
@@ -679,7 +727,8 @@ class ArchiveDB:
         return out
 
     def rename_folder(self, folder_id: int, name: str) -> None:
-        self.conn.execute("UPDATE folders SET name=? WHERE id=?", (name, folder_id))
+        self.conn.execute("UPDATE folders SET name=?, updated_at=? WHERE id=?",
+                          (name, time.time(), folder_id))
         self.conn.commit()
 
     def move_folder(self, folder_id: int, parent_id: int | None, before_id: int | None = None) -> bool:
@@ -707,6 +756,13 @@ class ArchiveDB:
         """폴더와 그 하위 폴더를 통째로 삭제. 담긴 항목의 '참조'만 지우며 원문·턴은 그대로.
         반환: 삭제된 폴더 수. (폴더 수는 적어 한 건씩 지워도 충분 — SQL 조립을 피한다)"""
         ids = [(i,) for i in self.folder_descendants(folder_id)]
+        now = time.time()
+        # tombstone — 안 남기면 상대에 있는 폴더가 다시 이겨 되살아난다(#233).
+        for (fid,) in ids:
+            u = self.conn.execute("SELECT uid FROM folders WHERE id=?", (fid,)).fetchone()
+            if u and u["uid"]:
+                self.conn.execute("INSERT INTO folder_removed(uid, at) VALUES(?,?) "
+                                  "ON CONFLICT(uid) DO UPDATE SET at=excluded.at", (u["uid"], now))
         self.conn.executemany("DELETE FROM folder_items WHERE folder_id=?", ids)
         self.conn.executemany("DELETE FROM folders WHERE id=?", ids)
         self.conn.commit()
@@ -718,15 +774,16 @@ class ArchiveDB:
             "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM folder_items WHERE folder_id=?",
             (folder_id,)).fetchone()["p"]
         self.conn.execute(
-            "INSERT OR IGNORE INTO folder_items(folder_id, kind, ref, added_at, position) VALUES(?,?,?,?,?)",
-            (folder_id, kind, ref, time.time(), nxt))
+            "INSERT OR IGNORE INTO folder_items(folder_id, kind, ref, added_at, position, updated_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (folder_id, kind, ref, time.time(), nxt, time.time()))
         self.conn.commit()
 
     def set_item_alias(self, folder_id: int, kind: str, ref: str, alias: str | None) -> None:
         """이 폴더에서만 쓸 표시 이름. 원본 턴/세션 제목은 건드리지 않는다(빈 값이면 원래 제목으로)."""
         self.conn.execute(
-            "UPDATE folder_items SET alias=? WHERE folder_id=? AND kind=? AND ref=?",
-            (alias or None, folder_id, kind, ref))
+            "UPDATE folder_items SET alias=?, updated_at=? WHERE folder_id=? AND kind=? AND ref=?",
+            (alias or None, time.time(), folder_id, kind, ref))
         self.conn.commit()
 
     def reorder_folder(self, folder_id: int, order: list[tuple[str, str]]) -> int:
@@ -740,8 +797,8 @@ class ArchiveDB:
         changed = 0
         for i, (kind, ref) in enumerate(order, start=1):
             cur = self.conn.execute(
-                "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
-                (i, folder_id, kind, ref))
+                "UPDATE folder_items SET position=?, updated_at=? WHERE folder_id=? AND kind=? AND ref=?",
+                (i, time.time(), folder_id, kind, ref))
             changed += cur.rowcount or 0
         given = set(order)
         rest = [(r["kind"], r["ref"]) for r in self.conn.execute(
@@ -750,8 +807,9 @@ class ArchiveDB:
             if (r["kind"], r["ref"]) not in given]
         if rest:
             self.conn.executemany(
-                "UPDATE folder_items SET position=? WHERE folder_id=? AND kind=? AND ref=?",
-                [(len(order) + i, folder_id, k, r) for i, (k, r) in enumerate(rest, start=1)])
+                "UPDATE folder_items SET position=?, updated_at=? WHERE folder_id=? AND kind=? AND ref=?",
+                [(len(order) + i, time.time(), folder_id, k, r)
+                 for i, (k, r) in enumerate(rest, start=1)])
         self.conn.commit()
         return changed
 
@@ -759,6 +817,12 @@ class ArchiveDB:
         """반환: 지운 행 수(0이면 이미 없던 항목 — '눌렀는데 안 먹힌다'를 구분하려면 필요)."""
         cur = self.conn.execute(
             "DELETE FROM folder_items WHERE folder_id=? AND kind=? AND ref=?", (folder_id, kind, ref))
+        u = self.conn.execute("SELECT uid FROM folders WHERE id=?", (folder_id,)).fetchone()
+        if u and u["uid"]:      # tombstone — 안 남기면 뺀 항목이 다시 들어온다(#233)
+            self.conn.execute(
+                "INSERT INTO folder_item_removed(folder_uid, kind, ref, at) VALUES(?,?,?,?) "
+                "ON CONFLICT(folder_uid, kind, ref) DO UPDATE SET at=excluded.at",
+                (u["uid"], kind, ref, time.time()))
         self.conn.commit()
         return cur.rowcount or 0
 
@@ -889,6 +953,101 @@ class ArchiveDB:
     # --- 기기 간 동기화용(#233) -------------------------------------
     # 어느 쪽이 이기는지는 '늦게 바꾼 쪽'으로 단순하게 간다. 제목·접힘은 잘못 퍼져도
     # 되돌릴 수 있어서, 턴 삭제(#228)처럼 보수적으로 갈 이유가 없다.
+
+    def sync_folder_rows(self) -> dict:
+        """폴더 관련 동기화 페이로드. uid 기준이라 기기별 id 와 무관하다."""
+        folders = [(r["uid"], r["name"], r["parent_uid"], r["position"], r["updated_at"] or 0.0)
+                   for r in self.conn.execute(
+                       "SELECT f.uid, f.name, f.position, f.updated_at,"
+                       "       (SELECT p.uid FROM folders p WHERE p.id=f.parent_id) AS parent_uid"
+                       "  FROM folders f WHERE f.uid IS NOT NULL")]
+        items = [(r["uid"], r["kind"], r["ref"], r["alias"], r["position"], r["updated_at"] or 0.0)
+                 for r in self.conn.execute(
+                     "SELECT f.uid, i.kind, i.ref, i.alias, i.position, i.updated_at"
+                     "  FROM folder_items i JOIN folders f ON f.id=i.folder_id WHERE f.uid IS NOT NULL")]
+        gone = [(r["uid"], r["at"]) for r in self.conn.execute("SELECT uid, at FROM folder_removed")]
+        gone_items = [(r["folder_uid"], r["kind"], r["ref"], r["at"])
+                      for r in self.conn.execute(
+                          "SELECT folder_uid, kind, ref, at FROM folder_item_removed")]
+        return {"folders": folders, "items": items, "gone": gone, "gone_items": gone_items}
+
+    def _folder_id_by_uid(self, uid: str) -> int | None:
+        r = self.conn.execute("SELECT id FROM folders WHERE uid=?", (uid,)).fetchone()
+        return r["id"] if r else None
+
+    def apply_folder(self, uid: str, name: str, parent_uid: str | None,
+                     position: float | None, at: float) -> bool:
+        """폴더 하나를 반영(없으면 만들고, 있으면 더 새로울 때만 덮는다).
+
+        부모는 uid 로 받아 로컬 id 로 옮긴다. 상대에만 있는 부모는 아직 없을 수 있어
+        그때는 최상위로 두고, 부모가 도착한 다음 회차에 제자리를 찾는다.
+        """
+        r = self.conn.execute("SELECT id, updated_at FROM folders WHERE uid=?", (uid,)).fetchone()
+        gone = self.conn.execute("SELECT at FROM folder_removed WHERE uid=?", (uid,)).fetchone()
+        if gone and (gone["at"] or 0.0) >= at:
+            return False                       # 여기서 지운 게 더 최신 — 되살리지 않는다
+        pid = self._folder_id_by_uid(parent_uid) if parent_uid else None
+        if r is None:
+            self.conn.execute(
+                "INSERT INTO folders(name, parent_id, created_at, position, uid, updated_at)"
+                " VALUES(?,?,?,?,?,?)", (name, pid, at, position, uid, at))
+            return True
+        if (r["updated_at"] or 0.0) >= at:
+            return False
+        self.conn.execute("UPDATE folders SET name=?, parent_id=?, position=?, updated_at=? WHERE id=?",
+                          (name, pid, position, at, r["id"]))
+        return True
+
+    def apply_folder_item(self, folder_uid: str, kind: str, ref: str,
+                          alias: str | None, position: float | None, at: float) -> bool:
+        fid = self._folder_id_by_uid(folder_uid)
+        if fid is None:
+            return False                       # 폴더가 아직 안 왔다 — 다음 회차에 붙는다
+        gone = self.conn.execute(
+            "SELECT at FROM folder_item_removed WHERE folder_uid=? AND kind=? AND ref=?",
+            (folder_uid, kind, ref)).fetchone()
+        if gone and (gone["at"] or 0.0) >= at:
+            return False
+        r = self.conn.execute(
+            "SELECT updated_at FROM folder_items WHERE folder_id=? AND kind=? AND ref=?",
+            (fid, kind, ref)).fetchone()
+        if r is not None and (r["updated_at"] or 0.0) >= at:
+            return False
+        self.conn.execute(
+            "INSERT INTO folder_items(folder_id, kind, ref, added_at, alias, position, updated_at)"
+            " VALUES(?,?,?,?,?,?,?)"
+            " ON CONFLICT(folder_id, kind, ref) DO UPDATE SET"
+            "   alias=excluded.alias, position=excluded.position, updated_at=excluded.updated_at",
+            (fid, kind, ref, at, alias, position, at))
+        return True
+
+    def apply_folder_removed(self, uid: str, at: float) -> bool:
+        r = self.conn.execute("SELECT id, updated_at FROM folders WHERE uid=?", (uid,)).fetchone()
+        self.conn.execute("INSERT INTO folder_removed(uid, at) VALUES(?,?) "
+                          "ON CONFLICT(uid) DO UPDATE SET at=MAX(at, excluded.at)", (uid, at))
+        if r is None or (r["updated_at"] or 0.0) >= at:
+            return False                       # 여기서 더 늦게 고쳤다 — 지우지 않는다
+        self.conn.execute("DELETE FROM folder_items WHERE folder_id=?", (r["id"],))
+        self.conn.execute("UPDATE folders SET parent_id=NULL WHERE parent_id=?", (r["id"],))
+        self.conn.execute("DELETE FROM folders WHERE id=?", (r["id"],))
+        return True
+
+    def apply_folder_item_removed(self, folder_uid: str, kind: str, ref: str, at: float) -> bool:
+        self.conn.execute(
+            "INSERT INTO folder_item_removed(folder_uid, kind, ref, at) VALUES(?,?,?,?) "
+            "ON CONFLICT(folder_uid, kind, ref) DO UPDATE SET at=MAX(at, excluded.at)",
+            (folder_uid, kind, ref, at))
+        fid = self._folder_id_by_uid(folder_uid)
+        if fid is None:
+            return False
+        r = self.conn.execute(
+            "SELECT updated_at FROM folder_items WHERE folder_id=? AND kind=? AND ref=?",
+            (fid, kind, ref)).fetchone()
+        if r is None or (r["updated_at"] or 0.0) >= at:
+            return False
+        self.conn.execute("DELETE FROM folder_items WHERE folder_id=? AND kind=? AND ref=?",
+                          (fid, kind, ref))
+        return True
 
     def sync_title_rows(self) -> list[tuple[str, str, float]]:
         """(session_id, title, updated_at). title='' 은 '지웠다'는 기록이라 함께 내보낸다."""

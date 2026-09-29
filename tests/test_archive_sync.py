@@ -215,3 +215,83 @@ def test_old_snapshot_without_meta_still_imports(tmp_path):
     p.write_text("\n".join(kept) + "\n", encoding="utf-8")
     c = ArchiveDB(tmp_path / "c.db")
     assert A.import_archives(c, proj, "devC", log_fn=lambda *_: None) == 2
+
+
+# --- 폴더 동기화 (#233 후반) ---------------------------------------------
+
+def test_folder_and_items_sync(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("모음")
+    a.add_to_folder(f, "turn", "s1:u1")
+    a.add_to_folder(f, "session", "s1")
+    _sync(a, "devA", b, "devB", proj)
+
+    got = b.list_folders()
+    assert [x["name"] for x in got] == ["모음"]
+    assert {(i["kind"], i["ref"]) for i in b.folder_items(got[0]["id"])} == {
+        ("turn", "s1:u1"), ("session", "s1")}
+
+
+def test_folder_id_collision_does_not_merge_two_folders(tmp_path):
+    """양쪽에서 각각 만든 폴더는 로컬 id 가 똑같이 1 이어도 서로 다른 폴더다.
+
+    folders.id 는 기기별 AUTOINCREMENT 라, uid 없이 id 로 맞추면 남의 폴더에 덮어쓴다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    fa, fb = a.create_folder("A의 폴더"), b.create_folder("B의 폴더")
+    assert fa == fb == 1                       # 로컬 id 가 같다
+    _sync(a, "devA", b, "devB", proj)
+    assert sorted(x["name"] for x in b.list_folders()) == ["A의 폴더", "B의 폴더"]
+
+
+def test_deleted_folder_does_not_come_back(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("지울 폴더")
+    _sync(a, "devA", b, "devB", proj)
+    assert len(b.list_folders()) == 1
+
+    a.delete_folder(f)
+    _sync(a, "devA", b, "devB", proj)
+    assert b.list_folders() == []
+    _sync(b, "devB", a, "devA", proj)          # 되돌아와도
+    assert a.list_folders() == []
+
+
+def test_removed_item_does_not_come_back(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("F")
+    a.add_to_folder(f, "turn", "s1:u1")
+    a.add_to_folder(f, "turn", "s1:u2")
+    _sync(a, "devA", b, "devB", proj)
+    assert len(b.folder_items(b.list_folders()[0]["id"])) == 2
+
+    a.remove_from_folder(f, "turn", "s1:u1")
+    _sync(a, "devA", b, "devB", proj)
+    bid = b.list_folders()[0]["id"]
+    assert {i["ref"] for i in b.folder_items(bid)} == {"s1:u2"}
+    _sync(b, "devB", a, "devA", proj)
+    assert {i["ref"] for i in a.folder_items(f)} == {"s1:u2"}
+
+
+def test_nested_folder_finds_parent_even_if_order_is_bad(tmp_path):
+    """자식이 부모보다 먼저 와도, 한 번 더 돌면 제자리를 찾는다."""
+    a, b, proj = _two_devices(tmp_path)
+    top = a.create_folder("부모")
+    kid = a.create_folder("자식", parent_id=top)
+    _sync(a, "devA", b, "devB", proj)
+    _sync(a, "devA", b, "devB", proj)          # 두 번째 회차
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["자식"]["parent_id"] == by["부모"]["id"]
+    assert a.get_folder(kid)["parent_id"] == top
+
+
+def test_newer_folder_rename_wins(tmp_path):
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("처음")
+    _sync(a, "devA", b, "devB", proj)
+    bid = b.list_folders()[0]["id"]
+    b.rename_folder(bid, "나중")
+    _sync(b, "devB", a, "devA", proj)
+    assert a.get_folder(f)["name"] == "나중"
+    _sync(a, "devA", b, "devB", proj)
+    assert b.get_folder(bid)["name"] == "나중"
