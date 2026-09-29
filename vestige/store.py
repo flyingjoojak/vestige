@@ -1087,7 +1087,26 @@ class ArchiveDB:
     _CLOCK_SKEW = 86400.0      # 하루. 기기 시계 오차는 이만큼까지 봐준다.
 
     def _future(self, at: float) -> bool:
-        return float(at) > time.time() + self._CLOCK_SKEW
+        """미래를 주장하는 기록인가. 맞으면 반영하지 않는다.
+
+        **여기까지가 한계다.** 상대가 매 주기 `지금+하루-1초`처럼 신선한 값을 계속 보내면
+        검사를 매번 통과하고, 사용자의 조작(`지금`)은 항상 그보다 작아 영원히 진다.
+        시각이든 논리 시계든, 값을 스스로 정하는 상대와의 비교로는 못 막는다.
+
+        그래서 이 기능의 전제를 분명히 해둔다 — **동기화 폴더에 쓸 수 있는 기기는 신뢰한다.**
+        그 폴더에는 이미 모든 대화가 평문 NDJSON 으로 들어 있어서, 거기에 쓸 수 있는 상대는
+        접힘 상태를 조작하는 것보다 훨씬 많은 것을 이미 할 수 있다. 신뢰 경계가 아니다.
+
+        이 검사가 실제로 막는 것은 **시계가 고장난 기기**다(RTC 배터리 방전 등). 흔하고,
+        사고이고, 고칠 수 있다. 그래서 조용히 버리지 않고 로그를 남긴다 — 안 그러면
+        "동기화가 계속 안 된다"는 증상만 남고 원인을 찾을 길이 없다.
+        """
+        ahead = float(at) - time.time()
+        if ahead <= self._CLOCK_SKEW:
+            return False
+        logger.warning("미래 시각 기록 거부 — %.0f시간 앞섬. 보낸 기기의 시계를 확인하세요",
+                       ahead / 3600)
+        return True
 
     def sync_title_rows(self) -> list[tuple[str, str, float]]:
         """(session_id, title, updated_at). title='' 은 '지웠다'는 기록이라 함께 내보낸다."""
