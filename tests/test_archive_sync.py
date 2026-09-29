@@ -531,3 +531,41 @@ def test_non_numeric_timestamp_is_rejected_before_any_write(tmp_path):
     assert any(m.startswith("ERROR ") for m in msgs)
     # 상대가 보낸 문자열이 로그에 그대로 실려 나가지 않는다
     assert not any("숫자가 아닌 시각" in m for m in msgs)
+
+
+def test_queued_flag_survives_sync(tmp_path):
+    """작업 중 끼어든 질문 표시(#246)가 기기 간 동기화로 지워지지 않는다.
+
+    export 는 턴을 칸 배열로 보낸다. 새 컬럼을 안 실으면 상대 기기에서 기본값(거짓)으로
+    복원되고, superset-wins 로 되돌아올 때 원래 기기의 표시까지 덮는다 - 조용히 사라진다.
+    """
+    proj = tmp_path / "projects"
+    a, b = ArchiveDB(tmp_path / "a.db"), ArchiveDB(tmp_path / "b.db")
+    mid = Turn(id="s9:q1", session_id="s9", uuid="q1", parent_uuid="",
+               timestamp="2026-01-01T00:01", project="proj",
+               question="그리고 범위 알려줘", answer="답변2", actions=(), queued=True)
+    a.upsert_turn(_turn("s9:u1", "s9", "갱신해줘", "답변1"), source_file="f.jsonl")
+    a.upsert_turn(mid, source_file="f.jsonl")
+    a.commit()
+
+    b = _sync(a, "devA", b, "devB", proj)
+    rows = {r["id"]: r["queued"] for r in b.conn.execute("SELECT id,queued FROM turns")}
+    assert rows == {"s9:u1": 0, "s9:q1": 1}, f"동기화 후 표시가 달라졌다: {rows}"
+
+
+def test_old_snapshot_without_queued_still_imports(tmp_path):
+    """옛 스냅샷(13칸)도 계속 읽힌다 - 칸을 끝에만 늘렸으므로."""
+    import json
+
+    dst = ArchiveDB(tmp_path / "dst.db")
+    proj = tmp_path / "projects"
+    peer_dir = proj / A.ARCHIVE_DIRNAME          # 상대 스냅샷은 이 폴더에서만 읽는다
+    peer_dir.mkdir(parents=True)
+    rec = {"t": ["s9:u1", "s9", "u1", "", "2026-01-01T00:00", "proj",
+                 "질문", "답변", "[]", None, None, "claude-code", "f.jsonl"], "c": []}
+    (peer_dir / "peer.ndjson").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+    A.import_archives(dst, proj, "me", log_fn=lambda *_: None)
+    dst.commit()
+
+    r = ArchiveDB(dst.path).conn.execute("SELECT id,queued FROM turns").fetchone()
+    assert r["id"] == "s9:u1" and not r["queued"]
