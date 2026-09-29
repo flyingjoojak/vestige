@@ -615,3 +615,92 @@ def test_restore_reports_partial_when_tail_is_damaged(tmp_path, monkeypatch):
     target, intact = got
     assert intact is False                          # 손상 사실을 알린다
     assert target.read_bytes() == b'{"ok":1}\n'     # 온전한 앞부분은 복구
+
+
+# --- 멤버 경계 색인 (#223) -------------------------------------------------
+
+def _mirror_n(db, tmp_path, sid, lines, source="claude-code"):
+    """줄을 하나씩 늘려가며 미러링 — 멤버가 줄 수만큼 생긴다."""
+    f = tmp_path / f"{sid}.jsonl"
+    acc = b""
+    for line in lines:
+        acc += line
+        f.write_bytes(acc)
+        R.mirror_file(db, f, source)
+    return R.raw_path(source, sid)
+
+
+def test_index_records_one_span_per_member(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n', b'{"c":3}\n'])
+    spans = R._idx_read(out)
+    assert len(spans) == 3
+    assert spans[0][0] == 0                              # 첫 멤버는 0 에서 시작
+    assert sum(ln for _, ln in spans) == out.stat().st_size   # 빈틈 없이 파일을 덮는다
+
+
+def test_damaged_middle_member_does_not_hide_the_rest(tmp_path, monkeypatch):
+    """#223 의 핵심. 경계를 모르면 깨진 지점에서 멈춰 뒤를 영영 못 읽는다.
+
+    gzip 멤버는 '내가 어디서 시작하는지'를 스스로 말하지 않기 때문이다.
+    색인이 있으면 깨진 조각을 건너뛰고 다음으로 점프한다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n', b'{"c":3}\n'])
+    spans = R._idx_read(out)
+
+    raw = bytearray(out.read_bytes())                    # 가운데 멤버의 CRC 를 깬다
+    mid_end = spans[1][0] + spans[1][1]
+    raw[mid_end - 3] ^= 0xFF
+    out.write_bytes(bytes(raw))
+
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is False                               # 손상은 정직하게 알린다
+    assert b'{"a":1}' in data                            # 앞
+    assert b'{"c":3}' in data                            # **뒤도 읽힌다** — 색인이 없으면 못 읽는다
+    assert b'{"b":2}' not in data                        # 깨진 멤버만 빠진다
+
+
+def test_index_is_backfilled_for_old_archives(tmp_path, monkeypatch):
+    """색인이 없던 옛 보존본은 처음 읽을 때 만들어진다(온전할 때만)."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n'])
+    R._idx_path(out).unlink()                            # 옛 보존본 흉내
+
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is True and data == b'{"a":1}\n{"b":2}\n'
+    assert len(R._idx_read(out)) == 2                    # 읽으면서 색인이 생겼다
+
+
+def test_no_index_is_backfilled_from_a_damaged_archive(tmp_path, monkeypatch):
+    """깨진 파일에서 색인을 만들면 멈춘 지점까지만 적혀 뒤 멤버를 영영 못 찾는다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n'])
+    R._idx_path(out).unlink()
+    with open(out, "ab") as fh:
+        fh.write(b"\x1f\x8b\x08\x00broken")
+
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is False
+    assert not R._idx_path(out).exists()                 # 만들지 않는다
+
+
+def test_archive_bytes_are_never_touched_by_indexing(tmp_path, monkeypatch):
+    """색인은 파생물이다. .gz 는 여전히 append 전용이어야 한다."""
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n'])
+    before = out.read_bytes()
+    R.read_mirror_checked("claude-code", sid)            # 읽기가 건드리면 안 된다
+    R._idx_path(out).unlink()
+    R.read_mirror_checked("claude-code", sid)            # 백필도 마찬가지
+    assert out.read_bytes() == before

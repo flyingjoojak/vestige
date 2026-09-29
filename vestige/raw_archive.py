@@ -134,8 +134,12 @@ def mirror_file(db, path: str | Path, source: str) -> int:
     # 그래서 실패 방향을 '닫히는 쪽'으로 둔다: 손상은 고치지 않고 read_mirror_checked 가
     # intact=False 로 정직하게 보고한다(앞부분까지는 복구되고, UI 가 잘렸다고 알린다).
     # 자르는 코드는 실패하면 '열리는 쪽'이었다 — 데이터를 없애고 '복구 완료'라고 말했다.
+    before = out.stat().st_size if out.exists() else 0
     with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
         gz.write(chunk)
+    # 멤버 경계를 옆 파일에 남긴다(#223). 이게 있어야 중간 멤버가 깨져도 뒤를 계속 읽는다.
+    # **append 가 끝난 뒤에** 적는다 — 먼저 적으면 중단됐을 때 있지도 않은 멤버를 가리킨다.
+    _idx_append(out, before, out.stat().st_size - before)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
     # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
@@ -168,8 +172,103 @@ def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | No
     p = raw_path(source, session_id)
     if not p.exists():
         return None
-    data, _end, intact = _walk_members(p.read_bytes(), p.name)
+    raw = p.read_bytes()
+    spans = _idx_read(p)
+    if spans:
+        data, _end, intact = _walk_by_index(raw, spans, p.name)
+        return data, intact
+    # 색인이 없는 옛 보존본 — 순서대로 걷는다(깨진 지점에서 멈춘다).
+    data, end, intact = _walk_members(raw, p.name)
+    if intact and end == len(raw):
+        _idx_backfill(p, raw)   # 온전할 때만 색인을 만든다. 깨진 파일에서 만들면 경계가 틀린다.
     return data, intact
+
+
+def _idx_backfill(out: Path, raw: bytes) -> None:
+    """온전한 보존본에서 경계를 뽑아 색인을 만든다(옛 파일용, 1회).
+
+    깨진 파일에서는 만들지 않는다 — 멈춘 지점까지만 적히면 뒤 멤버를 영영 못 찾는다.
+    """
+    if _idx_path(out).exists():
+        return
+    with contextlib.suppress(Exception):
+        mv, pos, lines = memoryview(raw), 0, []
+        while pos < len(raw):
+            d = zlib.decompressobj(31)
+            d.decompress(mv[pos:]); d.flush()
+            if not d.eof:
+                return
+            used = len(raw) - pos - len(d.unused_data)
+            if used <= 0:
+                return
+            lines.append(f"{pos} {used}")
+            pos += used
+        tmp = _idx_path(out).with_suffix(".idx.tmp")
+        tmp.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+        tmp.replace(_idx_path(out))       # 원자적 — 반쯤 쓰인 색인을 남기지 않는다
+
+
+def _idx_path(out: Path) -> Path:
+    """보존본 옆에 두는 멤버 경계 색인(.idx). 데이터가 아니라 **파생물**이다.
+
+    gzip 멤버는 '내가 어디서 시작한다'를 스스로 말하지 않는다. 그래서 중간 멤버 하나가
+    깨지면 그 뒤가 멀쩡해도 찾아갈 방법이 없다(#223). 경계를 따로 적어두면 깨진 조각을
+    건너뛰고 다음으로 점프할 수 있다.
+
+    .idx 가 없거나 깨져도 잃는 것은 없다 — 멤버를 순서대로 걷는 예전 경로로 떨어진다.
+    보존본(.gz) 자체는 여전히 append 전용이고 **절대 건드리지 않는다.**
+    """
+    return out.with_suffix(".idx")
+
+
+def _idx_read(out: Path) -> list[tuple[int, int]]:
+    """[(오프셋, 길이)]. 없거나 읽을 수 없으면 빈 목록(예전 경로로 떨어진다)."""
+    spans: list[tuple[int, int]] = []
+    with contextlib.suppress(Exception):
+        for line in _idx_path(out).read_text(encoding="utf-8").splitlines():
+            a, _, b = line.partition(" ")
+            spans.append((int(a), int(b)))
+    return spans
+
+
+def _idx_append(out: Path, offset: int, length: int) -> None:
+    """멤버 하나를 기록. 실패해도 조용히 넘어간다 — 색인이 없으면 예전 경로면 된다."""
+    with contextlib.suppress(Exception):
+        with open(_idx_path(out), "a", encoding="utf-8") as f:
+            f.write(f"{offset} {length}\n")
+
+
+def _walk_by_index(raw: bytes, spans: list[tuple[int, int]], name: str = "") -> tuple[bytes, int, bool]:
+    """경계를 알고 걷는다 — **깨진 멤버를 건너뛰고 뒤를 계속 읽는다.**
+
+    이게 순서대로 걷기와 다른 유일한 점이다. 경계를 모르면 깨진 지점에서 멈출 수밖에 없다.
+    """
+    mv = memoryview(raw)
+    out_buf = bytearray()
+    ok_end, bad = 0, 0
+    for off, ln in spans:
+        if off + ln > len(raw):
+            bad += 1
+            continue                      # 파일이 기록보다 짧다(중단된 append) — 건너뛴다
+        try:
+            d = zlib.decompressobj(31)
+            chunk = d.decompress(mv[off:off + ln]) + d.flush()
+            if not d.eof:
+                raise zlib.error("트레일러 없음")
+        except zlib.error:
+            bad += 1
+            continue                      # 이 멤버만 버리고 다음으로
+        out_buf += chunk
+        ok_end = max(ok_end, off + ln)
+    # 색인에 없는 **꼬리** 바이트는 정직하게 '온전하지 않음'으로 본다.
+    # 중단된 append 의 잔재일 수도 있지만, 색인 기록 직전에 죽어 실제 데이터일 수도 있다.
+    # (그 경우 커서도 안 올라가 다음 회차가 같은 구간을 다시 미러링하므로 유실은 아니다.)
+    # 가운데 빈 구간은 다르다 — 그건 이미 건너뛰기로 판단한 잔재이고, 영원히 경고할 이유가 없다.
+    tail = len(raw) > ok_end
+    if bad or tail:
+        logger.warning("보존본 손상 — 멤버 %d개 건너뜀%s (%s)",
+                       bad, ", 색인 밖 꼬리 있음" if tail else "", name or "?")
+    return bytes(out_buf), ok_end, not bad and not tail
 
 
 def _walk_members(raw: bytes, name: str = "") -> tuple[bytes, int, bool]:
