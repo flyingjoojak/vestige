@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import json
 import logging
 import os
@@ -139,6 +141,43 @@ def _is_skipped_sdk_prompt(obj: dict) -> bool:
     return obj.get("promptSource") == "sdk"
 
 
+def _queued_text(prompt) -> str | None:
+    """끼어든 질문의 본문. 보통 평문이지만 이미지가 붙으면 content 블록 리스트를
+    문자열로 박제해 둔다("[{'type': 'text', ...}]") — 그 경우 풀어서 텍스트만 꺼낸다."""
+    if not isinstance(prompt, str):
+        return _user_text(prompt)
+    s = prompt.strip()
+    if s.startswith("[{") and "'type'" in s[:40]:
+        with contextlib.suppress(Exception):   # 박제가 깨졌으면 평문으로 취급
+            return _user_text(ast.literal_eval(s))
+    return s or None
+
+
+def queued_human_prompt(obj: dict) -> str | None:
+    """작업 중(어시스턴트가 답하는 도중)에 사람이 끼어들어 친 질문이면 그 텍스트.
+
+    Claude Code 는 이걸 일반 대화와 다른 형태로 남긴다 — type="user" 가 아니라
+    type="attachment" + attachment.type="queued_command". 그래서 예전엔 구조 노이즈로
+    통째로 버려졌고, 질문이 사라진 자리에 그 답변만 앞 턴에 눌어붙었다.
+
+    **origin.kind 를 반드시 본다.** 같은 queued_command 모양으로 사람이 아닌 것도 들어온다
+    (이 기기 실측: 사람 411 / <task-notification> 시스템 이벤트 290 / 하위 에이전트 보고 42).
+    전부 받으면 시스템 알림과 모델이 쓴 보고서가 사용자 질문으로 둔갑한다.
+    """
+    if obj.get("type") != "attachment":
+        return None
+    a = obj.get("attachment") or {}
+    if a.get("type") != "queued_command":
+        return None
+    origin = a.get("origin")
+    if not (isinstance(origin, dict) and origin.get("kind") == "human"):
+        return None
+    text = _queued_text(a.get("prompt"))
+    if text is None or _is_plumbing(text):
+        return None
+    return text
+
+
 def is_real_user_prompt(obj: dict) -> bool:
     """사람이 실제로 친 질문 턴의 시작인지."""
     if obj.get("type") != "user":
@@ -221,6 +260,7 @@ def _finalize(cur: dict) -> Turn:
         question=cur["question"].strip(),
         answer=answer,
         actions=tuple(cur["actions"]),
+        queued=cur.get("queued", False),
     )
 
 
@@ -229,9 +269,11 @@ def extract_turns(objs: Iterable[dict]) -> list[Turn]:
     turns: list[Turn] = []
     cur: dict | None = None
     for obj in objs:
-        if is_structural_noise(obj):
+        # 작업 중 끼어든 질문은 type=attachment 라 구조 노이즈 검사에 먼저 걸린다 — 그래서 앞에서 본다.
+        queued = queued_human_prompt(obj)
+        if queued is None and is_structural_noise(obj):
             continue
-        if is_real_user_prompt(obj):
+        if queued is not None or is_real_user_prompt(obj):
             if cur is not None:
                 turns.append(_finalize(cur))
             cur = {
@@ -240,9 +282,11 @@ def extract_turns(objs: Iterable[dict]) -> list[Turn]:
                 "parent_uuid": obj.get("parentUuid"),
                 "timestamp": obj.get("timestamp", ""),
                 "project": obj.get("cwd", ""),
-                "question": _user_text((obj.get("message") or {}).get("content")) or "",
+                "question": queued if queued is not None
+                            else (_user_text((obj.get("message") or {}).get("content")) or ""),
                 "answer_parts": [],
                 "actions": [],
+                "queued": queued is not None,
             }
         elif obj.get("type") == "assistant" and cur is not None:
             texts, actions = _assistant_parts(obj)

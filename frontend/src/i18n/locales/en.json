@@ -229,6 +229,8 @@
   },
   "chat": {
     "selected": "Selected",
+    "queued": "Mid-turn",
+    "queuedHint": "Sent while the previous answer was still in progress.",
     "question": "Question",
     "answer": "Answer",
     "noQuestion": "(No question)",

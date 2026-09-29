@@ -32,6 +32,7 @@ export interface SessionTurn {
   summary: string | null
   tags: string[]
   hidden?: boolean   // 접힘(#128) - 제자리에 한 줄로만 표시되고 검색·지도에선 빠짐
+  queued?: boolean   // 작업 중 끼어들어 친 질문(#246). 재색인 전 옛 턴은 undefined
 }
 
 export type SessionSource = "claude-code" | "codex"

@@ -30,7 +30,7 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
 }
 
 type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean; parent?: string | null }
-type Conv = { t: string; s: string; h: string }
+type Conv = { t: string; s: string; h: string; q?: boolean }
 
 // 세션/군집 공통 3분할 브라우저. 초기=목록(가운데), 선택 후=[검색+대화목록 | 채팅 | 목록].
 // initialSel: 지도에서 진입할 때 특정 그룹을 바로 선택된 상태로 연다(탭으로 들어온 것과 동일 화면).
@@ -234,7 +234,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       let cancelled = false   // 다른 세션으로 빠르게 전환 시, 늦게 온 응답이 덮어쓰지 않게
       getSession(sel).then((d) => {
         if (cancelled) return
-        setConvs(d.turns.map((turn) => ({ t: turn.id, s: sel, h: turn.summary || turn.question || "" })))
+        setConvs(d.turns.map((turn) => ({ t: turn.id, s: sel, h: turn.summary || turn.question || "", q: turn.queued })))
         setDetail(d)
         // 세션을 고르면 곧바로 마지막 대화를 띄운다 - 오른쪽 패널을 '고르세요' 안내문으로 두지
         // 않고, 그 세션을 다시 여는 이유(방금 하던 데)에 바로 착지시킨다.
@@ -552,7 +552,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
                 ref={selTurn?.turn === it.t ? selRowRef : null}
                 className={`cm-cv-row w-full rounded-lg border p-2.5 text-left transition-colors ${selTurn?.turn === it.t ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                 <div className="line-clamp-2 text-[13px] font-medium leading-snug">{it.h || t("browse.untitled")}</div>
-                <div className="mt-0.5 text-[10.5px] text-muted-foreground tabular-nums">{t("browse.sessionId", { id: it.s.slice(0, 8) })}</div>
+                <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
+                  <span>{t("browse.sessionId", { id: it.s.slice(0, 8) })}</span>
+                  {it.q && <span className="pointer-events-none rounded bg-amber-500/15 px-1 text-[9.5px] font-medium text-amber-700 dark:text-amber-400">{t("chat.queued")}</span>}
+                </div>
               </button>
             ))
           )}

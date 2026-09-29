@@ -33,6 +33,7 @@ class Turn:
     answer: str
     actions: tuple[Action, ...]
     source: str = "claude-code"   # 출처 도구(claude-code / codex …). DB에서 읽을 때 채워짐.
+    queued: bool = False          # 작업 중 끼어든 질문(#246). 화면에서 배지로 구분.
 
     def action_summary(self) -> str:
         return "; ".join(a.render() for a in self.actions)

@@ -45,6 +45,9 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
       <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
         <span className="shrink-0">#{i + 1} · {fmtTime(t.timestamp)}</span>
         {highlight && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{tr("chat.selected")}</span>}
+        {/* 앞 답변이 끝나기 전에 끼어든 질문(#246). 답변이 중간에 갈리는 이유를 읽는 쪽이 알 수 있게. */}
+        {t.queued && <span title={tr("chat.queuedHint")}
+          className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">{tr("chat.queued")}</span>}
         {t.summary && (
           <span className="min-w-0 flex-1 truncate">
             <FileText className="mr-1 -mt-0.5 inline size-3 text-primary/70" />{t.summary}

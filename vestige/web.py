@@ -589,7 +589,7 @@ def api_session(id: str = Query(...), limit: int = 2000):
     # 접힌 턴(#128)도 빼지 않고 hidden 플래그만 달아 내려준다 — 화면에서 제자리에 '접힘' 한 줄로
     # 남겨 바로 펼칠 수 있게(검색·지도에서만 빠진다). 빼버리면 되돌릴 길이 멀어진다.
     rows = db.conn.execute(
-        "SELECT t.id,t.timestamp,t.question,t.answer,t.actions,t.summary,t.tags,"
+        "SELECT t.id,t.timestamp,t.question,t.answer,t.actions,t.summary,t.tags,t.queued,"
         "       (h.turn_id IS NOT NULL) AS hidden "
         "FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id "
         "WHERE t.session_id=? ORDER BY t.timestamp, t.id LIMIT ?", (id, limit)
@@ -603,6 +603,8 @@ def api_session(id: str = Query(...), limit: int = 2000):
             "summary": r["summary"],
             "tags": json.loads(r["tags"]) if r["tags"] else [],
             "hidden": bool(r["hidden"]),   # 접힘 — 화면에선 한 줄로, 검색·지도에선 제외
+            # 작업 중 끼어든 질문(#246). 재색인 전 옛 행은 NULL — 모름은 거짓으로 취급한다.
+            "queued": bool(r["queued"]),
         })
     info = db.session_source(id)
     source = info[0] if info else "claude-code"
