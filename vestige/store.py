@@ -436,8 +436,15 @@ class ArchiveDB:
         ).fetchone()
         return None if row is None else int(row["n"])
 
-    def upsert_turn(self, turn: Turn, source: str = "claude-code",
-                    source_file: str | None = None) -> bool:
+    def upsert_turn(self, turn: Turn, source: str = "claude-code", *,
+                    source_file: str | None) -> bool:
+        # source_file 은 **기본값 없는 키워드 인자**다(#227). 예전엔 None 기본값이 있어
+        #   db = ArchiveDB(); db.upsert_turn(turn); db.commit()
+        # 세 줄이면 임시 스크립트가 실사용 DB 에 조용히 행을 넣을 수 있었다(실제로 합성 데이터
+        # 25개가 그렇게 들어왔다). 이제 안 넘기면 호출하는 순간 터진다.
+        #
+        # 울타리가 아니라 표지판이다 — 더미 값을 넣으면 그대로 뚫린다. 다만 '출처 없는 턴은
+        # 저장하지 않는다'를 시그니처에 박아두면, 깜빡한 경로가 조용히 지나가지는 않는다.
         """턴 저장(멱등). **완성도 축소 금지**: 이미 저장된 턴이 더 완성(질문+답변+행동 길이가
         더 큼)이면 더 짧은 재파싱본으로 덮지 않고 그대로 둔다. 반환값 = 실제로 기록됐으면 True,
         기존을 유지(스킵)했으면 False. (긴 도구호출로 짧게 확정된 턴을 kill/재색인/기기병합이

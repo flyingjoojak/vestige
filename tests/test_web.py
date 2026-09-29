@@ -73,9 +73,9 @@ def test_api_sessions_aggregates_without_n_plus_1(tmp_path, monkeypatch):
                     timestamp=ts, project="p", question=q, answer="a", actions=())
 
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_t("A:u0", "Asession", "2026-07-24T00:00:00Z", "A첫질문"))
-    db.upsert_turn(_t("A:u1", "Asession", "2026-07-24T00:01:00Z", "A둘째"))
-    db.upsert_turn(_t("B:u0", "Bsession", "2026-07-24T05:00:00Z", "B첫질문"))  # 더 나중에 끝남
+    db.upsert_turn(_t("A:u0", "Asession", "2026-07-24T00:00:00Z", "A첫질문"), source_file=None)
+    db.upsert_turn(_t("A:u1", "Asession", "2026-07-24T00:01:00Z", "A둘째"), source_file=None)
+    db.upsert_turn(_t("B:u0", "Bsession", "2026-07-24T05:00:00Z", "B첫질문"), source_file=None)  # 더 나중에 끝남
     db.commit()
 
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
@@ -106,7 +106,7 @@ def test_api_session_export_returns_markdown_attachment(tmp_path, monkeypatch):
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="legacy:u0", session_id="legacysession", uuid="u0",
                          parent_uuid=None, timestamp="2026-07-24T00:00:00Z",
-                         project="myproj", question="질문", answer="답변", actions=()))
+                         project="myproj", question="질문", answer="답변", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -142,9 +142,9 @@ def test_api_hide_unhide_turn_roundtrip(tmp_path, monkeypatch):
 
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()), source_file=None)
     db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
-                         timestamp="2026-07-24T00:01:00Z", project="p", question="q2", answer="a2", actions=()))
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="q2", answer="a2", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -165,9 +165,9 @@ def test_api_hide_session_keeps_it_listed_as_folded(tmp_path, monkeypatch):
 
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()), source_file=None)
     db.upsert_turn(Turn(id="s2:u1", session_id="s2", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="q2", answer="a2", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q2", answer="a2", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -185,9 +185,9 @@ def test_session_headline_prefers_unfolded_turn(tmp_path, monkeypatch):
 
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을노이즈", answer="a", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을노이즈", answer="a", actions=()), source_file=None)
     db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
-                         timestamp="2026-07-24T00:01:00Z", project="p", question="진짜작업", answer="a", actions=()))
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="진짜작업", answer="a", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -208,9 +208,9 @@ def test_export_skips_folded_turns(tmp_path, monkeypatch):
 
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을질문", answer="a1", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="접을질문", answer="a1", actions=()), source_file=None)
     db.upsert_turn(Turn(id="s1:u2", session_id="s1", uuid="u2", parent_uuid=None,
-                         timestamp="2026-07-24T00:01:00Z", project="p", question="남길질문", answer="a2", actions=()))
+                         timestamp="2026-07-24T00:01:00Z", project="p", question="남길질문", answer="a2", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -227,7 +227,7 @@ def test_api_hidden_lists_recent_first_with_count(tmp_path, monkeypatch):
     db = ArchiveDB(tmp_path / "a.db")
     for i, q in ((1, "먼저접음"), (2, "나중접음")):
         db.upsert_turn(Turn(id=f"s1:u{i}", session_id="s1", uuid=f"u{i}", parent_uuid=None,
-                             timestamp=f"2026-07-24T0{i}:00:00Z", project="p", question=q, answer="a", actions=()))
+                             timestamp=f"2026-07-24T0{i}:00:00Z", project="p", question=q, answer="a", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
@@ -288,9 +288,9 @@ def _seed_folder_db(tmp_path, monkeypatch):
 
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="s1:u1", session_id="s1", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()))
+                         timestamp="2026-07-24T00:00:00Z", project="p", question="q1", answer="a1", actions=()), source_file=None)
     db.upsert_turn(Turn(id="s2:u1", session_id="s2", uuid="u1", parent_uuid=None,
-                         timestamp="2026-07-24T01:00:00Z", project="p", question="q2", answer="a2", actions=()))
+                         timestamp="2026-07-24T01:00:00Z", project="p", question="q2", answer="a2", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
     return db
@@ -435,7 +435,7 @@ def test_folder_items_report_folded_state(tmp_path, monkeypatch):
 
     db = _seed_folder_db(tmp_path, monkeypatch)
     db.upsert_turn(Turn(id="s2:u2", session_id="s2", uuid="u2", parent_uuid=None,
-                         timestamp="2026-07-24T02:00:00Z", project="p", question="q3", answer="a3", actions=()))
+                         timestamp="2026-07-24T02:00:00Z", project="p", question="q3", answer="a3", actions=()), source_file=None)
     db.commit()
     f = web.api_folder_create({"name": "F"})["id"]
     web.api_folder_add({"folder_id": f, "turn_id": "s1:u1"})

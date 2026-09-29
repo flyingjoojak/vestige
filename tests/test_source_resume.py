@@ -26,7 +26,7 @@ def test_session_source_roundtrip(tmp_path):
 
 def test_session_source_defaults_when_legacy(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn())   # source 미지정 → 기본 claude-code, source_file NULL
+    db.upsert_turn(_turn(), source_file=None)   # source 미지정 → 기본 claude-code, source_file NULL
     db.commit()
     assert db.session_source(SID) == ("claude-code", None, "/proj")
 

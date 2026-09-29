@@ -48,7 +48,7 @@ def test_find_related_excludes_own_session(monkeypatch, tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     db.upsert_turn(Turn(id="sA:u1", session_id="sA", uuid="u1", parent_uuid=None,
                         timestamp="2026-07-24T00:00:00Z", project="p",
-                        question="비슷한 작업 질문", answer="답", actions=()))
+                        question="비슷한 작업 질문", answer="답", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(M, "_db", lambda: db)
     monkeypatch.setattr(M, "_vi", lambda: [0])

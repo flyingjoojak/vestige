@@ -15,7 +15,7 @@ def _turn(tid: str, sid: str, q: str, a: str) -> Turn:
 
 
 def _seed(db: ArchiveDB, tid: str, sid: str, chunks: list[str], summary: str | None = None) -> None:
-    db.upsert_turn(_turn(tid, sid, f"q-{tid}", f"a-{tid}"))
+    db.upsert_turn(_turn(tid, sid, f"q-{tid}", f"a-{tid}"), source_file=None)
     db.add_chunks([SimpleNamespace(turn_id=tid, index=i, text=t) for i, t in enumerate(chunks)])
     if summary:
         db.set_enrichment(tid, summary, ["tag1", "tag2"])
@@ -72,7 +72,7 @@ def test_import_updates_local_with_fuller_peer_turn(tmp_path):
 
     # 상대(src): 같은 turn id 인데 답변이 김 + 청크 2개.
     src = ArchiveDB(tmp_path / "a.db")
-    src.upsert_turn(_turn("t1", "s1", "빌드 고쳐줘", "완성된 긴 답변입니다 도구 실행 결과 포함 상세"))
+    src.upsert_turn(_turn("t1", "s1", "빌드 고쳐줘", "완성된 긴 답변입니다 도구 실행 결과 포함 상세"), source_file=None)
     src.add_chunks([SimpleNamespace(turn_id="t1", index=0, text="완성된 긴 답변 앞"),
                     SimpleNamespace(turn_id="t1", index=1, text="완성된 긴 답변 뒤")])
     src.commit()
@@ -80,7 +80,7 @@ def test_import_updates_local_with_fuller_peer_turn(tmp_path):
 
     # 로컬(dst): 같은 t1 인데 답변이 짧음 + 청크 1개 + 그 스테일 벡터.
     dst = ArchiveDB(tmp_path / "b.db")
-    dst.upsert_turn(_turn("t1", "s1", "빌드 고쳐줘", "짧음"))
+    dst.upsert_turn(_turn("t1", "s1", "빌드 고쳐줘", "짧음"), source_file=None)
     dst.add_chunks([SimpleNamespace(turn_id="t1", index=0, text="짧음")])
     dst.commit()
     vi = VectorIndex(tmp_path / "v.npy", tmp_path / "v.json")
@@ -109,7 +109,7 @@ def test_export_import_preserves_source(tmp_path):
     src = ArchiveDB(tmp_path / "a.db")
     src.upsert_turn(_turn("t1", "s1", "q", "a"), source="codex",
                     source_file="/home/me/.codex/sessions/2026/01/01/rollout-x.jsonl")
-    src.upsert_turn(_turn("t2", "s2", "q", "a"))   # 기본 claude-code
+    src.upsert_turn(_turn("t2", "s2", "q", "a"), source_file=None)   # 기본 claude-code
     src.commit()
     A.export_archive(src, proj, "devA")
 
