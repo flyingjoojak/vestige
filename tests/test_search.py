@@ -25,7 +25,7 @@ class FakeEmbedder:
 def _seed(db, vi, turns):
     e = FakeEmbedder()
     for t in turns:
-        db.upsert_turn(t)
+        db.upsert_turn(t, source_file=None)
         chunks = chunk_turn(t)
         db.add_chunks(chunks)
         keys = [f"{c.turn_id}#{c.index}" for c in chunks]

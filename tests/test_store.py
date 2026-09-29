@@ -17,8 +17,8 @@ def _turn(tid, session="s1", ts="2026-07-24T00:00:00Z", q="질문", a="답변", 
 
 def test_delete_turns_removes_turn_chunks_fts(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="포트 8088 설정", a="백엔드"))
-    db.upsert_turn(_turn("s1:u2", q="남길 질문", a="남길 답변"))
+    db.upsert_turn(_turn("s1:u1", q="포트 8088 설정", a="백엔드"), source_file=None)
+    db.upsert_turn(_turn("s1:u2", q="남길 질문", a="남길 답변"), source_file=None)
     db.add_chunks([Chunk(turn_id="s1:u1", index=0, text="포트 8088 설정")])
     db.commit()
     removed = db.delete_turns(["s1:u1"])
@@ -36,13 +36,13 @@ def test_upsert_turn_never_shrinks_content(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     full = "도구 실행이 끝난 뒤의 완성된 긴 답변입니다 상세 내용 " * 3
     # 1) 완성 턴 저장 → 기록됨(True)
-    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a=full)) is True
+    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a=full), source_file=None) is True
     # 2) 더 짧은 재파싱본(같은 id) → 유지(False), 내용 안 바뀜
-    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a="짧음")) is False
+    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a="짧음"), source_file=None) is False
     assert db.get_turn("s1:u1").answer == full
     # 3) 더 긴 내용 → 갱신(True)
     longer = full + " 추가로 붙은 뒷내용"
-    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a=longer)) is True
+    assert db.upsert_turn(_turn("s1:u1", q="빌드 고쳐줘", a=longer), source_file=None) is True
     db.commit()
     assert db.get_turn("s1:u1").answer == longer
     assert db.keyword_search("뒷내용") != []          # FTS도 완성본과 일치
@@ -62,8 +62,8 @@ def test_vectorindex_remove(tmp_path):
 def test_turn_upsert_idempotent(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     t = _turn("s1:u1", actions=(Action("Edit", "x.py"),))
-    db.upsert_turn(t)
-    db.upsert_turn(t)  # 두 번 넣어도 하나
+    db.upsert_turn(t, source_file=None)
+    db.upsert_turn(t, source_file=None)  # 두 번 넣어도 하나
     db.commit()
     got = db.get_turn("s1:u1")
     assert got is not None
@@ -83,7 +83,7 @@ def test_cursor_roundtrip(tmp_path):
 
 def test_enrichment_additive(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1"))
+    db.upsert_turn(_turn("s1:u1"), source_file=None)
     db.set_enrichment("s1:u1", "요약본", ["태그1", "태그2"])
     db.commit()
     summary, tags = db.get_enrichment("s1:u1")
@@ -123,7 +123,7 @@ def test_migrates_legacy_v0_db_up_to_latest(tmp_path):
     ccols = {r["name"] for r in db.conn.execute("PRAGMA table_info(cursors)")}
     assert "hold_offset" in ccols
     # 업그레이드 후에도 정상 동작(upsert/조회).
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     assert db.get_turn("s1:u1").question == "질문"
 
 
@@ -139,7 +139,7 @@ def test_set_enrichment_returns_rowcount(tmp_path):
     # 매칭되는 turn이 있으면 1, 없으면(예: LLM이 id를 잘못 복사) 0을 돌려줘야
     # enrich 루프가 "완료"로 오인하지 않는다 → summary IS NULL 무한 재시도 방지.
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1"))
+    db.upsert_turn(_turn("s1:u1"), source_file=None)
     db.commit()
     assert db.set_enrichment("s1:u1", "요약", ["t"]) == 1
     assert db.set_enrichment("s1:does-not-exist", "요약", ["t"]) == 0
@@ -148,7 +148,7 @@ def test_set_enrichment_returns_rowcount(tmp_path):
 def test_thread_window(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     for i in range(5):
-        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z"))
+        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z"), source_file=None)
     db.commit()
     thread = db.thread("s1:u2", window=1)
     assert [t.id for t in thread] == ["s1:u1", "s1:u2", "s1:u3"]
@@ -161,10 +161,10 @@ def test_thread_edges_ties_and_session_isolation(tmp_path):
     """
     db = ArchiveDB(tmp_path / "a.db")
     for i in range(5):
-        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z"))
+        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z"), source_file=None)
     for i in range(3):                       # 같은 시각 - id 로 순서가 갈려야 한다
-        db.upsert_turn(_turn(f"s1:t{i}", ts="2026-07-24T00:09:00Z"))
-    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T00:02:00Z"))
+        db.upsert_turn(_turn(f"s1:t{i}", ts="2026-07-24T00:09:00Z"), source_file=None)
+    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T00:02:00Z"), source_file=None)
     db.commit()
 
     ids = lambda tid, w: [t.id for t in db.thread(tid, window=w)]   # noqa: E731
@@ -212,7 +212,7 @@ def test_reconcile_removes_orphan_vectors(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     vi = VectorIndex(tmp_path / "v.npy", tmp_path / "i.json")
     # 턴 2개 + 각 벡터. 이후 한 턴만 turns에서 삭제해 고아 생성.
-    db.upsert_turn(_turn("s1:u1")); db.upsert_turn(_turn("s1:u2")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.upsert_turn(_turn("s1:u2"), source_file=None); db.commit()
     vi.add(["s1:u1#0", "s1:u2#0"], np.eye(2, 3, dtype=np.float32)); vi.save()
     db.conn.execute("DELETE FROM turns WHERE id='s1:u2'"); db.commit()  # 원문만 사라진 고아
     n = reconcile(db, vi, log_fn=lambda m: None)
@@ -226,7 +226,7 @@ def test_reconcile_removes_orphan_vectors(tmp_path):
 def test_hide_unhide_turns(tmp_path):
     """턴 단위 숨김/복원 - 비파괴(turns 는 그대로, hidden_turn_ids 에만 반영)."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.upsert_turn(_turn("s1:u2")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.upsert_turn(_turn("s1:u2"), source_file=None); db.commit()
 
     assert db.hidden_turn_ids() == set()
     db.hide_turns(["s1:u1"])
@@ -239,8 +239,8 @@ def test_hide_unhide_turns(tmp_path):
 
 def test_hide_session_hides_all_its_turns(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", session="s1")); db.upsert_turn(_turn("s1:u2", session="s1"))
-    db.upsert_turn(_turn("s2:u1", session="s2")); db.commit()
+    db.upsert_turn(_turn("s1:u1", session="s1"), source_file=None); db.upsert_turn(_turn("s1:u2", session="s1"), source_file=None)
+    db.upsert_turn(_turn("s2:u1", session="s2"), source_file=None); db.commit()
 
     n = db.hide_session("s1")
     assert n == 2
@@ -252,7 +252,7 @@ def test_hide_session_hides_all_its_turns(tmp_path):
 
 def test_hide_turns_idempotent_and_empty_list(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     assert db.hide_turns(["s1:u1"]) == 1
     assert db.hide_turns(["s1:u1"]) == 0   # 재숨김 - 실제로 새로 숨겨진 건 0개(정확한 카운트)
     assert db.hidden_turn_ids() == {"s1:u1"}
@@ -262,10 +262,10 @@ def test_hide_turns_idempotent_and_empty_list(tmp_path):
 def test_hidden_turns_survive_reupsert(tmp_path):
     """접힘 상태는 turns 재기록(재색인)과 무관한 별도 테이블 — 다시 색인돼도 접힌 채로 남는다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="첫질문")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="첫질문"), source_file=None); db.commit()
     db.hide_turns(["s1:u1"])
 
-    db.upsert_turn(_turn("s1:u1", q="첫질문 더 길어진 재파싱본")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="첫질문 더 길어진 재파싱본"), source_file=None); db.commit()
     assert db.hidden_turn_ids() == {"s1:u1"}
 
 
@@ -290,20 +290,20 @@ def test_folder_create_nest_and_move_rejects_cycle(tmp_path):
 def test_folder_turn_ids_expands_session_dynamically(tmp_path):
     """세션은 참조만 담기므로, 담은 뒤 그 대화가 이어져도 새 턴이 자동 포함된다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", session="s1")); db.upsert_turn(_turn("s2:u1", session="s2"))
+    db.upsert_turn(_turn("s1:u1", session="s1"), source_file=None); db.upsert_turn(_turn("s2:u1", session="s2"), source_file=None)
     db.commit()
     f = db.create_folder("모음")
     db.add_to_folder(f, "session", "s1")
     db.add_to_folder(f, "turn", "s2:u1")
     assert db.folder_turn_ids(f) == {"s1:u1", "s2:u1"}
 
-    db.upsert_turn(_turn("s1:u2", session="s1")); db.commit()   # 세션이 이어짐
+    db.upsert_turn(_turn("s1:u2", session="s1"), source_file=None); db.commit()   # 세션이 이어짐
     assert db.folder_turn_ids(f) == {"s1:u1", "s1:u2", "s2:u1"}
 
 
 def test_folder_turn_ids_includes_descendants(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.upsert_turn(_turn("s2:u1", session="s2")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.upsert_turn(_turn("s2:u1", session="s2"), source_file=None); db.commit()
     parent = db.create_folder("부모")
     child = db.create_folder("자식", parent_id=parent)
     db.add_to_folder(parent, "turn", "s1:u1")
@@ -316,7 +316,7 @@ def test_folder_turn_ids_includes_descendants(tmp_path):
 def test_delete_folder_removes_subtree_but_keeps_turns(tmp_path):
     """폴더 삭제는 '참조'만 지운다 - 대화 원문은 그대로(비파괴)."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     parent = db.create_folder("부모")
     child = db.create_folder("자식", parent_id=parent)
     db.add_to_folder(child, "turn", "s1:u1")
@@ -328,7 +328,7 @@ def test_delete_folder_removes_subtree_but_keeps_turns(tmp_path):
 
 def test_add_to_folder_idempotent_and_multi_folder(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     a, b = db.create_folder("A"), db.create_folder("B")
     db.add_to_folder(a, "turn", "s1:u1")
     db.add_to_folder(a, "turn", "s1:u1")          # 재추가 - 에러 없이 그대로
@@ -344,7 +344,7 @@ def test_folder_session_item_uses_custom_session_title(tmp_path):
     """폴더에 담긴 세션도 사용자가 지은 제목을 따른다(/api/sessions 와 같은 기준).
     안 보면 제목을 바꿔도 폴더 화면에만 옛 제목이 남는다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="첫 질문")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="첫 질문"), source_file=None); db.commit()
     f = db.create_folder("모음")
     db.add_to_folder(f, "session", "s1")
 
@@ -377,6 +377,26 @@ def test_clear_raw_cursors_only_touches_given_session(tmp_path):
     assert db.clear_raw_cursors("claude-code", []) == 0
 
 
+def test_upsert_turn_requires_source_file(tmp_path):
+    """출처를 안 넘기면 저장되지 않는다(#227).
+
+    예전엔 source_file 에 None 기본값이 있어 세 줄이면 임시 스크립트가 실사용 DB 에
+    조용히 행을 넣을 수 있었다 — 실제로 합성 데이터 25개가 그렇게 들어왔고, 들어간 뒤엔
+    UI 가 진짜 대화와 구분하지 못했다.
+
+    울타리가 아니라 표지판이다. 더미 값을 넣으면 뚫린다 — 막는 건 '깜빡한 경로'다.
+    """
+    import pytest
+    db = ArchiveDB(tmp_path / "a.db")
+    with pytest.raises(TypeError):
+        db.upsert_turn(_turn("s1:u1"))               # 출처 없이 저장 시도
+    assert db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == 0
+
+    db.upsert_turn(_turn("s1:u1"), source_file=None)  # 없다고 명시하면 된다
+    db.commit()
+    assert db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == 1
+
+
 def test_folder_session_item_counts_and_headline(tmp_path):
     """세션 항목의 집계·대표 제목. 윈도우 함수 한 방에서 GROUP BY + 대표 turn id 서브쿼리로
     바꾸면서(30.2ms -> 1.9ms) 값이 갈리기 쉬운 자리들이다.
@@ -388,8 +408,8 @@ def test_folder_session_item_counts_and_headline(tmp_path):
     """
     db = ArchiveDB(tmp_path / "a.db")
     for i in range(3):
-        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z", q=f"질문{i}"))
-    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T01:00:00Z", q="전부접힘"))
+        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z", q=f"질문{i}"), source_file=None)
+    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T01:00:00Z", q="전부접힘"), source_file=None)
     db.commit()
     f = db.create_folder("F")
     for ref in ("s1", "s2", "없는세션"):
@@ -419,7 +439,7 @@ def test_folder_session_title_is_order_independent(tmp_path):
     """
     def build(rename_first: bool):
         db = ArchiveDB(tmp_path / f"{rename_first}.db")
-        db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+        db.upsert_turn(_turn("s1:u1", q="원래 첫 질문"), source_file=None); db.commit()
         f = db.create_folder("F")
         if rename_first:
             db.set_session_title("s1", "내가 지은 제목")
@@ -437,7 +457,7 @@ def test_folder_session_title_is_order_independent(tmp_path):
 def test_folder_alias_outranks_session_title_and_both_reset(tmp_path):
     """별칭 > 세션 제목 > 첫 턴 요약 순으로 이기고, 각각 비우면 한 단계씩 되돌아간다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문"), source_file=None); db.commit()
     f = db.create_folder("F")
     db.add_to_folder(f, "session", "s1")
     db.set_item_alias(f, "session", "s1", "폴더용 별칭")
@@ -457,7 +477,7 @@ def test_folder_alias_outranks_session_title_and_both_reset(tmp_path):
 def test_folder_alias_is_per_folder(tmp_path):
     """같은 세션을 두 폴더에 담고 한쪽에만 별칭을 붙이면, 다른 폴더는 영향받지 않는다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="원래 첫 질문"), source_file=None); db.commit()
     f1, f2 = db.create_folder("F1"), db.create_folder("F2")
     db.add_to_folder(f1, "session", "s1"); db.add_to_folder(f2, "session", "s1")
     db.set_session_title("s1", "공통 제목")
@@ -470,7 +490,7 @@ def test_folder_alias_is_per_folder(tmp_path):
 def test_folder_turn_item_ignores_session_title(tmp_path):
     """턴 항목의 제목은 그 턴의 요약/질문이다 — 세션 제목을 바꿔도 영향받지 않는다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", q="턴 자신의 질문")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="턴 자신의 질문"), source_file=None); db.commit()
     f = db.create_folder("F")
     db.add_to_folder(f, "turn", "s1:u1")
     db.set_session_title("s1", "내가 지은 세션 제목")
@@ -536,7 +556,7 @@ def test_folder_items_uses_constant_number_of_queries(tmp_path):
     for si in range(20):
         for ti in range(3):
             db.upsert_turn(_turn(f"s{si}:u{ti}", session=f"s{si}",
-                                 ts=f"2026-07-{si % 28 + 1:02d}T0{ti}:00:00Z", q=f"질문{si}-{ti}"))
+                                 ts=f"2026-07-{si % 28 + 1:02d}T0{ti}:00:00Z", q=f"질문{si}-{ti}"), source_file=None)
     db.commit()
     f = db.create_folder("big")
     for si in range(20):
@@ -556,7 +576,7 @@ def test_folder_items_uses_constant_number_of_queries(tmp_path):
 def test_folder_items_keeps_dangling_refs_visible(tmp_path):
     """없는 턴·세션을 가리키는 항목도 목록에서 빠지지 않는다(빼면 지울 방법이 사라진다)."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     f = db.create_folder("F")
     db.add_to_folder(f, "session", "없는세션")
     db.add_to_folder(f, "turn", "없는턴")
@@ -573,8 +593,8 @@ def test_folder_items_keeps_dangling_refs_visible(tmp_path):
 def test_folder_session_headline_prefers_unfolded_turn(tmp_path):
     """접은 첫 턴이 계속 제목으로 뜨면 접은 의미가 없다 — /api/sessions 와 같은 기준."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1", ts="2026-07-24T00:00:00Z", q="접을 첫 질문"))
-    db.upsert_turn(_turn("s1:u2", ts="2026-07-24T01:00:00Z", q="두 번째 질문"))
+    db.upsert_turn(_turn("s1:u1", ts="2026-07-24T00:00:00Z", q="접을 첫 질문"), source_file=None)
+    db.upsert_turn(_turn("s1:u2", ts="2026-07-24T01:00:00Z", q="두 번째 질문"), source_file=None)
     db.commit()
     f = db.create_folder("F")
     db.add_to_folder(f, "session", "s1")
@@ -599,7 +619,7 @@ def test_reorder_folder_pushes_unlisted_items_behind(tmp_path):
     """
     db = ArchiveDB(tmp_path / "a.db")
     for i in range(4):
-        db.upsert_turn(_turn(f"s1:u{i}"))
+        db.upsert_turn(_turn(f"s1:u{i}"), source_file=None)
     db.commit()
     f = db.create_folder("F")
     for i in range(4):
@@ -617,7 +637,7 @@ def test_reorder_folder_pushes_unlisted_items_behind(tmp_path):
 
 def test_reorder_folder_reports_zero_when_items_gone(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     f = db.create_folder("F")
     assert db.reorder_folder(f, [("turn", "없는턴")]) == 0
 
@@ -625,7 +645,7 @@ def test_reorder_folder_reports_zero_when_items_gone(tmp_path):
 def test_remove_from_folder_reports_rowcount(tmp_path):
     """0을 돌려줘야 '눌렀는데 아무 일도 안 일어남'을 화면이 구분할 수 있다."""
     db = ArchiveDB(tmp_path / "a.db")
-    db.upsert_turn(_turn("s1:u1")); db.commit()
+    db.upsert_turn(_turn("s1:u1"), source_file=None); db.commit()
     f = db.create_folder("F")
     db.add_to_folder(f, "turn", "s1:u1")
     assert db.remove_from_folder(f, "turn", "s1:u1") == 1

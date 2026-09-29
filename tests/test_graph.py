@@ -18,8 +18,8 @@ def _turn(tid, session="s1", q="질문"):
 def test_hidden_turn_excluded_from_points(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     vi = VectorIndex(tmp_path / "v.npy", tmp_path / "i.json")
-    db.upsert_turn(_turn("s1:u1", q="숨길 턴")); db.upsert_turn(_turn("s1:u2", q="남는 턴 A"))
-    db.upsert_turn(_turn("s1:u3", q="남는 턴 B")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="숨길 턴"), source_file=None); db.upsert_turn(_turn("s1:u2", q="남는 턴 A"), source_file=None)
+    db.upsert_turn(_turn("s1:u3", q="남는 턴 B"), source_file=None); db.commit()
     vi.add(["s1:u1#0", "s1:u2#0", "s1:u3#0"],
            np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32))
 
@@ -34,8 +34,8 @@ def test_hidden_turn_vector_does_not_skew_projection(tmp_path):
     db = ArchiveDB(tmp_path / "a.db")
     vi_with_hidden = VectorIndex(tmp_path / "v1.npy", tmp_path / "i1.json")
     vi_without = VectorIndex(tmp_path / "v2.npy", tmp_path / "i2.json")
-    db.upsert_turn(_turn("s1:u1", q="숨길 턴")); db.upsert_turn(_turn("s1:u2", q="남는 턴 A"))
-    db.upsert_turn(_turn("s1:u3", q="남는 턴 B")); db.commit()
+    db.upsert_turn(_turn("s1:u1", q="숨길 턴"), source_file=None); db.upsert_turn(_turn("s1:u2", q="남는 턴 A"), source_file=None)
+    db.upsert_turn(_turn("s1:u3", q="남는 턴 B"), source_file=None); db.commit()
     mat = np.array([[5, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32)   # u1 이 극단값 → 남아있으면 좌표를 크게 흔듦
     vi_with_hidden.add(["s1:u1#0", "s1:u2#0", "s1:u3#0"], mat)
     vi_without.add(["s1:u2#0", "s1:u3#0"], mat[1:])
