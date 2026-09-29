@@ -695,6 +695,16 @@ def test_raw_size_cached_reuses_value_within_ttl(monkeypatch):
     assert len(calls) == 2
 
 
+class _FreeLock:
+    """항상 잡히는 색인 락 스텁(테스트가 다른 프로세스의 실행 여부에 좌우되지 않게)."""
+
+    def acquire(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        pass
+
+
 def test_sync_errors_reach_the_index_status_payload(tmp_path, monkeypatch):
     """동기화 오류가 만들어지는 곳부터 /api/index/status 응답까지 배선이 살아있는가.
 
@@ -712,10 +722,14 @@ def test_sync_errors_reach_the_index_status_payload(tmp_path, monkeypatch):
 
     # **실제 호출 경로**를 태운다. _capture_log 를 직접 부르면 web.py 의 배선(key= 인자)을
     # 안 타서, 그 인자를 빼먹어도 테스트가 통과한다(실측).
-    from vestige import indexer as I
+    from vestige import indexer as I, proclock as P
     monkeypatch.setattr(A, "import_archives", fake_import)
     monkeypatch.setattr(I, "has_new_data", lambda db: False)      # 함수 안에서 import 하므로 원본 모듈을 패치
     monkeypatch.setattr(I, "reconcile", lambda *a, **k: 0)
+    # 크로스-프로세스 색인 락은 이 테스트의 관심사가 아니다. 스텁하지 않으면 **Vestige 가
+    # 실행 중일 때** 그 앱이 락을 쥐고 있어 _run_incremental 이 오류를 만드는 지점에
+    # 닿기도 전에 조기 반환한다 → 거짓 실패. CI 는 앱이 없어 통과하므로 로컬에서만 깨졌다.
+    monkeypatch.setattr(P, "IndexLock", lambda *a, **k: _FreeLock())
     monkeypatch.setattr(web, "make_index", lambda: _FakeVI())
     web._autoindex_state["sync_errors"] = []
     web._autoindex_state["errors"] = []

@@ -56,14 +56,15 @@ def export_archive(db, projects_dir: str | Path, did: str) -> int:
     with open(tmp, "w", encoding="utf-8") as f:
         for r in db.conn.execute(
             "SELECT id,session_id,uuid,parent_uuid,timestamp,project,question,answer,actions,summary,tags,"
-            "source,source_file "
+            "source,source_file,queued "
             "FROM turns",
         ):
-            # t[11]=source, t[12]=source_file 를 뒤에 append(옛 스냅샷은 11칸이라 import 에서 길이로 판별).
+            # t[11]=source, t[12]=source_file, t[13]=queued 를 뒤에 append
+            # (옛 스냅샷은 11칸이라 import 에서 길이로 판별 — 칸은 끝에만 늘린다).
             rec = {
                 "t": [r["id"], r["session_id"], r["uuid"], r["parent_uuid"], r["timestamp"],
                       r["project"], r["question"], r["answer"], r["actions"], r["summary"], r["tags"],
-                      r["source"], r["source_file"]],
+                      r["source"], r["source_file"], r["queued"]],
                 "c": chunks.get(r["id"], []),
             }
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -114,8 +115,8 @@ def _checked(rec: dict) -> dict:
     if "t" not in rec:
         return rec                            # 모르는 줄 종류 — 호출부가 건너뛴다
     t = rec["t"]
-    if not isinstance(t, list) or not (11 <= len(t) <= 13):
-        raise ValueError(f"턴 레코드가 11~13칸이어야 하는데 {len(t) if isinstance(t, list) else t!r}")
+    if not isinstance(t, list) or not (11 <= len(t) <= 14):
+        raise ValueError(f"턴 레코드가 11~14칸이어야 하는데 {len(t) if isinstance(t, list) else t!r}")
     # 턴 id 는 보통 문자열이지만 옛 스냅샷에 정수로 든 것이 있다(테스트가 그 경우를 지킨다).
     if isinstance(t[0], bool) or not isinstance(t[0], (str, int)) or t[0] == "":
         raise ValueError(f"턴 id 가 이상함: {t[0]!r}")
@@ -204,7 +205,9 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     src_file = t[12] if len(t) > 12 else None
                     turn = Turn(id=t[0], session_id=t[1], uuid=t[2], parent_uuid=t[3],
                                 timestamp=t[4], project=t[5], question=t[6], answer=t[7],
-                                actions=_actions_from_json(t[8]), source=src or "claude-code")
+                                actions=_actions_from_json(t[8]), source=src or "claude-code",
+                                # 옛 스냅샷엔 없다 → 모르면 거짓. 안 실으면 동기화가 배지를 지운다.
+                                queued=bool(t[13]) if len(t) > 13 else False)
                     db.upsert_turn(turn, source=src or "claude-code", source_file=src_file)  # FTS 포함(신규거나 더 완성 → 기록)
                     if t[9]:                            # summary → 정제도 함께 보존
                         db.set_enrichment(tid, t[9], json.loads(t[10]) if t[10] else [])
