@@ -757,24 +757,36 @@ class ArchiveDB:
             " WHERE fi.folder_id=? AND fi.kind='turn'", (folder_id,)).fetchall()
 
         # 세션 항목: 담긴 건 참조뿐이라 개수·대표 제목을 현재 기준으로 매번 계산한다.
-        # PARTITION BY 를 fi.ref 로 잡는 이유 — 턴이 0개인 참조는 t.* 가 NULL 인데, t.session_id 로
-        # 묶으면 그 NULL 들이 한 파티션에 뭉쳐 개수가 틀어진다. COUNT(t.id) 도 같은 이유(NULL 제외).
+        #
+        # 집계(GROUP BY)와 대표 턴 고르기를 나눈다. 예전엔 윈도우 함수 한 방으로 둘 다 했는데,
+        # ROW_NUMBER 의 ORDER BY 가 식이라 인덱스를 못 타 세션의 모든 턴을 임시 B-tree 로
+        # 정렬했다(세션 90개 폴더에서 30.2ms). 서브쿼리로는 **대표 턴의 id 만** 고르고
+        # 본문은 바깥에서 한 번 조인한다 — 1.86ms(16배). 쿼리 수는 1회 그대로다.
+        # (본문 컬럼까지 서브쿼리로 끌면 서브쿼리를 컬럼마다 돌아 이득이 사라진다.)
+        #
+        # GROUP BY 를 fi.ref 로 잡는 이유 — 턴이 0개인 참조는 t.* 가 NULL 인데, t.session_id 로
+        # 묶으면 그 NULL 들이 한 그룹에 뭉쳐 개수가 틀어진다. COUNT(t.id) 도 같은 이유(NULL 제외).
         sess_rows = self.conn.execute(
-            "SELECT ref, added_at, alias, position, summary, question, n, n_hidden, ended, title FROM ("
-            "  SELECT fi.ref, fi.added_at, fi.alias, fi.position, t.summary, t.question, st.title,"
-            "         COUNT(t.id) OVER (PARTITION BY fi.ref) AS n,"
-            "         SUM(h.turn_id IS NOT NULL) OVER (PARTITION BY fi.ref) AS n_hidden,"
-            "         MAX(t.timestamp) OVER (PARTITION BY fi.ref) AS ended,"
+            "SELECT g.ref, g.added_at, g.alias, g.position, g.n, g.n_hidden, g.ended, g.title,"
+            "       ht.summary, ht.question FROM ("
+            "  SELECT fi.ref, fi.added_at, fi.alias, fi.position, st.title,"
+            "         COUNT(t.id) AS n,"
+            "         SUM(h.turn_id IS NOT NULL) AS n_hidden,"
+            "         MAX(t.timestamp) AS ended,"
             # 대표 헤드라인은 '접히지 않은' 턴에서 먼저 고른다(api_sessions 와 동일 기준 —
-            # 접은 첫 턴이 계속 제목으로 뜨면 접은 의미가 없다). 턴이 없는 참조는 뒤로.
-            "         ROW_NUMBER() OVER (PARTITION BY fi.ref"
-            "           ORDER BY (t.id IS NULL), (h.turn_id IS NOT NULL), t.timestamp, t.id) AS rn"
+            # 접은 첫 턴이 계속 제목으로 뜨면 접은 의미가 없다). 정렬 기준을 바꾸면 두 화면의
+            # 제목이 갈리므로 api_sessions 와 함께 바꿔야 한다.
+            "         (SELECT t2.id FROM turns t2"
+            "            LEFT JOIN hidden_turns h2 ON h2.turn_id = t2.id"
+            "           WHERE t2.session_id = fi.ref"
+            "           ORDER BY (h2.turn_id IS NOT NULL), t2.timestamp, t2.id LIMIT 1) AS head_id"
             "    FROM folder_items fi"
             "    LEFT JOIN turns t ON t.session_id = fi.ref"
             "    LEFT JOIN hidden_turns h ON h.turn_id = t.id"
             "    LEFT JOIN session_titles st ON st.session_id = fi.ref"
             "   WHERE fi.folder_id=? AND fi.kind='session'"
-            ") WHERE rn = 1", (folder_id,)).fetchall()
+            "   GROUP BY fi.ref"
+            ") g LEFT JOIN turns ht ON ht.id = g.head_id", (folder_id,)).fetchall()
 
         out = []
         for r in turn_rows:
