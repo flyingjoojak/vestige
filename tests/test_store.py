@@ -377,6 +377,41 @@ def test_clear_raw_cursors_only_touches_given_session(tmp_path):
     assert db.clear_raw_cursors("claude-code", []) == 0
 
 
+def test_folder_session_item_counts_and_headline(tmp_path):
+    """세션 항목의 집계·대표 제목. 윈도우 함수 한 방에서 GROUP BY + 대표 turn id 서브쿼리로
+    바꾸면서(30.2ms -> 1.9ms) 값이 갈리기 쉬운 자리들이다.
+
+    - 접힌 턴도 개수에 남는다(빼면 전부 접은 세션이 목록에서 사라져 펼칠 길이 없다)
+    - 대표 제목은 '접히지 않은' 턴에서 먼저 고른다 — api_sessions 와 같은 기준
+    - 전부 접힌 세션은 어쩔 수 없이 접힌 턴에서 고른다
+    - 턴이 0개인 참조(유령)는 개수 0 으로 남는다(행 자체가 사라지면 뺄 방법이 없다)
+    """
+    db = ArchiveDB(tmp_path / "a.db")
+    for i in range(3):
+        db.upsert_turn(_turn(f"s1:u{i}", ts=f"2026-07-24T00:0{i}:00Z", q=f"질문{i}"))
+    db.upsert_turn(_turn("s2:u0", session="s2", ts="2026-07-24T01:00:00Z", q="전부접힘"))
+    db.commit()
+    f = db.create_folder("F")
+    for ref in ("s1", "s2", "없는세션"):
+        db.add_to_folder(f, "session", ref)
+
+    by = {i["ref"]: i for i in db.folder_items(f)}
+    assert by["s1"]["count"] == 3 and by["s1"]["hidden"] is False
+    assert by["s1"]["headline"] == "질문0"          # 시간순 첫 턴
+
+    db.hide_turns(["s1:u0"]); db.commit()
+    by = {i["ref"]: i for i in db.folder_items(f)}
+    assert by["s1"]["count"] == 3                   # 접어도 개수에는 남는다
+    assert by["s1"]["hidden"] is False              # 일부만 접힘 → 세션은 '접힘' 아님
+    assert by["s1"]["headline"] == "질문1"          # 접힌 첫 턴은 제목에서 밀린다
+
+    db.hide_turns(["s2:u0"]); db.commit()
+    by = {i["ref"]: i for i in db.folder_items(f)}
+    assert by["s2"]["hidden"] is True               # 전 턴이 접히면 세션도 '접힘'
+    assert by["s2"]["headline"] == "전부접힘"       # 그래도 제목은 그중에서 고른다
+    assert by["없는세션"]["count"] == 0             # 유령 참조도 목록에 남는다
+
+
 def test_folder_session_title_is_order_independent(tmp_path):
     """'제목 바꾸고 담기'와 '담고 제목 바꾸기'의 결과가 같아야 한다.
 
