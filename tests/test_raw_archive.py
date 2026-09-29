@@ -704,3 +704,44 @@ def test_archive_bytes_are_never_touched_by_indexing(tmp_path, monkeypatch):
     R._idx_path(out).unlink()
     R.read_mirror_checked("claude-code", sid)            # 백필도 마찬가지
     assert out.read_bytes() == before
+
+
+def test_old_archive_gets_backfilled_before_new_member_is_indexed(tmp_path, monkeypatch):
+    """색인이 없던 보존본에 새 멤버가 붙을 때, 앞부분을 먼저 색인해야 한다.
+
+    이걸 빠뜨리면 업그레이드 직후 첫 append 가 '마지막 조각 하나'짜리 색인을 만들고,
+    읽기가 그 색인을 믿어 앞 전부를 잃은 채 intact=True 로 보고한다. 실측으로 24바이트 중
+    8바이트만 복원됐다 — 이 저장소가 두 번 다시 하지 않기로 한 실패다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n'])
+    R._idx_path(out).unlink()                       # 옛 사용자엔 색인이 없다
+
+    f = tmp_path / f"{sid}.jsonl"                   # 업그레이드 후 대화가 늘어난다
+    f.write_bytes(b'{"a":1}\n{"b":2}\n{"c":3}\n')
+    R.mirror_file(db, f, "claude-code")
+
+    assert len(R._idx_read(out)) == 3               # 앞 둘도 색인됐다
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is True
+    assert data == b'{"a":1}\n{"b":2}\n{"c":3}\n'   # 한 줄도 잃지 않는다
+
+
+def test_partial_index_is_not_reported_as_intact(tmp_path, monkeypatch):
+    """색인이 파일을 다 안 덮으면 온전하다고 말하지 않는다.
+
+    앞이나 가운데가 색인 밖이면 그만큼을 통째로 못 읽는다. 그걸 intact=True 로 보고하면
+    UI 가 '복구 완료'라고 말하면서 데이터를 잃는다.
+    """
+    monkeypatch.setattr(R.C, "RAW_ARCHIVE_DIR", tmp_path / "raw")
+    db = _db(tmp_path)
+    sid = "019e80dc-1754-7422-b72f-2d176635efb2"
+    out = _mirror_n(db, tmp_path, sid, [b'{"a":1}\n', b'{"b":2}\n', b'{"c":3}\n'])
+    spans = R._idx_read(out)
+    R._idx_path(out).write_text(f"{spans[-1][0]} {spans[-1][1]}\n", encoding="utf-8")   # 마지막만 남김
+
+    data, intact = R.read_mirror_checked("claude-code", sid)
+    assert intact is False                          # 앞이 색인 밖 → 온전하지 않다
+    assert data == b'{"c":3}\n'

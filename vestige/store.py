@@ -322,6 +322,7 @@ class ArchiveDB:
     def __init__(self, path: str | Path | None = None):
         path = Path(path) if path is not None else DB_PATH   # 호출 시점에 DB_PATH 조회(설정/테스트 반영)
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path        # 같은 DB 를 새 커넥션으로 다시 열 때 쓴다(영속성 검증 등)
         self.conn = sqlite3.connect(str(path), timeout=30.0)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA busy_timeout=60000")
@@ -747,15 +748,19 @@ class ArchiveDB:
         """
         if parent_id is not None and parent_id in self.folder_descendants(folder_id):
             return False
-        self.conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (parent_id, folder_id))
+        # updated_at 을 같이 찍어야 이동이 다른 기기에 전해진다(#233). 안 찍으면 승자 판정이
+        # 옛 값을 보고 "상대가 더 낡음"으로 판단해 폴더 이동이 영원히 동기화되지 않는다.
+        now = time.time()
+        self.conn.execute("UPDATE folders SET parent_id=?, updated_at=? WHERE id=?",
+                          (parent_id, now, folder_id))
 
         sibs = [r["id"] for r in self.conn.execute(
             "SELECT id FROM folders WHERE parent_id IS ? AND id<>? "
             "ORDER BY (position IS NULL), position, name, id", (parent_id, folder_id))]
         at = sibs.index(before_id) if before_id in sibs else len(sibs)
         sibs.insert(at, folder_id)
-        self.conn.executemany("UPDATE folders SET position=? WHERE id=?",
-                              [(i, fid) for i, fid in enumerate(sibs, start=1)])
+        self.conn.executemany("UPDATE folders SET position=?, updated_at=? WHERE id=?",
+                              [(i, now, fid) for i, fid in enumerate(sibs, start=1)])
         self.conn.commit()
         return True
 
@@ -989,7 +994,10 @@ class ArchiveDB:
         부모는 uid 로 받아 로컬 id 로 옮긴다. 상대에만 있는 부모는 아직 없을 수 있어
         그때는 최상위로 두고, 부모가 도착한 다음 회차에 제자리를 찾는다.
         """
-        r = self.conn.execute("SELECT id, updated_at FROM folders WHERE uid=?", (uid,)).fetchone()
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
+        r = self.conn.execute("SELECT id, updated_at, parent_id FROM folders WHERE uid=?",
+                              (uid,)).fetchone()
         gone = self.conn.execute("SELECT at FROM folder_removed WHERE uid=?", (uid,)).fetchone()
         if gone and (gone["at"] or 0.0) >= at:
             return False                       # 여기서 지운 게 더 최신 — 되살리지 않는다
@@ -999,7 +1007,11 @@ class ArchiveDB:
                 "INSERT INTO folders(name, parent_id, created_at, position, uid, updated_at)"
                 " VALUES(?,?,?,?,?,?)", (name, pid, at, position, uid, at))
             return True
-        if (r["updated_at"] or 0.0) >= at:
+        # 같은 시각이라도 **부모를 아직 못 붙인 상태면 다시 시도한다.** 안 그러면 자식이 부모보다
+        # 먼저 도착했을 때 최상위로 파킹된 채 영구 고아가 된다 — 발신측이 그 폴더를 다시
+        # 건드리지 않는 한 at 이 그대로라 '이미 반영됨'으로 걸러지기 때문이다(실측).
+        needs_parent = parent_uid is not None and r["parent_id"] is None and pid is not None
+        if (r["updated_at"] or 0.0) >= at and not needs_parent:
             return False
         self.conn.execute("UPDATE folders SET name=?, parent_id=?, position=?, updated_at=? WHERE id=?",
                           (name, pid, position, at, r["id"]))
@@ -1007,6 +1019,8 @@ class ArchiveDB:
 
     def apply_folder_item(self, folder_uid: str, kind: str, ref: str,
                           alias: str | None, position: float | None, at: float) -> bool:
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
         fid = self._folder_id_by_uid(folder_uid)
         if fid is None:
             return False                       # 폴더가 아직 안 왔다 — 다음 회차에 붙는다
@@ -1029,6 +1043,8 @@ class ArchiveDB:
         return True
 
     def apply_folder_removed(self, uid: str, at: float) -> bool:
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
         r = self.conn.execute("SELECT id, updated_at FROM folders WHERE uid=?", (uid,)).fetchone()
         self.conn.execute("INSERT INTO folder_removed(uid, at) VALUES(?,?) "
                           "ON CONFLICT(uid) DO UPDATE SET at=MAX(at, excluded.at)", (uid, at))
@@ -1040,6 +1056,8 @@ class ArchiveDB:
         return True
 
     def apply_folder_item_removed(self, folder_uid: str, kind: str, ref: str, at: float) -> bool:
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
         self.conn.execute(
             "INSERT INTO folder_item_removed(folder_uid, kind, ref, at) VALUES(?,?,?,?) "
             "ON CONFLICT(folder_uid, kind, ref) DO UPDATE SET at=MAX(at, excluded.at)",
@@ -1056,6 +1074,17 @@ class ArchiveDB:
                           (fid, kind, ref))
         return True
 
+    # 미래 시각 레코드는 **자르지 않고 버린다.**
+    #
+    # 기기 하나가 9999999999 같은 값을 보내면 상대의 접힘·제목·폴더를 영구히 고정할 수 있다
+    # (실측: 사용자가 펼쳐도 재동기화마다 다시 접혔다). 처음엔 now+하루로 잘랐는데 그게 더
+    # 나빴다 — 매 import 마다 클램프가 새로 계산돼 사용자의 조작을 **항상** 이긴다.
+    # 미래를 주장하는 기록은 믿을 근거가 없으니 반영하지 않는 쪽이 맞다.
+    _CLOCK_SKEW = 86400.0      # 하루. 기기 시계 오차는 이만큼까지 봐준다.
+
+    def _future(self, at: float) -> bool:
+        return float(at) > time.time() + self._CLOCK_SKEW
+
     def sync_title_rows(self) -> list[tuple[str, str, float]]:
         """(session_id, title, updated_at). title='' 은 '지웠다'는 기록이라 함께 내보낸다."""
         return [(r["session_id"], r["title"], r["updated_at"] or 0.0)
@@ -1063,6 +1092,8 @@ class ArchiveDB:
 
     def apply_title(self, session_id: str, title: str, at: float) -> bool:
         """상대 기록이 더 새로우면 반영. 반영했으면 True."""
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
         r = self.conn.execute(
             "SELECT updated_at FROM session_titles WHERE session_id=?", (session_id,)).fetchone()
         if r is not None and (r["updated_at"] or 0.0) >= at:
@@ -1089,6 +1120,8 @@ class ArchiveDB:
 
     def apply_fold(self, turn_id: str, folded: int, at: float) -> bool:
         """상대 기록이 더 새로우면 반영. 반영했으면 True."""
+        if self._future(at):
+            return False        # 미래를 주장하는 기록은 반영하지 않는다
         if self._fold_at(turn_id) >= at:
             return False
         if folded:

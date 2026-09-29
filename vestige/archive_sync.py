@@ -109,8 +109,14 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
         if p.stem == my_did:
             continue   # 내 export는 건너뜀
         try:
-            with open(p, encoding="utf-8") as f:
-                for line in f:
+            fh = open(p, encoding="utf-8")
+        except Exception as e:  # noqa: BLE001 — 한 파일 못 열어도 다른 기기 것은 읽는다
+            log_fn(f"ERROR 아카이브 열기 실패 {p.name}: {e}")
+            continue
+        bad_lines = 0
+        with fh:
+            for lineno, line in enumerate(fh, 1):
+                try:
                     line = line.strip()
                     if not line:
                         continue
@@ -178,9 +184,18 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                             (f"{tid}#{idx}", tid, idx, text))
                     have.add(tid)
                     added += 1
-        except Exception as e:  # noqa: BLE001 — 한 파일 실패가 전체를 막지 않게
-            log_fn(f"아카이브 import 실패 {p.name}: {e}")
-    if added:
+                except Exception as e:  # noqa: BLE001
+                    # **줄 단위로 잡는다.** 파일 단위로 잡으면 깨진 한 줄이 그 뒤 전부를
+                    # 버린다 — 실측으로 5턴 중 3턴이 조용히 사라졌다.
+                    bad_lines += 1
+                    if bad_lines <= 3:
+                        log_fn(f"ERROR 아카이브 {p.name}:{lineno} 건너뜀: {e}")
+        if bad_lines:
+            log_fn(f"ERROR 아카이브 {p.name} — 읽을 수 없는 줄 {bad_lines}개를 건너뛰었어요")
+    # meta(제목·접힘·폴더)도 커밋 대상이다. added 만 보면 '새 턴 없이 정리 상태만 온 회차'가
+    # 통째로 롤백된다 — 커넥션이 닫힐 때 미완료 트랜잭션이 되돌려지기 때문이다.
+    # 앱은 매 호출마다 새 커넥션을 열어서, 실사용에서는 사실상 항상 이 경우였다.
+    if added or meta:
         db.commit()
     if removed_any and vi is not None:
         vi.save()

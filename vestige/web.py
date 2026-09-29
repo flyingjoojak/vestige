@@ -132,7 +132,9 @@ def _run_incremental(quick: bool = False) -> bool:
         # 기기 간 아카이브 병합: 다른 기기가 보존한 세션(삭제된 원본 포함)을 먼저 가져온다.
         # 새로 들어온 청크는 아래 backfill이 활성 모델로 임베딩(chunk_count>len(vi)이 됨).
         with contextlib.suppress(Exception):
-            import_archives(db, C.PROJECTS_DIR, device_id(db), vi=vi, log_fn=lambda m: None)
+            # 로그를 버리면 동기화가 조용히 실패한다 — 색인 상태에 흘려보낸다('ERROR ' 접두만 UI 도달).
+            import_archives(db, C.PROJECTS_DIR, device_id(db), vi=vi,
+                            log_fn=_capture_log(_autoindex_state))
         new = has_new_data(db)
         # 활성 저장소에 빠진 청크가 있으면(백엔드 전환·유실·아카이브 import) 새 대화가 없어도 자가복구한다.
         chunk_count = db.conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
@@ -1699,11 +1701,15 @@ def api_archive_sync():
     db = ArchiveDB()
     did = device_id(db)
     vi = make_index()   # 더 완성된 상대 턴으로 갱신 시 스테일 벡터 제거용(backfill 이 재임베딩)
-    imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=lambda m: None)
+    notes: list[str] = []
+    imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=notes.append)
     exported = export_archive(db, C.PROJECTS_DIR, did)
     if imported and not _autoindex_state.get("running") and not _reindex_state.get("running"):
         threading.Thread(target=_run_incremental, daemon=True).start()   # 가져온 청크 임베딩
-    return {"ok": True, "imported": imported, "exported": exported}
+    # 건너뛴 줄이 있으면 사용자에게 알린다 — ok:true 만 주면 부분 실패가 묻힌다.
+    warn = [m for m in notes if m.startswith("ERROR ")]
+    return {"ok": True, "imported": imported, "exported": exported,
+            "warnings": [m[6:] for m in warn]}
 
 
 @app.post("/api/verify-enrich")
