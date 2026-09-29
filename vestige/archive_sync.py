@@ -10,6 +10,7 @@ archive.db(SQLite)는 직접 동기화하면 손상되므로, 세션 동기 설�
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -121,35 +122,48 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     if not line:
                         continue
                     rec = json.loads(line)
+                    # 레코드 하나는 전부 반영되거나 하나도 안 되거나여야 한다.
+                    # 줄 단위 try 만으로는 부족했다 — 턴을 upsert 한 뒤 청크 배열에서 예외가 나면
+                    # 턴은 '완전한' 상태로 커밋되고 청크만 반쪽이 된다. 그러면 upsert_turn 의
+                    # 완성도 비교가 '이미 더 완전함'으로 보고 스킵해 **재동기화로도 영영 안 고쳐진다**
+                    # (실측: 20회 재동기화해도 청크가 1개로 고정).
+                    db.conn.execute("SAVEPOINT rec")
                     # 정리 상태(#233) — '늦게 바꾼 쪽이 이김'. 잘못 퍼져도 되돌릴 수 있어서
                     # 턴 삭제(#228)처럼 보수적으로 갈 이유가 없다.
                     if "title" in rec:
                         sid, title, at = rec["title"]
                         meta += db.apply_title(sid, title, float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     if "fold" in rec:
                         tid, folded, at = rec["fold"]
                         meta += db.apply_fold(tid, int(folded), float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     # 폴더는 uid 로 오간다(#233). 순서가 문제인데 — 항목/부모가 폴더보다
                     # 먼저 와도 그 회차엔 붙지 않고 다음 회차에 제자리를 찾는다.
                     if "folder" in rec:
                         uid, nm, pu, pos, at = rec["folder"]
                         meta += db.apply_folder(uid, nm, pu, pos, float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     if "fitem" in rec:
                         fu, kind, ref, alias, pos, at = rec["fitem"]
                         meta += db.apply_folder_item(fu, kind, ref, alias, pos, float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     if "folder_x" in rec:
                         uid, at = rec["folder_x"]
                         meta += db.apply_folder_removed(uid, float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     if "fitem_x" in rec:
                         fu, kind, ref, at = rec["fitem_x"]
                         meta += db.apply_folder_item_removed(fu, kind, ref, float(at))
+                        db.conn.execute("RELEASE rec")
                         continue
                     if "t" not in rec:
+                        db.conn.execute("RELEASE rec")
                         continue            # 모르는 줄 종류(더 새 버전) — 건너뛴다
                     t = rec["t"]
                     tid = t[0]
@@ -159,6 +173,7 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     if existing:
                         peer_n = len(t[6] or "") + len(t[7] or "") + len(t[8] or "")
                         if peer_n <= (db.turn_content_len(tid) or 0):
+                            db.conn.execute("RELEASE rec")
                             continue
                     # source/source_file 는 신 스냅샷에만 있음(옛 스냅샷 t 는 11칸) → 길이로 판별.
                     src = t[11] if len(t) > 11 else None
@@ -184,7 +199,11 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                             (f"{tid}#{idx}", tid, idx, text))
                     have.add(tid)
                     added += 1
+                    db.conn.execute("RELEASE rec")
                 except Exception as e:  # noqa: BLE001
+                    with contextlib.suppress(Exception):
+                        db.conn.execute("ROLLBACK TO rec")
+                        db.conn.execute("RELEASE rec")
                     # **줄 단위로 잡는다.** 파일 단위로 잡으면 깨진 한 줄이 그 뒤 전부를
                     # 버린다 — 실측으로 5턴 중 3턴이 조용히 사라졌다.
                     bad_lines += 1

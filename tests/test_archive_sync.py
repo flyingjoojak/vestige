@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from types import SimpleNamespace
 
 from vestige import archive_sync as A
@@ -375,3 +376,107 @@ def test_one_broken_line_does_not_drop_the_rest(tmp_path):
     # 깨진 줄 하나만 빠지고 나머지는 전부 들어와야 한다(A 가 가진 만큼).
     assert fresh.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == want
     assert any(m.startswith("ERROR ") for m in msgs)                             # 조용하지 않다
+
+
+def test_broken_record_leaves_no_half_written_state(tmp_path):
+    """레코드 하나는 전부 반영되거나 하나도 안 되거나여야 한다.
+
+    줄 단위 try 만으로는 부족했다 — 턴을 upsert 한 뒤 청크 배열에서 예외가 나면 턴은
+    '완전한' 상태로 커밋되고 청크만 반쪽이 된다. 그러면 upsert_turn 의 완성도 비교가
+    '이미 더 완전함'으로 보고 스킵해 **재동기화로도 영영 안 고쳐진다**(실측: 20회 돌려도
+    청크가 1개로 고정). SAVEPOINT 로 레코드 단위를 묶어야 한다.
+    """
+    import json
+    a, b, proj = _two_devices(tmp_path)
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    bad = {"t": ["s9:u1", "s9", "u1", "", "2026-01-01", "p", "질문" * 10, "답변" * 10,
+                 "[]", None, None, "claude-code", None],
+           "c": [[0, "청크0"], [1, "청크1", "칸이 하나 많다"], [2, "청크2"]]}
+    ok = {"t": ["s9:u2", "s9", "u2", "", "2026-01-01", "p", "q2", "a2",
+                "[]", None, None, "claude-code", None], "c": [[0, "청크"]]}
+    (d / "peer.ndjson").write_text(
+        json.dumps(bad, ensure_ascii=False) + "\n" + json.dumps(ok, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    A.import_archives(b, proj, "devB", log_fn=lambda *_: None)
+    fresh = ArchiveDB(b.path)
+    q = fresh.conn.execute
+    assert q("SELECT 1 FROM turns WHERE id=?", ("s9:u1",)).fetchone() is None    # 흔적 없음
+    assert q("SELECT COUNT(*) FROM chunks WHERE turn_id=?", ("s9:u1",)).fetchone()[0] == 0
+    assert q("SELECT 1 FROM turns WHERE id=?", ("s9:u2",)).fetchone() is not None  # 정상은 들어감
+
+
+def test_reparent_of_already_parented_folder_propagates(tmp_path):
+    """**이미 부모가 있는** 폴더를 다른 부모로 옮기는 경우.
+
+    앞의 test_folder_move_after_first_sync_propagates 는 허수였다 — '최상위 → 부모 밑'
+    이동이라 apply_folder 의 needs_parent 우회(parent_id IS NULL)가 먼저 걸려,
+    move_folder 의 updated_at 스탬프를 빼도 통과했다. 두 수정이 서로의 부재를 가렸다.
+    여기서는 parent_id 가 이미 차 있어 우회가 안 걸리므로 updated_at 만으로 판정된다.
+    """
+    a, b, proj = _two_devices(tmp_path)
+    p1, p2 = a.create_folder("부모1"), a.create_folder("부모2")
+    kid = a.create_folder("자식", parent_id=p1)
+    b = _sync(a, "devA", b, "devB", proj)
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["자식"]["parent_id"] == by["부모1"]["id"]     # 먼저 부모1 밑에 자리잡는다
+
+    a.move_folder(kid, p2)                                  # 부모1 -> 부모2 로 재이동
+    b = _sync(a, "devA", b, "devB", proj)
+    by = {x["name"]: x for x in b.list_folders()}
+    assert by["자식"]["parent_id"] == by["부모2"]["id"]
+
+
+def test_folder_position_only_change_propagates(tmp_path):
+    """부모는 그대로, 형제 순서만 바뀌는 경우도 전해져야 한다."""
+    a, b, proj = _two_devices(tmp_path)
+    f1, f2 = a.create_folder("가"), a.create_folder("나")
+    b = _sync(a, "devA", b, "devB", proj)
+    a.move_folder(f2, None, before_id=f1)                   # '나' 를 '가' 앞으로
+    b = _sync(a, "devA", b, "devB", proj)
+    assert [x["name"] for x in b.list_folders()][:2] == ["나", "가"]
+
+
+@pytest.mark.parametrize("kind", ["title", "fold", "folder", "fitem", "folder_x", "fitem_x"])
+def test_future_timestamp_rejected_on_every_record_kind(tmp_path, kind):
+    """미래 시각 가드는 **여섯 경로 전부**에 있어야 한다.
+
+    한 경로만 검사하면 나머지 다섯 곳에서 가드가 빠져도 아무도 모른다
+    (실측: apply_folder 의 가드만 지워도 61개 테스트가 전부 통과했다).
+    """
+    import json
+    FUT = 9999999999.0
+    a, b, proj = _two_devices(tmp_path)
+    f = a.create_folder("미리")
+    a.add_to_folder(f, "turn", "s1:u1")
+    b = _sync(a, "devA", b, "devB", proj)
+    # **실제로 존재하는 uid** 를 써야 가드까지 도달한다. 없는 uid 면 그 앞에서 걸러져
+    # 가드를 지워도 테스트가 통과한다(실측: 4개 경로가 그렇게 비어 있었다).
+    uid = b.conn.execute("SELECT uid FROM folders LIMIT 1").fetchone()["uid"]
+    payload = {
+        "title": ["s1", "공격 제목", FUT],
+        "fold": ["s1:u1", 1, FUT],
+        "folder": [uid, "이름 바뀜", None, 9.0, FUT],
+        "fitem": [uid, "turn", "s1:u2", None, 9.0, FUT],
+        "folder_x": [uid, FUT],
+        "fitem_x": [uid, "turn", "s1:u1", FUT],
+    }[kind]
+    before = _folder_state(b)
+
+    d = proj / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "evil.ndjson").write_text(json.dumps({kind: payload}) + "\n", encoding="utf-8")
+    A.import_archives(b, proj, "devB", log_fn=lambda *_: None)
+
+    fresh = ArchiveDB(b.path)
+    assert _folder_state(fresh) == before          # 폴더·항목이 바뀌지 않았다
+    assert fresh.session_title("s1") is None       # 제목도
+    assert fresh.hidden_turn_ids() == set()        # 접힘도
+
+
+def _folder_state(db):
+    return (sorted((r["uid"], r["name"], r["parent_id"])
+                   for r in db.conn.execute("SELECT uid, name, parent_id FROM folders")),
+            sorted(tuple(r) for r in db.conn.execute(
+                "SELECT folder_id, kind, ref FROM folder_items")))

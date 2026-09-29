@@ -184,6 +184,10 @@ def read_mirror_checked(source: str, session_id: str) -> tuple[bytes, bool] | No
     return data, intact
 
 
+_MAX_EXPAND = 200      # gzip 이 텍스트에서 내는 현실적 압축비의 넉넉한 상한
+_MIN_EXPAND = 1 << 20  # 작은 파일이 상한에 걸리지 않게 바닥값
+
+
 def _idx_backfill(out: Path, raw: bytes) -> None:
     """온전한 보존본에서 경계를 뽑아 색인을 만든다(옛 파일용, 1회).
 
@@ -276,14 +280,29 @@ def _walk_by_index(raw: bytes, spans: list[tuple[int, int]], name: str = "") -> 
             continue                      # 이 멤버만 버리고 다음으로
         out_buf += chunk
         ok_end = max(ok_end, off + ln)
+        if len(out_buf) > _MAX_EXPAND * len(raw) + _MIN_EXPAND:
+            # 조작되거나 손상된 색인이 같은 멤버를 반복 가리키면 무한히 부푼다(실측 3207배).
+            # 압축률에 상한을 두고 그 위는 손상으로 본다 — 메모리·디스크를 지키는 쪽.
+            logger.warning("보존본 색인이 과도하게 부풀림 — 손상으로 봅니다 (%s)", name or "?")
+            bad += 1
+            break
     # 색인에 없는 **꼬리** 바이트는 정직하게 '온전하지 않음'으로 본다.
     # 중단된 append 의 잔재일 수도 있지만, 색인 기록 직전에 죽어 실제 데이터일 수도 있다.
     # (그 경우 커서도 안 올라가 다음 회차가 같은 구간을 다시 미러링하므로 유실은 아니다.)
     # 가운데 빈 구간은 다르다 — 그건 이미 건너뛰기로 판단한 잔재이고, 영원히 경고할 이유가 없다.
-    # 색인이 파일 앞/가운데를 안 덮으면 그만큼을 통째로 못 읽는다. 이걸 온전하다고 말하면
-    # '데이터를 없애고 복구 완료라고 하는' 그 실패가 된다(업그레이드 중간 상태에서 실제로 났다).
-    covered = sum(ln for _o, ln in spans)
-    tail = len(raw) > ok_end or covered < len(raw)
+    # 색인이 파일을 **빈틈없이 한 번씩** 덮어야 온전하다고 말할 수 있다.
+    #
+    # 길이 합만 보면 겹치는 span 이 합을 부풀려 검사를 통과한다 — 같은 멤버를 5000번 가리키면
+    # 53바이트가 170,000바이트로 불어나는데 intact=True 였다(실측 3207배). 가운데 멤버를
+    # 빼고 앞 멤버를 두 번 넣어도 통과했다. 정렬해 이어붙는지 직접 본다.
+    gap = False
+    nxt = 0
+    for off, ln in sorted(spans):
+        if off != nxt:          # 구멍이거나 겹침
+            gap = True
+            break
+        nxt = off + ln
+    tail = len(raw) > ok_end or gap or nxt != len(raw)
     if bad or tail:
         logger.warning("보존본 손상 — 멤버 %d개 건너뜀%s (%s)",
                        bad, ", 색인 밖 꼬리 있음" if tail else "", name or "?")

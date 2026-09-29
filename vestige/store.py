@@ -748,8 +748,12 @@ class ArchiveDB:
         """
         if parent_id is not None and parent_id in self.folder_descendants(folder_id):
             return False
-        # updated_at 을 같이 찍어야 이동이 다른 기기에 전해진다(#233). 안 찍으면 승자 판정이
-        # 옛 값을 보고 "상대가 더 낡음"으로 판단해 폴더 이동이 영원히 동기화되지 않는다.
+        # 이동도 updated_at 을 찍어야 다른 기기에 전해진다(#233). 안 찍으면 승자 판정이 옛 값을
+        # 보고 "상대가 더 낡음"으로 판단해 이동이 영원히 동기화되지 않는다.
+        #
+        # 아래 형제 재정렬이 옮긴 폴더까지 포함해 다시 찍으므로 여기서 찍는 건 **중복이다.**
+        # 그래도 남긴다 — 형제 재정렬을 건드리는 사람이 이 의존을 모른 채 바꾸면 이동 동기화가
+        # 조용히 멈춘다. 둘 중 하나만 지워도 테스트가 안 잡히는 것을 확인했다(둘 다 지워야 잡힘).
         now = time.time()
         self.conn.execute("UPDATE folders SET parent_id=?, updated_at=? WHERE id=?",
                           (parent_id, now, folder_id))

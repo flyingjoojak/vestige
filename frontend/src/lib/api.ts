@@ -275,7 +275,10 @@ export interface SystemInfo {
 export const getSystem = () => getJSON<SystemInfo>(`/api/system`)
 
 // 기기 간 아카이브 병합(다른 기기가 보존한 삭제-원본 세션까지 가져오기). 벡터는 이후 색인이 채움.
-export async function archiveSync(): Promise<{ ok: boolean; imported: number; exported: number }> {
+export async function archiveSync(): Promise<{
+  ok: boolean; imported: number; exported: number
+  warnings?: string[]      // 건너뛴 줄 등 — 성공으로 뭉개면 부분 실패가 묻힌다
+}> {
   const r = await fetch(`/api/archive/sync`, { method: "POST" })
   if (!r.ok) return failure(r)
   return r.json()
