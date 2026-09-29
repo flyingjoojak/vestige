@@ -218,6 +218,7 @@ export interface IndexStatus {
   total_chunks: number
   last_error: string | null
   errors?: string[]      // 이번 회차 항목별(파일) 실패 — 조용한 스턱 방지
+  sync_errors?: string[] // 기기 간 병합 실패 — errors 는 색인 단계가 회차마다 비우므로 분리
   pending?: IndexPending   // 새 바이트가 있는 로그 파일(=대화) 집계
   external?: boolean       // 다른 프로세스(OS 스케줄러의 vestige index)가 색인 중
 }
