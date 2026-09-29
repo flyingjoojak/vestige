@@ -229,6 +229,8 @@
   },
   "chat": {
     "selected": "선택",
+    "queued": "작업 중 질문",
+    "queuedHint": "앞 답변이 끝나기 전에 끼어들어 친 질문이에요.",
     "question": "질문",
     "answer": "답변",
     "noQuestion": "(질문 없음)",

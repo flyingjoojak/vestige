@@ -26,7 +26,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS turns(
   id TEXT PRIMARY KEY, session_id TEXT, uuid TEXT, parent_uuid TEXT,
   timestamp TEXT, project TEXT, question TEXT, answer TEXT, actions TEXT,
-  summary TEXT, tags TEXT, source TEXT, source_file TEXT
+  summary TEXT, tags TEXT, source TEXT, source_file TEXT, queued INTEGER
 );
 CREATE TABLE IF NOT EXISTS chunks(
   chunk_key TEXT PRIMARY KEY, turn_id TEXT, idx INTEGER, text TEXT
@@ -267,6 +267,16 @@ def _mig_0013_folder_sync(conn: sqlite3.Connection) -> None:
                  " PRIMARY KEY(folder_uid, kind, ref))")
 
 
+def _mig_0014_turn_queued(conn: sqlite3.Connection) -> None:
+    """turns 에 queued 추가(#246: 작업 중 끼어든 질문인지 표시).
+
+    기존 행은 NULL 로 남는다 — 재색인 전까지는 '모름'이 정직하다. 읽을 때 거짓으로 취급한다.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(turns)")}
+    if "queued" not in cols:
+        conn.execute("ALTER TABLE turns ADD COLUMN queued INTEGER")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -282,6 +292,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0011_turns_session_ts,
     _mig_0012_unfolded,
     _mig_0013_folder_sync,
+    _mig_0014_turn_queued,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -461,14 +472,15 @@ class ArchiveDB:
                 return False   # 기존이 더 완성 → 유지
         self.conn.execute(
             """INSERT INTO turns(id,session_id,uuid,parent_uuid,timestamp,project,
-                 question,answer,actions,source,source_file)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                 question,answer,actions,source,source_file,queued)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  question=excluded.question, answer=excluded.answer, actions=excluded.actions,
-                 source=excluded.source, source_file=excluded.source_file""",
+                 source=excluded.source, source_file=excluded.source_file,
+                 queued=excluded.queued""",
             (turn.id, turn.session_id, turn.uuid, turn.parent_uuid, turn.timestamp,
              turn.project, turn.question, turn.answer, actions_json,
-             source, source_file),
+             source, source_file, 1 if turn.queued else 0),
         )
         if self.fts_enabled:  # 키워드 인덱스 동기화(멱등)
             self.conn.execute("DELETE FROM turns_fts WHERE turn_id=?", (turn.id,))
