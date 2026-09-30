@@ -149,7 +149,10 @@ def _group_with_offsets(proc: list[tuple], final_offset: int, adapter: SourceAda
         if not turns:
             continue
         resume = proc[sj][1] if sj < len(proc) else final_offset
-        out.append((turns[0], resume))
+        # 구간 하나 = 턴 하나가 정상이다(is_turn_start 와 extract_turns 가 같은 기준일 때).
+        # 예전엔 turns[0] 만 남기고 나머지를 조용히 버렸다 — 기준이 어긋나자 끼어든 질문과
+        # 그 답변이 통째로 사라졌다(#246). 버리느니 같은 재개 지점으로 모두 싣는다.
+        out.extend((t, resume) for t in turns)
     return out
 
 
@@ -244,7 +247,12 @@ def index_file(
         count += 1
         if written and should_embed(turn):   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
             ctx = prev_q.get(turn.session_id, "")
-            for c in chunk_turn(turn):
+            chunks = chunk_turn(turn)
+            # 파서 버전이 올라 턴이 짧아졌으면 뒤쪽 청크가 옛 내용으로 남는다 → 치운다.
+            stale = db.trim_chunks(turn.id, len(chunks))
+            if stale:
+                vi.remove(stale)
+            for c in chunks:
                 db.add_chunks([c])
                 buf_texts.append(_contextual(ctx, c.text, turn.project))
                 buf_keys.append(f"{c.turn_id}#{c.index}")

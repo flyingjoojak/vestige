@@ -569,3 +569,38 @@ def test_old_snapshot_without_queued_still_imports(tmp_path):
 
     r = ArchiveDB(dst.path).conn.execute("SELECT id,queued FROM turns").fetchone()
     assert r["id"] == "s9:u1" and not r["queued"]
+
+
+def _vt(answer: str, v: int) -> Turn:
+    return Turn(id="s9:u1", session_id="s9", uuid="u1", parent_uuid="", timestamp="2026-01-01T00:00",
+                project="proj", question="갱신해줘", answer=answer, actions=(), parser_version=v)
+
+
+def test_old_device_cannot_reinject_merged_turn(tmp_path):
+    """업그레이드 안 한 기기의 합쳐진(더 긴) 옛 턴이, 새 파서로 고친 턴을 되덮지 않는다.
+
+    길이만 비교하던 시절 규칙이면 옛 턴이 '더 완성'으로 보여 이긴다 — 한 기기가 고친 것을
+    다른 기기가 동기화할 때마다 되돌린다.
+    """
+    proj = tmp_path / "projects"
+    old, new = ArchiveDB(tmp_path / "old.db"), ArchiveDB(tmp_path / "new.db")
+    old.upsert_turn(_vt("답변1\n끼어든 질문의 답변", v=0), source_file="f"); old.commit()
+    new.upsert_turn(_vt("답변1", v=1), source_file="f"); new.commit()
+
+    new = _sync(old, "devOld", new, "devNew", proj)
+    assert new.get_turn("s9:u1").answer == "답변1", "옛 기기가 합쳐진 턴을 되밀어 넣었다"
+
+
+def test_upgraded_peer_fixes_old_local_turn(tmp_path):
+    """반대 방향: 업그레이드한 기기의 고친 턴은 (더 짧아도) 옛 판본을 덮는다.
+
+    그래서 한 기기만 재색인해도 동기화를 타고 다른 기기까지 고쳐진다.
+    """
+    proj = tmp_path / "projects"
+    new, old = ArchiveDB(tmp_path / "new.db"), ArchiveDB(tmp_path / "old.db")
+    new.upsert_turn(_vt("답변1", v=1), source_file="f"); new.commit()
+    old.upsert_turn(_vt("답변1\n끼어든 질문의 답변", v=0), source_file="f"); old.commit()
+
+    old = _sync(new, "devNew", old, "devOld", proj)
+    t = old.get_turn("s9:u1")
+    assert t.answer == "답변1" and t.parser_version == 1

@@ -9,7 +9,8 @@ from typing import Iterable, Iterator
 
 from ..models import Turn
 from ..parser import extract_turns as _extract_turns
-from ..parser import is_real_user_prompt, iter_json_lines
+from ..parser import is_turn_start as _is_turn_start
+from ..parser import iter_json_lines
 
 # 색인·카운트 제외 폴더: Syncthing 버전 백업(.stversions), vestige 아카이브 스냅샷
 # (신규 .vestige-archive + 레거시 .chatmem-archive 둘 다 — 예전 스냅샷도 대화로 재색인되지 않게).
@@ -31,7 +32,7 @@ class ClaudeCodeAdapter:
         return iter_json_lines(path, start_offset)
 
     def is_turn_start(self, obj: dict) -> bool:
-        return is_real_user_prompt(obj)
+        return _is_turn_start(obj)   # extract_turns 와 같은 기준(parser.is_turn_start 참고)
 
     def extract_turns(self, objs: Iterable[dict]) -> list[Turn]:
         return _extract_turns(objs)

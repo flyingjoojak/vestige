@@ -26,7 +26,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS turns(
   id TEXT PRIMARY KEY, session_id TEXT, uuid TEXT, parent_uuid TEXT,
   timestamp TEXT, project TEXT, question TEXT, answer TEXT, actions TEXT,
-  summary TEXT, tags TEXT, source TEXT, source_file TEXT, queued INTEGER
+  summary TEXT, tags TEXT, source TEXT, source_file TEXT, queued INTEGER,
+  parser_version INTEGER
 );
 CREATE TABLE IF NOT EXISTS chunks(
   chunk_key TEXT PRIMARY KEY, turn_id TEXT, idx INTEGER, text TEXT
@@ -277,6 +278,17 @@ def _mig_0014_turn_queued(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE turns ADD COLUMN queued INTEGER")
 
 
+def _mig_0015_turn_parser_version(conn: sqlite3.Connection) -> None:
+    """turns 에 parser_version 추가. 기존 행은 NULL = 옛 파서가 쓴 것(0 으로 읽는다).
+
+    파서가 턴을 새로 가를 때 앞 턴이 정당하게 짧아지는 것을 허용하기 위한 표지.
+    자세한 이유는 parser.PARSER_VERSION.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(turns)")}
+    if "parser_version" not in cols:
+        conn.execute("ALTER TABLE turns ADD COLUMN parser_version INTEGER")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -293,6 +305,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0012_unfolded,
     _mig_0013_folder_sync,
     _mig_0014_turn_queued,
+    _mig_0015_turn_parser_version,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -326,6 +339,8 @@ def _row_to_turn(row: sqlite3.Row) -> Turn:
         parent_uuid=row["parent_uuid"], timestamp=row["timestamp"], project=row["project"],
         question=row["question"], answer=row["answer"], actions=_actions_from_json(row["actions"]),
         source=source,
+        queued=bool(row["queued"]) if "queued" in keys else False,
+        parser_version=(row["parser_version"] or 0) if "parser_version" in keys else 0,
     )
 
 
@@ -440,13 +455,19 @@ class ArchiveDB:
         self.conn.close()
 
     # --- 턴 -------------------------------------------------------------
-    def turn_content_len(self, turn_id: str) -> int | None:
-        """저장된 턴의 내용 길이(질문+답변+행동 JSON 문자수). 없으면 None. 완성도 비교용."""
+    def turn_rank(self, turn_id: str) -> tuple[int, int] | None:
+        """저장된 턴의 (파서 버전, 내용 길이). 없으면 None.
+
+        턴끼리 '어느 쪽이 더 나은가'는 이 튜플의 사전식 비교로 정한다 — 더 새 파서가
+        이기고, 같은 파서끼리는 더 긴(완성된) 쪽이 이긴다. upsert_turn 과 동기화가 같은
+        기준을 써야 한 기기가 고친 것을 다른 기기가 되돌리지 않는다.
+        """
         row = self.conn.execute(
-            "SELECT length(coalesce(question,''))+length(coalesce(answer,''))"
-            "+length(coalesce(actions,'')) AS n FROM turns WHERE id=?", (turn_id,),
+            "SELECT coalesce(parser_version,0) AS v, length(coalesce(question,''))"
+            "+length(coalesce(answer,''))+length(coalesce(actions,'')) AS n "
+            "FROM turns WHERE id=?", (turn_id,),
         ).fetchone()
-        return None if row is None else int(row["n"])
+        return None if row is None else (int(row["v"]), int(row["n"]))
 
     def upsert_turn(self, turn: Turn, source: str = "claude-code", *,
                     source_file: str | None) -> bool:
@@ -462,25 +483,25 @@ class ArchiveDB:
         기존을 유지(스킵)했으면 False. (긴 도구호출로 짧게 확정된 턴을 kill/재색인/기기병합이
         되돌리는 것 방지. 대화 로그는 append-only 라 '줄지 않는다'가 안전한 불변식.)"""
         actions_json = _actions_to_json(turn.actions)
-        row = self.conn.execute(
-            "SELECT length(coalesce(question,''))+length(coalesce(answer,''))"
-            "+length(coalesce(actions,'')) AS n FROM turns WHERE id=?", (turn.id,),
-        ).fetchone()
-        if row is not None:
+        stored = self.turn_rank(turn.id)
+        if stored is not None:
             new_n = len(turn.question or "") + len(turn.answer or "") + len(actions_json)
-            if row["n"] > new_n:
-                return False   # 기존이 더 완성 → 유지
+            # 같은 파서끼리는 예전 그대로 '더 짧으면 거부'. 파서가 올라가면 한 번은 짧아져도
+            # 덮는다(턴을 새로 갈랐을 때). 더 옛 파서는 새 파서가 쓴 것을 못 덮는다 —
+            # 업그레이드 안 한 기기가 합쳐진 옛 턴을 동기화로 되밀어 넣는 걸 막는다.
+            if (turn.parser_version, new_n) < stored:
+                return False
         self.conn.execute(
             """INSERT INTO turns(id,session_id,uuid,parent_uuid,timestamp,project,
-                 question,answer,actions,source,source_file,queued)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                 question,answer,actions,source,source_file,queued,parser_version)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  question=excluded.question, answer=excluded.answer, actions=excluded.actions,
                  source=excluded.source, source_file=excluded.source_file,
-                 queued=excluded.queued""",
+                 queued=excluded.queued, parser_version=excluded.parser_version""",
             (turn.id, turn.session_id, turn.uuid, turn.parent_uuid, turn.timestamp,
              turn.project, turn.question, turn.answer, actions_json,
-             source, source_file, 1 if turn.queued else 0),
+             source, source_file, 1 if turn.queued else 0, turn.parser_version),
         )
         if self.fts_enabled:  # 키워드 인덱스 동기화(멱등)
             self.conn.execute("DELETE FROM turns_fts WHERE turn_id=?", (turn.id,))
@@ -627,6 +648,18 @@ class ArchiveDB:
         return [_row_to_turn(r) for r in reversed(before)] + [_row_to_turn(r) for r in after]
 
     # --- 청크 -----------------------------------------------------------
+    def trim_chunks(self, turn_id: str, keep: int) -> list[str]:
+        """turn_id 의 청크 중 순번 keep 이상을 지우고 지운 chunk_key 를 돌려준다(벡터 정리용).
+
+        add_chunks 는 같은 키를 덮을 뿐이라, 턴이 짧아져 청크 수가 줄면 뒤쪽이 옛 내용으로
+        남는다. 턴이 절대 안 줄던 동안엔 드러나지 않았다(파서 버전이 오르면 줄 수 있다).
+        """
+        rows = self.conn.execute(
+            "SELECT chunk_key FROM chunks WHERE turn_id=? AND idx>=?", (turn_id, keep)).fetchall()
+        if rows:
+            self.conn.execute("DELETE FROM chunks WHERE turn_id=? AND idx>=?", (turn_id, keep))
+        return [r["chunk_key"] for r in rows]
+
     def add_chunks(self, chunks) -> None:
         self.conn.executemany(
             """INSERT INTO chunks(chunk_key,turn_id,idx,text) VALUES(?,?,?,?)

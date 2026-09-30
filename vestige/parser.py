@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 # (system=<task-notification> 등 주입 프롬프트는 promptSource 가 아니라 기존 plumbing/isMeta 필터가 처리한다.)
 _SKIP_SDK_ENV = "VESTIGE_SKIP_SDK_SESSIONS"
 
+# 파서 버전. **턴 경계나 내용 배치를 바꾸는 변경을 하면 올린다.**
+#
+# 저장소의 '완성도 축소 금지' 가드는 로그가 append-only 라 턴이 줄지 않는다는 전제에 선다.
+# 그런데 파서가 턴을 새로 가르면(#246: 작업 중 끼어든 질문) 앞 턴이 정당하게 짧아진다.
+# 버전이 없으면 가드가 그걸 부분 읽기로 오인해 거부하고, 갈라 나간 답변이 양쪽에 남는다.
+# 버전이 오르면 옛 파서가 쓴 행에 한해 **한 번** 덮어쓰기를 허용하고, 그 뒤엔 가드가 원래대로 돈다.
+#   1: 작업 중 끼어든 질문(queued_command)을 제 턴으로 가른다(#246)
+# codex 어댑터는 자기 파서를 써서 0 에 머문다(그쪽 파싱은 바뀌지 않았다).
+PARSER_VERSION = 1
+
 # 대화가 아닌 메타/시스템 라인 타입.
 _STRUCTURAL_TYPES = {
     "system",
@@ -178,6 +188,16 @@ def queued_human_prompt(obj: dict) -> str | None:
     return text
 
 
+def is_turn_start(obj: dict) -> bool:
+    """새 턴이 여기서 시작하는가. **extract_turns 와 색인기가 같은 기준을 써야 한다.**
+
+    색인기(indexer._group_with_offsets)는 이 기준으로 파일을 구간으로 자르고 구간마다 턴 하나를
+    기대한다. 두 기준이 어긋나면 구간 하나에서 턴이 여럿 나온다 — #246 직후 실제로 그랬고,
+    끼어든 질문과 그 답변이 통째로 버려졌다.
+    """
+    return queued_human_prompt(obj) is not None or is_real_user_prompt(obj)
+
+
 def is_real_user_prompt(obj: dict) -> bool:
     """사람이 실제로 친 질문 턴의 시작인지."""
     if obj.get("type") != "user":
@@ -261,6 +281,7 @@ def _finalize(cur: dict) -> Turn:
         answer=answer,
         actions=tuple(cur["actions"]),
         queued=cur.get("queued", False),
+        parser_version=PARSER_VERSION,
     )
 
 
@@ -273,7 +294,7 @@ def extract_turns(objs: Iterable[dict]) -> list[Turn]:
         queued = queued_human_prompt(obj)
         if queued is None and is_structural_noise(obj):
             continue
-        if queued is not None or is_real_user_prompt(obj):
+        if is_turn_start(obj):
             if cur is not None:
                 turns.append(_finalize(cur))
             cur = {
