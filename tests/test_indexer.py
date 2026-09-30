@@ -177,3 +177,24 @@ def test_held_turn_completes_with_frequent_checkpoints(tmp_path):
     index_file(str(f), db, vi, emb, idle_secs=120, checkpoint_turns=1)
     assert "빌드 완료" in (db.get_turn("s1:u2").answer or ""), "잦은 체크포인트에서 held 턴 뒷내용 유실"
     assert db.get_turn("s1:u1").answer == "이전 답변입니다"   # 앞 완결 턴은 그대로
+
+
+def test_group_keeps_every_turn_when_boundaries_disagree():
+    """구간 하나에서 턴이 여럿 나오면 전부 싣는다 - 예전엔 첫 턴만 남기고 조용히 버렸다.
+
+    is_turn_start 와 extract_turns 의 기준이 어긋나면 생기는 일이다(#246 직후 실제로 끼어든
+    질문과 그 답변이 DB 에서 사라졌다). 기준은 parser.is_turn_start 로 합쳤지만, 다시 어긋나도
+    데이터가 사라지지는 않게 한다.
+    """
+    from vestige.indexer import _group_with_offsets
+
+    class Disagreeing:
+        def is_turn_start(self, o):
+            return o.get("start", False)          # 첫 줄만 경계로 본다
+
+        def extract_turns(self, objs):
+            return [o["name"] for o in objs]       # 그런데 줄마다 턴을 만든다
+
+    proc = [({"start": True, "name": "앞 턴"}, 0, 10), ({"name": "끼어든 턴"}, 10, 20)]
+    out = _group_with_offsets(proc, 20, Disagreeing())
+    assert [t for t, _ in out] == ["앞 턴", "끼어든 턴"], "구간 안의 뒤 턴을 버렸다"

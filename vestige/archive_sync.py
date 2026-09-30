@@ -56,15 +56,15 @@ def export_archive(db, projects_dir: str | Path, did: str) -> int:
     with open(tmp, "w", encoding="utf-8") as f:
         for r in db.conn.execute(
             "SELECT id,session_id,uuid,parent_uuid,timestamp,project,question,answer,actions,summary,tags,"
-            "source,source_file,queued "
+            "source,source_file,queued,parser_version "
             "FROM turns",
         ):
-            # t[11]=source, t[12]=source_file, t[13]=queued 를 뒤에 append
+            # t[11]=source, t[12]=source_file, t[13]=queued, t[14]=parser_version 을 뒤에 append
             # (옛 스냅샷은 11칸이라 import 에서 길이로 판별 — 칸은 끝에만 늘린다).
             rec = {
                 "t": [r["id"], r["session_id"], r["uuid"], r["parent_uuid"], r["timestamp"],
                       r["project"], r["question"], r["answer"], r["actions"], r["summary"], r["tags"],
-                      r["source"], r["source_file"], r["queued"]],
+                      r["source"], r["source_file"], r["queued"], r["parser_version"] or 0],
                 "c": chunks.get(r["id"], []),
             }
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -115,8 +115,8 @@ def _checked(rec: dict) -> dict:
     if "t" not in rec:
         return rec                            # 모르는 줄 종류 — 호출부가 건너뛴다
     t = rec["t"]
-    if not isinstance(t, list) or not (11 <= len(t) <= 14):
-        raise ValueError(f"턴 레코드가 11~14칸이어야 하는데 {len(t) if isinstance(t, list) else t!r}")
+    if not isinstance(t, list) or not (11 <= len(t) <= 15):
+        raise ValueError(f"턴 레코드가 11~15칸이어야 하는데 {len(t) if isinstance(t, list) else t!r}")
     # 턴 id 는 보통 문자열이지만 옛 스냅샷에 정수로 든 것이 있다(테스트가 그 경우를 지킨다).
     if isinstance(t[0], bool) or not isinstance(t[0], (str, int)) or t[0] == "":
         raise ValueError(f"턴 id 가 이상함: {t[0]!r}")
@@ -194,11 +194,13 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     t = rec["t"]
                     tid = t[0]
                     existing = tid in have
-                    # superset-wins: 이미 있는 턴은 상대가 '더 완성'(질문+답변+행동 길이가 더 큼)
-                    # 일 때만 갱신. 동일/더 짧으면 유지(불필요 재작업·축소 방지).
+                    # 이미 있는 턴은 상대가 '더 나을' 때만 갱신한다. 기준은 upsert_turn 과 같은
+                    # (파서 버전, 내용 길이) — 더 새 파서가 이기고, 같으면 더 완성된 쪽이 이긴다.
+                    # 길이만 보면 업그레이드 안 한 기기의 합쳐진(더 긴) 옛 턴이 고친 것을 되덮는다.
+                    peer_v = int(t[14] or 0) if len(t) > 14 else 0
                     if existing:
                         peer_n = len(t[6] or "") + len(t[7] or "") + len(t[8] or "")
-                        if peer_n <= (db.turn_content_len(tid) or 0):
+                        if (peer_v, peer_n) <= (db.turn_rank(tid) or (0, 0)):
                             continue
                     # source/source_file 는 신 스냅샷에만 있음(옛 스냅샷 t 는 11칸) → 길이로 판별.
                     src = t[11] if len(t) > 11 else None
@@ -207,7 +209,8 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                                 timestamp=t[4], project=t[5], question=t[6], answer=t[7],
                                 actions=_actions_from_json(t[8]), source=src or "claude-code",
                                 # 옛 스냅샷엔 없다 → 모르면 거짓. 안 실으면 동기화가 배지를 지운다.
-                                queued=bool(t[13]) if len(t) > 13 else False)
+                                queued=bool(t[13]) if len(t) > 13 else False,
+                                parser_version=peer_v)
                     db.upsert_turn(turn, source=src or "claude-code", source_file=src_file)  # FTS 포함(신규거나 더 완성 → 기록)
                     if t[9]:                            # summary → 정제도 함께 보존
                         db.set_enrichment(tid, t[9], json.loads(t[10]) if t[10] else [])
