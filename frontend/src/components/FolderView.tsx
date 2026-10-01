@@ -660,8 +660,10 @@ export function FolderView() {
                           active ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"} ${
                           dragIdx === idx ? "opacity-40" : ""}`}>
                         {/* 순서: 카드를 끌어 옮기거나(드래그), 키보드/정밀 조정용으로 위·아래 한 칸.
-                            z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게. */}
-                        <GripVertical className="relative z-10 size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+                            z-10: 아래 '열기' 버튼이 카드 전체로 펼친 클릭 영역보다 위에 오게(위·아래 버튼용).
+                            손잡이는 장식이다 - 드래그는 카드 전체가 받으므로 포인터를 비워야, 이 자리를
+                            눌러도 카드가 열린다(#244 와 같은 함정: 클릭 오버레이 위에 뜬 장식이 클릭을 삼킨다). */}
+                        <GripVertical className="pointer-events-none relative z-10 size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
                         <span className="relative z-10 flex shrink-0 flex-col opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                           <button type="button" onClick={() => moveItem(idx, -1)} disabled={idx === 0}
                             title={t("folders.moveUp")} aria-label={t("folders.moveUp")}

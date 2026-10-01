@@ -79,3 +79,20 @@ def test_decorative_row_elements_do_not_eat_clicks():
     assert hover_moved, "대상을 못 찾았다 - 검사가 낡았는지 확인할 것"
     for ln in hover_moved:
         assert "pointer-events-none" in ln, f"transform 장식이 클릭을 가로챈다: {ln.strip()}"
+
+
+def test_decorative_elements_above_click_overlays_pass_clicks_through():
+    """행 전체 클릭 오버레이(after:inset-0) 위로 띄운 장식은 클릭을 통과시켜야 한다 - 모든 컴포넌트.
+
+    z-10 으로 올리거나 transform(translate)이 붙은 장식은 오버레이 위에 그려져 그 자리 클릭을 삼킨다.
+    세션 목록 화살표(#244)에서 고쳤는데 폴더 항목의 드래그 손잡이에 같은 버그가 남아 있었다(풀리뷰).
+    한 파일만 보던 검사를 컴포넌트 전체로 넓힌다.
+    """
+    comps = ROOT / "frontend" / "src" / "components"
+    bad = []
+    for f in sorted(comps.glob("*.tsx")):
+        for n, ln in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            raised = "z-10" in ln or "group-hover:translate-x" in ln
+            if "aria-hidden" in ln and "className=" in ln and raised and "pointer-events-none" not in ln:
+                bad.append(f"{f.name}:{n}: {ln.strip()[:90]}")
+    assert not bad, "클릭을 삼키는 장식:\n" + "\n".join(bad)

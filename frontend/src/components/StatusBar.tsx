@@ -13,7 +13,7 @@ function pct(done: number, total: number): number {
 
 function indexLabel(
   ix: IndexStatus | null, pending: number, t: TFunction,
-): { text: string; dot: string; tone: string; spin: boolean } {
+): { text: string; dot: string; tone: string; spin: boolean; tip?: string } {
   if (ix?.running) {
     // 진행 %는 in-process 색인에서만 계산(external=OS 스케줄러 프로세스는 진행 데이터가 경계를 못 넘음).
     // 청크 진행(자가복구/전체 재색인)이 가장 의미 있고, 없으면 파일 단위, 둘 다 없으면 텍스트만.
@@ -24,6 +24,16 @@ function indexLabel(
     const text = p != null ? t("statusbar.indexingPct", { pct: p }) : t("statusbar.indexing")
     return { text, dot: "bg-sky-500", tone: "text-sky-600 dark:text-sky-400", spin: true }
   }
+  // 색인이 오류로 멈췄거나 일부 항목이 실패했다. 예전엔 여기서 오류를 안 보고 '대기 N건'/'최신 상태'를
+  // 그대로 띄워, 색인이 죽어 있어도 초록 점이었다(오류는 설정 화면 구석에만 있었다).
+  // 백엔드가 다음 색인 회차 시작 때 비우므로, 성공하면 저절로 사라진다.
+  const probs = [...(ix?.errors ?? []), ...(ix?.sync_errors ?? [])]
+  if (ix?.last_error)
+    return { text: t("statusbar.indexError"), dot: "bg-destructive", tone: "text-destructive", spin: false,
+      tip: [ix.last_error, t("statusbar.indexErrorTip")].join("\n") }
+  if (probs.length > 0)
+    return { text: t("statusbar.indexPartial", { n: probs.length }), dot: "bg-destructive", tone: "text-destructive", spin: false,
+      tip: [...probs.slice(0, 3), t("statusbar.indexErrorTip")].join("\n") }
   if (pending > 0)
     return { text: t("statusbar.pendingNew", { n: pending }), dot: "bg-amber-500", tone: "text-amber-600 dark:text-amber-500", spin: false }
   return { text: t("statusbar.upToDate"), dot: "bg-emerald-500", tone: "text-emerald-600 dark:text-emerald-400", spin: false }
@@ -88,7 +98,7 @@ export function StatusBar() {
       </span>
       {/* 오른쪽: 색인 상태(필수·색상) + 동기화 상태(꺼짐이면 회색으로 표시) — 항상 한 줄에 온전히 */}
       <span className="ml-auto flex shrink-0 items-center gap-x-3 whitespace-nowrap">
-        <span title={t("statusbar.indexTip")} aria-live="polite" aria-atomic="true" className={`inline-flex items-center gap-1.5 font-medium ${idx.tone}`}>
+        <span title={idx.tip ?? t("statusbar.indexTip")} aria-live="polite" aria-atomic="true" className={`inline-flex items-center gap-1.5 font-medium ${idx.tone}`}>
           {idx.spin
             ? <Loader2 className="size-3 shrink-0 animate-spin" />
             : <span className={`size-2 rounded-full ${idx.dot}`} />}
