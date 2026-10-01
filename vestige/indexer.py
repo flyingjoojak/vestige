@@ -24,6 +24,7 @@ from .config import (
 )
 from .filters import should_embed
 from .models import Turn
+from .parser import take_bad_lines
 from .sources import active_sources, default_adapter
 
 if TYPE_CHECKING:
@@ -348,6 +349,12 @@ def index_all(db, vi, embedder, recent_first: bool = True, log_fn=print,
                 total += n
         except Exception as ex:  # 한 파일 실패가 전체를 막지 않도록
             log_fn(f"ERROR {os.path.basename(str(f))}: {ex}")
+        # 깨진 줄은 건너뛸 수밖에 없지만, 그 자리의 대화가 영구히 빠지므로 화면에 알린다
+        # ("ERROR " 접두 = /api/index/status 의 errors → 상태바 '일부 항목 실패').
+        bad = take_bad_lines(f)
+        if bad:
+            log_fn(f"ERROR {os.path.basename(str(f))}: 깨진 로그 {len(bad)}줄을 읽지 못해 건너뜀"
+                   f"(첫 위치 {bad[0]} 바이트) - 그 자리의 대화는 색인되지 않았다")
         if progress_fn:
             try:
                 progress_fn(i + 1, total_files)

@@ -69,3 +69,22 @@ def test_endpoint_count_only_mode(tmp_path, monkeypatch):
     assert r["count"] == 3 and r["sessions"] == [] and r["chats"] == []
     full = web.api_hidden()
     assert len(full["sessions"]) == 1 and len(full["chats"]) == 1
+
+
+def test_session_list_headline_skips_folded_turns(tmp_path, monkeypatch):
+    """세션 목록의 대표 제목은 접히지 않은 턴에서 먼저 고르고, 전부 접힌 세션만 접힌 턴에서 고른다.
+
+    /api/sessions 쿼리를 윈도우 함수에서 GROUP BY + 대표 턴 서브쿼리로 바꾸면서 이 규칙을 고정한다
+    (노이즈라 접은 첫 턴이 세션 제목으로 계속 뜨면 접은 의미가 없다).
+    """
+    db = _db(tmp_path)                      # full: 전부 접힘, part: u1·u3 접힘, none: 안 접힘
+    db.hide_turns(["none:u0000"])           # 첫 턴만 접으면 제목은 두 번째 턴에서
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    rows = {r["session"]: r for r in web.api_sessions()["sessions"]}
+    assert rows["none"]["headline"] == "none 질문 1", "접은 첫 턴이 제목으로 떴다"
+    assert rows["part"]["headline"] == "part 질문 0"
+    assert rows["full"]["headline"] == "full 질문 0", "전부 접힌 세션은 접힌 턴에서라도 제목을"
+    assert (rows["full"]["count"], rows["full"]["hidden_count"]) == (3, 3)
+    assert (rows["part"]["count"], rows["part"]["hidden_count"]) == (5, 2)

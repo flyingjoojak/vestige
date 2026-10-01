@@ -920,23 +920,26 @@ def api_session_title(payload: dict):
 def api_sessions(limit: int = 500):
     """세션 목록(최근순): id·턴수·시작/끝 시각·대표 헤드라인(첫 정제/질문)."""
     db = ArchiveDB()
-    # 세션별 집계(턴수·시작/끝)와 대표 첫 턴(제목·소스)을 윈도우 함수로 단일 쿼리에서 산출(N+1 제거).
-    # (기존: 집계 1회 + 세션마다 헤드라인 1회 = 최대 limit+1 왕복 → mcp_server._recent_sessions 와 동일 패턴으로 통일)
-    # 접힌 턴(#128)도 집계에 남긴다 — 전부 접힌 세션까지 목록에서 사라지면 다시 펼칠 길이 없다.
-    # 대신 hidden_count 를 같이 내려, 전부 접힌 세션은 화면에서 흐리게 '접힘'으로 구분한다.
+    # 세션별 집계(턴수·시작/끝)를 GROUP BY 로 먼저 줄이고, 고른 세션에서만 대표 턴을 찾는다(N+1 없음).
+    # 예전엔 turns 전체에 윈도우 함수를 걸고 나서야 rn=1 로 걸러, LIMIT 이 스캔을 못 줄였다(정렬용 임시
+    # B-트리 두 번). 실측: 이 기기 4.2천 턴 83ms → 6ms, 합성 10만 턴 904ms → 140ms, 결과 동일.
+    # 대표 턴은 folder_items 와 같은 방식 - 스칼라 서브쿼리로 id 하나만 고르고 본문은 바깥에서 조인한다.
+    # 접힌 턴(#128)도 집계에 남긴다 - hidden_count == count 인 세션(전부 접힘)은 화면이 목록에서 뺀다.
+    # 대표 헤드라인은 '접히지 않은' 턴에서 먼저 고른다 — 노이즈라 접은 첫 턴이 계속 세션 제목으로
+    # 뜨면 접은 의미가 없다. 전부 접힌 세션만 접힌 턴에서 고르게 된다(그 외 대안 없음).
+    # 마지막 시각이 같은 세션이 한도 경계에 걸려도 결과가 흔들리지 않게 session_id 로 한 번 더 정렬.
     rows = db.conn.execute(
-        "SELECT session_id, summary, question, source, source_file, n, n_hidden, started, ended FROM ("
-        "  SELECT t.session_id, t.summary, t.question, t.source, t.source_file,"
-        "         COUNT(*) OVER (PARTITION BY t.session_id) AS n,"
-        "         SUM(h.turn_id IS NOT NULL) OVER (PARTITION BY t.session_id) AS n_hidden,"
-        "         MIN(t.timestamp) OVER (PARTITION BY t.session_id) AS started,"
-        "         MAX(t.timestamp) OVER (PARTITION BY t.session_id) AS ended,"
-        # 대표 헤드라인은 '접히지 않은' 턴에서 먼저 고른다 — 노이즈라 접은 첫 턴이 계속 세션
-        # 제목으로 뜨면 접은 의미가 없다. 전부 접힌 세션만 접힌 턴에서 고르게 된다(그 외 대안 없음).
-        "         ROW_NUMBER() OVER (PARTITION BY t.session_id"
-        "           ORDER BY (h.turn_id IS NOT NULL), t.timestamp, t.id) AS rn"
+        "SELECT g.session_id, t.summary, t.question, t.source, t.source_file,"
+        "       g.n, g.n_hidden, g.started, g.ended FROM ("
+        "  SELECT t.session_id, COUNT(*) AS n, SUM(h.turn_id IS NOT NULL) AS n_hidden,"
+        "         MIN(t.timestamp) AS started, MAX(t.timestamp) AS ended"
         "  FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id"
-        ") WHERE rn = 1 ORDER BY ended DESC LIMIT ?", (limit,)
+        "  GROUP BY t.session_id ORDER BY ended DESC, t.session_id LIMIT ?"
+        ") g JOIN turns t ON t.id = ("
+        "  SELECT t2.id FROM turns t2 LEFT JOIN hidden_turns h2 ON h2.turn_id = t2.id"
+        "  WHERE t2.session_id = g.session_id"
+        "  ORDER BY (h2.turn_id IS NOT NULL), t2.timestamp, t2.id LIMIT 1)"
+        " ORDER BY g.ended DESC, g.session_id", (limit,)
     ).fetchall()
     # 사용자가 지은 제목은 한 번에 읽어와 덮어쓴다(세션마다 조회하면 N+1).
     # title='' 은 '지정을 지웠다'는 기록이다(#233 소프트 삭제) — 제목으로 내보내지 않는다.
