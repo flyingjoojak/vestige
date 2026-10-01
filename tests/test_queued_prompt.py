@@ -191,3 +191,42 @@ def test_adapter_boundaries_match_extract_turns():
     ]
     starts = sum(a.is_turn_start(o) for o in objs)
     assert starts == len(a.extract_turns(objs)) == 3
+
+
+def test_turn_shrunk_below_embed_threshold_drops_old_chunks(tmp_path, monkeypatch):
+    """갈라져 짧아진 앞 턴이 임베딩 기준 아래로 내려가도 옛 청크·벡터가 남지 않는다.
+
+    청크 정리가 should_embed 안에 있으면, 임베딩할 게 없어진 턴은 정리 자체를 건너뛰어
+    다른 턴으로 옮겨간 답변이 이 턴 id 로 검색에 계속 뜬다.
+    """
+    import json
+    from vestige import parser as P
+    from vestige.indexer import index_file
+    from vestige.store import ArchiveDB
+    from vestige.vectorindex import VectorIndex
+    from tests.test_indexer import FakeEmbedder
+
+    f = tmp_path / f"{SID}.jsonl"
+    f.write_text("\n".join(json.dumps(o, ensure_ascii=False) for o in [
+        _user("응", "u1"),                       # 갈라진 뒤엔 Q+A 가 아주 짧다(임베딩 기준 미달)
+        _assistant("네"),
+        _queued("그리고 테스트 범위를 자세히 알려줘.", "q1"),
+        _assistant("테스트 범위는 이렇습니다. " * 30),
+    ]) + "\n", encoding="utf-8")
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    with monkeypatch.context() as m:              # 옛 파서: 합쳐진 한 턴(길어서 청크가 있다)
+        m.setattr(P, "queued_human_prompt", lambda obj: None)
+        m.setattr(P, "PARSER_VERSION", 0)
+        index_file(str(f), db, vi, FakeEmbedder(), idle_secs=0)
+    db.commit()
+    assert db.conn.execute("SELECT COUNT(*) FROM chunks WHERE turn_id=?", (f"{SID}:u1",)).fetchone()[0] > 0
+
+    db.clear_cursors()
+    index_file(str(f), db, vi, FakeEmbedder(), idle_secs=0)
+    db.commit()
+
+    assert db.get_turn(f"{SID}:u1").answer == "네", "앞 턴이 안 줄었다"
+    left = db.conn.execute("SELECT COUNT(*) FROM chunks WHERE turn_id=?", (f"{SID}:u1",)).fetchone()[0]
+    assert left == 0, f"임베딩 기준 아래로 내려간 턴에 옛 청크 {left}개가 남았다"
+    assert not any(k.startswith(f"{SID}:u1#") for k in vi.keys()), "옛 벡터가 남았다"

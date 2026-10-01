@@ -198,7 +198,27 @@ ENRICH_OLLAMA_URL = os.environ.get("VESTIGE_OLLAMA_URL", "http://localhost:11434
 
 # --- 스케줄(설정으로 조정 가능) --------------------------------------
 ENRICH_TIME = os.environ.get("VESTIGE_ENRICH_TIME", "04:00")       # 야간 정제 시각 HH:MM
-INDEX_INTERVAL_MIN = int(os.environ.get("VESTIGE_INDEX_INTERVAL", "10"))  # 증분 인덱싱 주기(분)
+def _positive_int(name: str, default: int) -> int:
+    """1 이상 정수 설정. 잘못된 값(소수·0·음수·빈칸)이면 기본값으로 읽는다.
+
+    이 모듈은 import 시점에 값을 정한다. 여기서 int() 가 터지면 백엔드가 아예 안 뜨고, 사용자가
+    config.env 를 직접 고치기 전까지 앱을 못 쓴다 - 설정 화면에서 '1.5' 를 저장한 것만으로 그렇게
+    됐다(api_config_put 이 이 값을 검사하지 않았다). 저장 쪽도 막았지만, 이미 저장된 값이 있어도 뜨게 한다.
+    """
+    raw = os.environ.get(name, "")
+    try:
+        v = int(str(raw).strip())
+    except ValueError:
+        v = 0
+    if v >= 1:
+        return v
+    if str(raw).strip():
+        import logging
+        logging.getLogger(__name__).warning("ERROR 설정 %s=%r 이 1 이상 정수가 아니라 기본값 %d 로 씁니다", name, raw, default)
+    return default
+
+
+INDEX_INTERVAL_MIN = _positive_int("VESTIGE_INDEX_INTERVAL", 10)  # 증분 인덱싱 주기(분)
 # 자동 색인 모드: off(끔)/interval(주기)/realtime(실시간 자동감지)/scheduled(특정 시각 1회).
 INDEX_MODE = os.environ.get("VESTIGE_INDEX_MODE", "interval")
 INDEX_TIME = os.environ.get("VESTIGE_INDEX_TIME", "03:00")   # scheduled 모드 색인 시각 HH:MM

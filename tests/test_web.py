@@ -765,3 +765,26 @@ class _FakeVI:
     """make_index() 대역 — _run_incremental 이 len()/keys() 만 쓴다."""
     def __len__(self): return 0
     def keys(self): return []
+
+
+def test_config_put_rejects_bad_index_interval():
+    """색인 주기는 1 이상 정수만. 예전엔 '1.5' 가 그대로 저장돼 다음 실행부터 백엔드가 안 떴다."""
+    for bad in ("1.5", "0", "-5", "abc"):
+        r = web.api_config_put({"VESTIGE_INDEX_INTERVAL": bad})
+        assert r["ok"] is False and "VESTIGE_INDEX_INTERVAL" in r["invalid"], bad
+
+
+def test_bad_index_interval_in_config_file_does_not_stop_startup(tmp_path):
+    """이미 잘못 저장된 값이 있어도 config 를 import 할 수 있어야 한다(기본값으로 읽는다)."""
+    import os
+    import subprocess
+    import sys
+
+    cfg = tmp_path / "config.env"
+    cfg.write_text("VESTIGE_INDEX_INTERVAL=1.5\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "VESTIGE_INDEX_INTERVAL"}
+    env.update(VESTIGE_CONFIG=str(cfg), VESTIGE_DATA_DIR=str(tmp_path / "data"), PYTHONIOENCODING="utf-8")
+    r = subprocess.run([sys.executable, "-c", "import vestige.config as C; print(C.INDEX_INTERVAL_MIN)"],
+                       capture_output=True, text=True, encoding="utf-8", env=env)
+    assert r.returncode == 0, r.stderr[-400:]
+    assert r.stdout.strip() == "10"

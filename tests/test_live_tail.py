@@ -106,3 +106,29 @@ def test_quiet_session_is_not_active(tmp_path, monkeypatch):
     old = time.time() - web._ACTIVE_SECS - 60
     os.utime(log, (old, old))
     assert web.api_session(id=SID)["active"] is False
+
+
+def test_db_count_agrees_between_session_and_tail_for_big_sessions(tmp_path, monkeypatch):
+    """2000턴이 넘는 세션: 전부 내려오고, 두 엔드포인트의 db_count 가 같다.
+
+    예전엔 /api/session 이 오래된 2000턴만 읽고(최신 턴이 잘림) 그 개수를 db_count 로 줬다.
+    /api/session/tail 은 COUNT(*) 라 두 값이 영원히 달라, 화면이 4초마다 세션 전체를 다시 받았다.
+    """
+    from vestige.models import Turn
+
+    db = ArchiveDB(tmp_path / "a.db")
+    n = 2005
+    for i in range(n):
+        db.upsert_turn(Turn(id=f"{SID}:u{i:05d}", session_id=SID, uuid=f"u{i:05d}", parent_uuid=None,
+                            timestamp=f"2026-10-01T{i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}Z",
+                            project="/c/p", question=f"q{i}", answer=f"a{i}", actions=()),
+                       source_file=None)
+    db.commit()
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+
+    d = web.api_session(id=SID)
+    assert d["count"] == n, f"{n - d['count']}턴이 잘렸다"
+    assert d["turns"][-1]["id"] == f"{SID}:u{n - 1:05d}", "최신 턴이 빠졌다"
+    assert d["db_count"] == web.api_session_tail(id=SID)["db_count"] == n
+    # 잘라 읽어도 db_count 는 전체 기준이어야 한다(아니면 화면이 매 주기 전체를 다시 받는다)
+    assert web.api_session(id=SID, limit=10)["db_count"] == n
