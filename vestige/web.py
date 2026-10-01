@@ -584,8 +584,13 @@ def api_sources_toggle(payload: dict):
 
 
 @app.get("/api/session")
-def api_session(id: str = Query(...), limit: int = 2000):
-    """한 세션의 모든 턴을 시간순으로 → 그 대화 전체 작업 내역."""
+def api_session(id: str = Query(...), limit: int = 0):
+    """한 세션의 모든 턴을 시간순으로 → 그 대화 전체 작업 내역. limit 0 = 전부.
+
+    예전 기본값 2000 은 **오래된 쪽**을 남기고 최신 턴을 잘랐다(ORDER BY 시각 + LIMIT) - 사용자가
+    가장 보려는 쪽이다. 게다가 db_count 가 잘린 개수라 /api/session/tail 의 COUNT(*) 와 영원히
+    안 맞아, 2000턴이 넘는 활동 세션은 4초마다 세션 전체를 다시 받는 루프에 빠졌다.
+    """
     db = ArchiveDB()
     # 접힌 턴(#128)도 빼지 않고 hidden 플래그만 달아 내려준다 — 화면에서 제자리에 '접힘' 한 줄로
     # 남겨 바로 펼칠 수 있게(검색·지도에서만 빠진다). 빼버리면 되돌릴 길이 멀어진다.
@@ -593,7 +598,7 @@ def api_session(id: str = Query(...), limit: int = 2000):
         "SELECT t.id,t.timestamp,t.question,t.answer,t.actions,t.summary,t.tags,t.queued,"
         "       (h.turn_id IS NOT NULL) AS hidden "
         "FROM turns t LEFT JOIN hidden_turns h ON h.turn_id = t.id "
-        "WHERE t.session_id=? ORDER BY t.timestamp, t.id LIMIT ?", (id, limit)
+        "WHERE t.session_id=? ORDER BY t.timestamp, t.id LIMIT ?", (id, limit if limit > 0 else -1)
     ).fetchall()
     turns = []
     for r in rows:
@@ -613,7 +618,7 @@ def api_session(id: str = Query(...), limit: int = 2000):
     project = (info[2] if info else "") or ""
     src_file = _find_source_file(source, id, stored)
     is_sub, parent = _subagent_info(stored)
-    db_count = len(turns)
+    db_count = _db_count(db, id)    # 잘라 읽었어도 /api/session/tail 과 같은 기준이어야 한다
     live, live_skipped = _live_tail(db, source, stored, is_sub)
     at = {t["id"]: i for i, t in enumerate(turns)}
     for row in _live_rows(db, live):
@@ -654,8 +659,7 @@ def api_session_tail(id: str = Query(...)):
     source, stored = info[0], info[1]
     is_sub, _parent = _subagent_info(stored)
     live, live_skipped = _live_tail(db, source, stored, is_sub)
-    db_count = db.conn.execute("SELECT COUNT(*) FROM turns WHERE session_id=?", (id,)).fetchone()[0]
-    return {"turns": _live_rows(db, live), "db_count": db_count,
+    return {"turns": _live_rows(db, live), "db_count": _db_count(db, id),
             "active": _is_active(stored), "live_skipped": live_skipped}
 
 
@@ -1025,6 +1029,12 @@ def _live_rows(db: ArchiveDB, live: list) -> list[dict]:
     return rows
 
 
+def _db_count(db: ArchiveDB, sid: str) -> int:
+    """색인된 턴 수. /api/session 과 /api/session/tail 이 **같은 함수**로 센다 - 화면은 두 값이 다르면
+    색인이 진행됐다고 보고 전체를 다시 받는다. 기준이 갈리면 끝나지 않는 재요청 루프가 된다."""
+    return db.conn.execute("SELECT COUNT(*) FROM turns WHERE session_id=?", (sid,)).fetchone()[0]
+
+
 def _is_active(stored: str | None) -> bool:
     try:
         return bool(stored) and (time.time() - os.path.getmtime(stored)) < _ACTIVE_SECS
@@ -1384,13 +1394,34 @@ def _st_stop(persist: bool = True) -> None:
             db = ArchiveDB(); db.set_meta("syncthing_enabled", "0"); db.commit()
 
 
+# 기기 연결 요약 캐시. 상태바가 1초마다 부르는데 pair_summary 는 로컬 Syncthing REST 를 여러 번
+# 순차로 부른다(상대 1대·폴더 2개면 약 7번). 다른 폴링 경로는 캐시+락이 있는데 여기만 없어서,
+# Syncthing 이 대용량 스캔·동기화로 느릴 때 1초마다 새 요청이 겹쳐 쌓였다(#245 와 같은 모양).
+_PAIR_TTL = 2.0
+_pair_cache: dict = {"at": 0.0, "v": {}}
+_pair_lock = threading.Lock()
+
+
+def _pair_summary_cached(inst) -> dict:
+    now = time.time()
+    if now - _pair_cache["at"] < _PAIR_TTL:
+        return _pair_cache["v"]
+    if not _pair_lock.acquire(blocking=False):
+        return _pair_cache["v"]   # 다른 요청이 갱신 중 - 겹쳐 부르지 말고 직전 값으로 답한다
+    try:
+        with contextlib.suppress(Exception):   # 실패하면 직전 값(시각은 안 올려 다음 요청이 다시 시도)
+            _pair_cache.update(at=now, v=inst.pair_summary())
+        return _pair_cache["v"]
+    finally:
+        _pair_lock.release()
+
+
 @app.get("/api/syncthing/status")
 def api_syncthing_status():
     out = dict(_st_state)
     inst = _st.get("inst")
     if _st_state["running"] and inst is not None:
-        with contextlib.suppress(Exception):
-            out.update(inst.pair_summary())
+        out.update(_pair_summary_cached(inst))
     return out
 
 
@@ -1550,6 +1581,15 @@ def api_config_put(payload: dict):
                 invalid.append("VESTIGE_INDEX_TIME")
         except (ValueError, AttributeError):
             invalid.append("VESTIGE_INDEX_TIME")
+    # 색인 주기: 1 이상 정수만. 검증이 없어 '1.5' 가 그대로 저장됐고, 바로 아래 reload 와 다음
+    # 실행의 import 가 config.py 의 int() 에서 터져 백엔드가 아예 안 떴다.
+    _iv = updates.get("VESTIGE_INDEX_INTERVAL")
+    if _iv not in (None, ""):
+        try:
+            if int(str(_iv).strip()) < 1:
+                invalid.append("VESTIGE_INDEX_INTERVAL")
+        except (ValueError, TypeError):
+            invalid.append("VESTIGE_INDEX_INTERVAL")
     # 보존소 상한: 숫자·0 이상만. 검증을 안 하면 잘못된 값이 indexer 의 int() 에서 터지고,
     # 그 예외는 로그로만 사라져 '상한을 켰다고 믿는데 영구히 미적용'인 상태가 된다.
     _mb = updates.get("VESTIGE_RAW_ARCHIVE_MAX_MB")

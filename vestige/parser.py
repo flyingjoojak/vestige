@@ -194,8 +194,16 @@ def is_turn_start(obj: dict) -> bool:
     색인기(indexer._group_with_offsets)는 이 기준으로 파일을 구간으로 자르고 구간마다 턴 하나를
     기대한다. 두 기준이 어긋나면 구간 하나에서 턴이 여럿 나온다 — #246 직후 실제로 그랬고,
     끼어든 질문과 그 답변이 통째로 버려졌다.
+
+    **반대 방향도 같은 사고다.** extract_turns 는 구조 노이즈(isMeta 등)를 먼저 버리는데, 예전
+    이 함수는 노이즈인지 안 봐서 작업 중간에 끼는 isMeta user 기록 — 스킬 본문, 다른 세션이 보낸
+    메시지, 이미지를 읽을 때 붙는 `[Image: original …]` — 을 새 턴의 시작으로 봤다. 색인기가 그
+    자리에서 구간을 자르면 extract_turns 는 그 구간에서 턴을 하나도 못 만들고, **그 뒤의 답변과
+    도구 호출이 어느 턴에도 안 붙은 채 색인에서 빠졌다**(실측: 세션 20개, 거짓 경계 364개).
     """
-    return queued_human_prompt(obj) is not None or is_real_user_prompt(obj)
+    if queued_human_prompt(obj) is not None:
+        return True   # type=attachment 라 아래 노이즈 검사에 걸리지만, 사람이 친 질문이다
+    return not is_structural_noise(obj) and is_real_user_prompt(obj)
 
 
 def is_real_user_prompt(obj: dict) -> bool:

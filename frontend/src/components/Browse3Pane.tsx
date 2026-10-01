@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
+import { useDebounced } from "@/lib/useDebounced"
 import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, type SearchMode } from "@/lib/api"
 import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
@@ -253,8 +254,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   // block:"nearest" - 이미 보이면 건드리지 않고, 목록 밖일 때만 최소한으로 끌어온다.
   useEffect(() => { selRowRef.current?.scrollIntoView({ block: "nearest" }) }, [selTurn?.turn, convs])
 
-  async function runSearch(v = q, m = mode) {
-    setQ(v)
+  async function runSearch(v: string, m: SearchMode) {
     const term = v.trim()
     if (!term) { searchReq.current++; setHits(null); setSearchErr(""); return }   // 진행 중 요청 무효화
     const myId = ++searchReq.current
@@ -278,6 +278,12 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       if (myId === searchReq.current) { setHits([]); setSearchErr(errText(t, e, "browse.searchFailed")) }
     } finally { if (myId === searchReq.current) setSearching(false) }
   }
+
+  // 검색은 입력이 멈춘 뒤에 한 번만(풀리뷰). 예전엔 글자마다 요청이 나가 임베딩·벡터 로드·후보
+  // 1000개 조회가 키 입력마다 돌았다(응답은 마지막 것만 쓰고 나머지는 버렸다).
+  // 날짜·모드도 같은 길로 보낸다 - 예전엔 setSince 직후 runSearch() 를 불러 **바뀌기 전 날짜**로 검색했다.
+  const dq = useDebounced(q, 300)
+  useEffect(() => { void runSearch(dq, mode) }, [dq, mode, since, until])   // eslint-disable-line react-hooks/exhaustive-deps
 
   function pickGroup(id: string) { setSel(id); setSelTurn(null) }
   const selGroup = groups?.find((g) => g.id === sel)
@@ -515,18 +521,18 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           )}
           <div className="relative">
             <Magnifier className="pointer-events-none absolute left-3 top-1/2 size-[17px] -translate-y-1/2 text-muted-foreground" />
-            <Input value={q} onChange={(e) => runSearch(e.target.value)} aria-label={t("browse.searchPlaceholder", { title })} placeholder={t("browse.searchPlaceholder", { title })} className="h-9 rounded-lg pl-9 text-sm" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} aria-label={t("browse.searchPlaceholder", { title })} placeholder={t("browse.searchPlaceholder", { title })} className="h-9 rounded-lg pl-9 text-sm" />
             {searching && <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <SegmentedRadioGroup label={t("search.modeLabel")} value={mode}
-              onChange={(v) => { setMode(v); runSearch(q, v) }}
+              onChange={(v) => setMode(v)}
               options={MODES.map((m) => ({ value: m.v, label: <><m.Icon className="size-3.5" />{t(m.key)}</> }))} />
             <label className="inline-flex items-center gap-1">{t("browse.since")}
-              <input type="date" value={since} onClick={openPicker} onFocus={openPicker} onChange={(e) => { setSince(e.target.value); runSearch() }}
+              <input type="date" value={since} onClick={openPicker} onFocus={openPicker} onChange={(e) => setSince(e.target.value)}
                 className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
             <label className="inline-flex items-center gap-1">{t("browse.until")}
-              <input type="date" value={until} onClick={openPicker} onFocus={openPicker} onChange={(e) => { setUntil(e.target.value); runSearch() }}
+              <input type="date" value={until} onClick={openPicker} onFocus={openPicker} onChange={(e) => setUntil(e.target.value)}
                 className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
           </div>
         </div>

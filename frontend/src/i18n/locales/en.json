@@ -70,7 +70,10 @@
     "syncReceiving": "Receiving {{pct}}%",
     "syncSending": "Sending {{pct}}%",
     "syncLatestPeerOff": "Not connected",
-    "syncBothLatest": "Sync up to date"
+    "syncBothLatest": "Sync up to date",
+    "indexError": "Indexing error",
+    "indexPartial": "{{n}} items failed",
+    "indexErrorTip": "See Settings > Indexing for details."
   },
   "settings": {
     "title": "Settings",

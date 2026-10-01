@@ -245,10 +245,12 @@ def index_file(
     for i, (turn, resume) in enumerate(turns):
         written = db.upsert_turn(turn, source=src, source_file=path)   # 출처·원문경로 기록(재개용)
         count += 1
-        if written and should_embed(turn):   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
+        if written:   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
             ctx = prev_q.get(turn.session_id, "")
-            chunks = chunk_turn(turn)
+            chunks = chunk_turn(turn) if should_embed(turn) else []
             # 파서 버전이 올라 턴이 짧아졌으면 뒤쪽 청크가 옛 내용으로 남는다 → 치운다.
+            # 임베딩 여부와 따로 판단해야 한다: 짧아져서 임베딩 기준 아래로 내려간 턴은 청크가
+            # 0개가 맞는데, 이 정리가 should_embed 안에 있으면 옛 청크가 통째로 남아 검색에 뜬다.
             stale = db.trim_chunks(turn.id, len(chunks))
             if stale:
                 vi.remove(stale)
