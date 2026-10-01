@@ -83,7 +83,9 @@ export function SearchView() {
     }).catch(() => { /* 소스 목록 실패 시 필터만 숨김(검색은 전체로 동작) */ })
     // 검색 전 화면용 최근 세션. 실패하면 그 블록만 안 뜨고 검색은 그대로 된다(장식용 데이터).
     listSessions()
-      .then((r) => { if (alive) setRecentSessions(r.sessions.filter((s) => !s.subagent).slice(0, 6)) })
+      // 통째로 접은 세션은 세션 목록과 같이 '최근 세션'에서도 뺀다(접힘 화면에만 있다).
+      .then((r) => { if (alive) setRecentSessions(r.sessions.filter((s) => !s.subagent
+        && !((s.hidden_count ?? 0) > 0 && s.hidden_count === s.count)).slice(0, 6)) })
       .catch(() => { if (alive) setRecentSessions([]) })
     return () => { alive = false }
   }, [])

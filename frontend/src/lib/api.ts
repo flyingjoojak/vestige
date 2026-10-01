@@ -1,4 +1,4 @@
-import type { Folder, FolderDetail, HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, SessionTail, Stats } from "./types"
+import type { Folder, FolderDetail, FoldedGroups, SearchResult, SessionDetail, SessionRow, SessionSource, SessionTail, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -144,8 +144,8 @@ export const reorderFolder = (folderId: number, order: { kind: "turn" | "session
   // count = 시도한 개수, changed = 실제 갱신된 개수. 다르면 그 사이 항목 구성이 바뀐 것이다.
   postJSON<{ ok: boolean; count: number; changed: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
 
-export const listHidden = (limit = 200) =>
-  getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)
+// limit 0 = 개수만(좌측 배지). 그 밖엔 묶음까지.
+export const listHidden = (limit = 1) => getJSON<FoldedGroups>(`/api/hidden?limit=${limit}`)
 
 // 세션 동기화 감시(Syncthing 충돌 해소) 상태·토글.
 export interface SyncStatus {

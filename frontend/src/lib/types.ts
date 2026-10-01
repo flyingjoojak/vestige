@@ -84,12 +84,23 @@ export interface Stats {
 }
 
 // 접힌 턴 모아보기(#128) - 검색에서 접으면 어느 세션이었는지 잊기 쉬워 한곳에서 다시 찾는다.
-export interface HiddenItem {
-  turn_id: string
-  session_id: string | null
+// 접힘 화면(#128 개편) - 접힌 것을 세션별로 묶어 받는다(500턴 세션을 접어도 한 줄).
+export interface FoldedSession {
+  session_id: string
   headline: string
-  timestamp: string | null
-  hidden_at: number
+  total: number              // 그 세션의 전체 대화 수
+  folded: number             // 그중 접힌 수(sessions 에선 total 과 같다)
+  started: string
+  ended: string
+  last_hidden: number        // 마지막으로 접은 시각(최근 접은 순 정렬)
+  last_turn_id: string | null
+}
+export interface FoldedTurn { turn_id: string; headline: string; timestamp: string }
+export interface FoldedChats extends FoldedSession { turns: FoldedTurn[] }   // 일부만 접힌 세션
+export interface FoldedGroups {
+  sessions: FoldedSession[]  // 통째로 접은 세션
+  chats: FoldedChats[]       // 일부만 접힌 세션의 채팅(세션별 묶음)
+  count: number              // 접은 세션 수 + 접힌 채팅 수(좌측 배지)
 }
 
 // 폴더(#201) - 사용자가 직접 만드는 수동 군집. 중첩 허용(parent_id), 담는 단위는 턴·세션.

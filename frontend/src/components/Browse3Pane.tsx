@@ -204,7 +204,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
         subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
         parent: s.parent,       // 부모 세션 아래로 접어 넣기 위해(백엔드가 경로에서 파생)
-        // 전 턴이 접힌 세션(#128): 목록에서 빼지 않고 흐리게 '접힘'으로 구분 - 빼버리면 펼칠 길이 없다.
+        // 전 턴이 접힌 세션(#128). 목록에서는 뺀다(아래 visibleGroups) - 접힘 화면의 '접은 세션'에서
+        // 찾아 펼치면 된다. 예전엔 흐리게 남겼는데, 접은 게 목록에 그대로 있으면 접은 의미가 없다.
         folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
       })))).catch(() => setGroupsErr(true))
     } else {
@@ -298,13 +299,16 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       : <MessagesSquare aria-hidden className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
 
   // 하위 에이전트 세션을 부모 아래로 모은다(판단은 lib/subagents.ts - 단독 검증 가능).
-  const { top, kids } = nestSubagents(groups ?? [])
+  // 통째로 접은 세션은 목록에서 뺀다. 단, 지금 열려 있는 세션은 남긴다 - 접힘 화면에서 '세션 열기'로
+  // 들어오면 그 세션이 선택된 채로 오는데, 목록에서 사라지면 어디를 보고 있는지 알 수 없다.
+  const visibleGroups = groups ? groups.filter((g) => !g.folded || g.id === sel) : null
+  const { top, kids } = nestSubagents(visibleGroups ?? [])
 
   // 그룹 목록 - 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
   const listTerm = listQ.trim().toLowerCase()
   const hitsTerm = (g: Group) =>
     g.label.toLowerCase().includes(listTerm) || (kind === "sessions" && g.id.toLowerCase().includes(listTerm))
-  const shownGroups = groups ? filterTop(top, kids, listTerm, hitsTerm) : null
+  const shownGroups = visibleGroups ? filterTop(top, kids, listTerm, hitsTerm) : null
   const kidsOf = (g: Group) => kidsToShow(kids.get(g.id) ?? [], listTerm, hitsTerm)
   // 검색으로 걸린 하위는 자동으로 펼친다(닫혀 있으면 맞았다는 걸 알 수 없다).
   const kidsOpen = (g: Group) => (listTerm ? true : openKids.has(g.id))
