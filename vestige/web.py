@@ -1394,13 +1394,34 @@ def _st_stop(persist: bool = True) -> None:
             db = ArchiveDB(); db.set_meta("syncthing_enabled", "0"); db.commit()
 
 
+# 기기 연결 요약 캐시. 상태바가 1초마다 부르는데 pair_summary 는 로컬 Syncthing REST 를 여러 번
+# 순차로 부른다(상대 1대·폴더 2개면 약 7번). 다른 폴링 경로는 캐시+락이 있는데 여기만 없어서,
+# Syncthing 이 대용량 스캔·동기화로 느릴 때 1초마다 새 요청이 겹쳐 쌓였다(#245 와 같은 모양).
+_PAIR_TTL = 2.0
+_pair_cache: dict = {"at": 0.0, "v": {}}
+_pair_lock = threading.Lock()
+
+
+def _pair_summary_cached(inst) -> dict:
+    now = time.time()
+    if now - _pair_cache["at"] < _PAIR_TTL:
+        return _pair_cache["v"]
+    if not _pair_lock.acquire(blocking=False):
+        return _pair_cache["v"]   # 다른 요청이 갱신 중 - 겹쳐 부르지 말고 직전 값으로 답한다
+    try:
+        with contextlib.suppress(Exception):   # 실패하면 직전 값(시각은 안 올려 다음 요청이 다시 시도)
+            _pair_cache.update(at=now, v=inst.pair_summary())
+        return _pair_cache["v"]
+    finally:
+        _pair_lock.release()
+
+
 @app.get("/api/syncthing/status")
 def api_syncthing_status():
     out = dict(_st_state)
     inst = _st.get("inst")
     if _st_state["running"] and inst is not None:
-        with contextlib.suppress(Exception):
-            out.update(inst.pair_summary())
+        out.update(_pair_summary_cached(inst))
     return out
 
 

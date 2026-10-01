@@ -70,7 +70,10 @@
     "syncReceiving": "받는 중 {{pct}}%",
     "syncSending": "전송 중 {{pct}}%",
     "syncLatestPeerOff": "동기화 미연결",
-    "syncBothLatest": "동기화 최신"
+    "syncBothLatest": "동기화 최신",
+    "indexError": "색인 오류",
+    "indexPartial": "일부 항목 실패 {{n}}건",
+    "indexErrorTip": "설정 > 색인에서 자세히 볼 수 있어요."
   },
   "settings": {
     "title": "설정",

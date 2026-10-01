@@ -788,3 +788,38 @@ def test_bad_index_interval_in_config_file_does_not_stop_startup(tmp_path):
                        capture_output=True, text=True, encoding="utf-8", env=env)
     assert r.returncode == 0, r.stderr[-400:]
     assert r.stdout.strip() == "10"
+
+
+def test_syncthing_status_does_not_pile_up_rest_calls(monkeypatch):
+    """1초 폴링이 겹쳐도 Syncthing 요약은 한 번만 부르고, 짧은 TTL 안에서는 다시 부르지 않는다.
+
+    pair_summary 는 로컬 Syncthing REST 를 여러 번 순차로 부른다. 캐시·락이 없어서 Syncthing 이
+    느릴 때 상태바 폴링마다 새 요청이 겹쳐 쌓였다(#245 의 482MB 재파싱과 같은 모양).
+    """
+    import threading
+    import time as _t
+
+    calls = []
+    started = threading.Event()
+
+    class SlowInst:
+        def pair_summary(self):
+            calls.append(1)
+            started.set()
+            _t.sleep(0.5)
+            return {"sync": {"state": "idle"}}
+
+    monkeypatch.setitem(web._st, "inst", SlowInst())
+    monkeypatch.setitem(web._st_state, "running", True)
+    web._pair_cache.update(at=0.0, v={})
+
+    th = threading.Thread(target=web.api_syncthing_status, daemon=True)
+    th.start()
+    assert started.wait(5)
+    web.api_syncthing_status()          # 겹친 폴링 - 직전 값으로 즉시
+    web.api_syncthing_status()
+    th.join(10)
+    assert len(calls) == 1, f"겹친 폴링이 Syncthing 을 또 불렀다({len(calls)}회)"
+
+    assert web.api_syncthing_status()["sync"] == {"state": "idle"}   # TTL 안 - 캐시 값
+    assert len(calls) == 1
