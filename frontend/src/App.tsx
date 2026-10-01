@@ -214,7 +214,7 @@ export default function App() {
           )}
           {view === "folders" && (
             /* 폴더 화면은 대화를 그 안에서 직접 연다(세션 탭으로 넘어가지 않음). */
-            <FolderView />
+            <FolderView onOpenInSessions={(session, turn) => openTurn("sessions", session, turn, session)} />
           )}
           {view === "folded" && (
             <FoldedView onChanged={refreshFolded}

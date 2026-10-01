@@ -69,6 +69,18 @@ _PLUMBING_PREFIXES = (
 _ACTION_KEYS = ("file_path", "notebook_path", "path", "command", "pattern", "url", "query")
 
 
+# 건너뛴 깨진 줄: 경로 -> 그 줄 끝 오프셋들. 색인기가 파일을 색인한 뒤 꺼내 화면 오류로 올린다.
+# 예전엔 경고 로그만 남겨, 그 턴이 영구히 색인에서 빠져도 앱 어디에도 보이지 않았다(로그 규약상
+# "ERROR " 로 시작하는 log_fn 메시지만 화면에 닿는다). 같은 줄을 여러 경로가 읽어도(실시간 표시,
+# 대기 수 계산 등) 오프셋 집합이라 한 번만 센다.
+_bad_lines: dict[str, set[int]] = {}
+
+
+def take_bad_lines(path: str | Path) -> list[int]:
+    """path 에서 건너뛴 깨진 줄의 오프셋들을 꺼낸다(꺼내면 지워진다)."""
+    return sorted(_bad_lines.pop(str(path), ()))
+
+
 def iter_json_lines(path: str | Path, start_offset: int = 0) -> Iterator[tuple[dict, int]]:
     """start_offset 바이트부터 '완결된' JSON 줄만 (obj, end_offset) 로 산출.
 
@@ -94,6 +106,7 @@ def iter_json_lines(path: str | Path, start_offset: int = 0) -> Iterator[tuple[d
             # 손상된(하지만 완결된) 줄은 건너뛸 수밖에 없다 — 다만 무로그로 사라지면 나중에
             # 검색 공백의 원인을 알 수 없으므로, 경로·오프셋·앞부분을 남겨 관측 가능하게 한다.
             logger.warning("손상 JSON 라인 스킵: %s @%d — %.80r", path, offset, text)
+            _bad_lines.setdefault(str(path), set()).add(offset)
             continue
         yield obj, offset
 

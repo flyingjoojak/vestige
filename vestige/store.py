@@ -571,24 +571,71 @@ class ArchiveDB:
         """읽을 때 필터용 전체 숨김 turn id 집합(검색·지도 등에서 공유)."""
         return {r["turn_id"] for r in self.conn.execute("SELECT turn_id FROM hidden_turns")}
 
-    def hidden_count(self) -> int:
-        """접힌 턴 수(좌측 메뉴 배지용 — 목록 전체를 실어 나르지 않으려고 따로 둠)."""
-        return self.conn.execute("SELECT COUNT(*) c FROM hidden_turns").fetchone()["c"]
+    def folded_groups(self, *, with_items: bool = True) -> dict:
+        """접힘 화면(#128): 통째로 접은 세션과, 일부만 접힌 세션의 채팅을 **세션별로 묶어** 돌려준다.
 
-    def list_hidden(self, limit: int = 200) -> list[dict]:
-        """접힌 턴 모아보기(#128): 최근 접은 순. 검색에서 접으면 어느 세션이었는지 잊기 쉬워
-        한곳에서 다시 찾아 펼칠 수 있어야 한다. turns 가 사라진 고아 행은 내용이 None 으로 온다."""
-        rows = self.conn.execute(
-            "SELECT h.turn_id, h.hidden_at, t.session_id, t.question, t.summary, t.timestamp "
-            "FROM hidden_turns h LEFT JOIN turns t ON t.id = h.turn_id "
-            "ORDER BY h.hidden_at DESC LIMIT ?", (limit,)
+        예전엔 접힌 턴을 하나씩 최근 접은 순으로 200개까지 늘어놨다. 500턴짜리 세션을 접으면 화면이
+        500줄이 됐고, 200개를 넘는 부분은 아예 안 보였다.
+
+        - sessions: 그 세션의 턴이 **전부** 접힌 것. 한 줄로(대화 수만)
+        - chats   : 일부만 접힌 세션. 세션별 묶음 안에 접힌 턴 목록
+        - count   : 접은 세션 수 + 일부 접힌 세션의 접힌 턴 수(좌측 배지 - 화면에 보이는 단위와 같다)
+        턴이 사라진 고아 행(hidden_turns 만 남은 것)은 펼칠 대상이 없어 뺀다.
+        """
+        groups = self.conn.execute(
+            """WITH f AS (
+                 SELECT t.session_id AS sid, COUNT(*) AS folded, MAX(h.hidden_at) AS last_hidden
+                 FROM hidden_turns h JOIN turns t ON t.id = h.turn_id GROUP BY t.session_id),
+               s AS (
+                 SELECT session_id AS sid, COUNT(*) AS total, MIN(timestamp) AS started,
+                        MAX(timestamp) AS ended FROM turns
+                 WHERE session_id IN (SELECT sid FROM f) GROUP BY session_id)
+               SELECT f.sid, f.folded, f.last_hidden, s.total, s.started, s.ended
+               FROM f JOIN s ON s.sid = f.sid ORDER BY f.last_hidden DESC"""
         ).fetchall()
-        return [{
-            "turn_id": r["turn_id"], "session_id": r["session_id"],
-            "headline": r["summary"] or r["question"] or "",
-            "timestamp": r["timestamp"], "hidden_at": r["hidden_at"],
-        } for r in rows]
+        full = [g for g in groups if g["folded"] >= g["total"]]
+        part = [g for g in groups if g["folded"] < g["total"]]
+        count = len(full) + sum(g["folded"] for g in part)
+        if not with_items:
+            return {"sessions": [], "chats": [], "count": count}
 
+        sids = [g["sid"] for g in groups]
+        heads: dict[str, dict] = {}
+        if sids:
+            marks = ",".join("?" * len(sids))
+            for r in self.conn.execute(
+                f"""SELECT session_id, COALESCE(NULLIF(summary,''), question) AS h, id, rn, rd FROM (
+                      SELECT session_id, summary, question, id,
+                             ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp, id) AS rn,
+                             ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp DESC, id DESC) AS rd
+                      FROM turns WHERE session_id IN ({marks}))
+                    WHERE rn = 1 OR rd = 1""", sids):
+                d = heads.setdefault(r["session_id"], {})
+                if r["rn"] == 1:
+                    d["headline"] = r["h"] or ""
+                if r["rd"] == 1:
+                    d["last_turn_id"] = r["id"]
+            for r in self.conn.execute(
+                    f"SELECT session_id, title FROM session_titles WHERE title<>'' AND session_id IN ({marks})", sids):
+                heads.setdefault(r["session_id"], {})["headline"] = r["title"]   # 사용자가 지은 제목 우선
+
+        def base(g) -> dict:
+            h = heads.get(g["sid"], {})
+            return {"session_id": g["sid"], "headline": h.get("headline", ""), "total": g["total"],
+                    "folded": g["folded"], "started": g["started"], "ended": g["ended"],
+                    "last_hidden": g["last_hidden"], "last_turn_id": h.get("last_turn_id")}
+
+        chats = [dict(base(g), turns=[]) for g in part]
+        if chats:
+            by_sid = {c["session_id"]: c for c in chats}
+            marks = ",".join("?" * len(by_sid))
+            for r in self.conn.execute(
+                f"""SELECT t.id, t.session_id, COALESCE(NULLIF(t.summary,''), t.question) AS h, t.timestamp
+                    FROM hidden_turns h JOIN turns t ON t.id = h.turn_id
+                    WHERE t.session_id IN ({marks}) ORDER BY t.timestamp, t.id""", list(by_sid)):
+                by_sid[r["session_id"]]["turns"].append(
+                    {"turn_id": r["id"], "headline": r["h"] or "", "timestamp": r["timestamp"]})
+        return {"sessions": [base(g) for g in full], "chats": chats, "count": count}
 
     def distinct_sources(self) -> list[tuple[str, int]]:
         """색인된 턴이 있는 출처와 개수(검색 필터 옵션용). NULL(레거시)은 claude-code로 취급."""

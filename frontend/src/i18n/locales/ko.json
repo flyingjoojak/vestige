@@ -505,7 +505,14 @@
     "sync_not_started": "먼저 ‘기기 연결’을 시작하세요.",
     "turn_not_found": "대화를 찾을 수 없습니다. 다시 색인한 뒤 시도해 보세요.",
     "unknown_model": "알 수 없는 모델이에요.",
-    "unknown_source": "알 수 없는 소스예요."
+    "unknown_source": "알 수 없는 소스예요.",
+    "resume_subagent": "배경 에이전트 대화는 직접 열 수 없어요(검색·조회만 가능).",
+    "restore_subagent": "배경 에이전트 대화는 복구 대상이 아니에요.",
+    "restore_failed": "복구하지 못했어요: {{detail}}",
+    "restore_no_mirror": "보존된 원본이 없어 복구할 수 없어요(이 기능 이전에 유실된 세션일 수 있어요).",
+    "unpair_failed": "기기 연결을 해제하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "server_db_error": "데이터에 접근하지 못했어요. 잠시 후 다시 시도해 주세요. 계속되면 앱을 다시 시작해 주세요.",
+    "server_error": "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
   },
   "folded": {
     "title": "접힌 항목",
@@ -514,7 +521,14 @@
     "untitled": "(제목 없음)",
     "openSession": "세션 열기",
     "loadFailed": "접힌 항목을 불러오지 못했어요",
-    "unfoldFailed": "펼치지 못했어요"
+    "unfoldFailed": "펼치지 못했어요",
+    "sessions": "접은 세션",
+    "sessionsHint": "통째로 접은 세션은 세션 목록에서 빠지고 여기에만 있어요.",
+    "chats": "접은 채팅",
+    "turnCount": "대화 {{count}}개",
+    "chatsInSession": "접힌 대화 {{folded}}개 / 전체 {{total}}개",
+    "unfoldAll": "모두 펼치기",
+    "unfoldSession": "세션 펼치기"
   },
   "folders": {
     "title": "폴더",
@@ -559,6 +573,8 @@
     "moveHint": "드래그 없이 옮기기:",
     "moveIn": "안으로",
     "moveOut": "밖으로",
-    "toggle": "{{name}} 펼치기/접기"
+    "toggle": "{{name}} 펼치기/접기",
+    "goToSession": "세션으로 이동",
+    "goToSessionHint": "세션 목록에서 이 세션을 열어요. 거기서 세션을 이어서 하거나 세션 안에서 검색할 수 있어요."
   }
 }

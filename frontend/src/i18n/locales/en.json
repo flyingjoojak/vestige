@@ -505,7 +505,14 @@
     "sync_not_started": "Start “Device connection” first.",
     "turn_not_found": "Conversation not found. Try reindexing and then retry.",
     "unknown_model": "Unknown model.",
-    "unknown_source": "Unknown source."
+    "unknown_source": "Unknown source.",
+    "resume_subagent": "Background agent conversations can't be opened directly (search and view only).",
+    "restore_subagent": "Background agent conversations can't be restored.",
+    "restore_failed": "Couldn't restore: {{detail}}",
+    "restore_no_mirror": "No preserved original to restore from (the session may have been lost before this feature existed).",
+    "unpair_failed": "Couldn't unpair the device. Please try again in a moment.",
+    "server_db_error": "Couldn't access the data. Please try again in a moment, and restart the app if it keeps happening.",
+    "server_error": "Something unexpected went wrong. Please try again in a moment."
   },
   "folded": {
     "title": "Folded items",
@@ -514,7 +521,14 @@
     "untitled": "(untitled)",
     "openSession": "Open session",
     "loadFailed": "Couldn't load folded items",
-    "unfoldFailed": "Couldn't unfold"
+    "unfoldFailed": "Couldn't unfold",
+    "sessions": "Folded sessions",
+    "sessionsHint": "Fully folded sessions are left out of the session list and only appear here.",
+    "chats": "Folded chats",
+    "turnCount": "{{count}} turns",
+    "chatsInSession": "{{folded}} of {{total}} folded",
+    "unfoldAll": "Unfold all",
+    "unfoldSession": "Unfold session"
   },
   "folders": {
     "title": "Folders",
@@ -559,6 +573,8 @@
     "moveHint": "Move without dragging:",
     "moveIn": "Move in",
     "moveOut": "Move out",
-    "toggle": "Expand/collapse {{name}}"
+    "toggle": "Expand/collapse {{name}}",
+    "goToSession": "Go to session",
+    "goToSessionHint": "Open this session in the session list, where you can resume it or search within it."
   }
 }

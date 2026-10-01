@@ -1,4 +1,4 @@
-import type { Folder, FolderDetail, HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, SessionTail, Stats } from "./types"
+import type { Folder, FolderDetail, FoldedGroups, SearchResult, SessionDetail, SessionRow, SessionSource, SessionTail, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -9,15 +9,19 @@ async function getJSON<T>(url: string): Promise<T> {
 // 실패 응답을 code(errors.* 번역키)와 params(detail 등)를 실은 Error로 던진다.
 // 표시부(errText)가 code를 t()로 번역하고, code가 없으면 message를 그대로 쓴다.
 export type ApiError = Error & { code?: string; params?: Record<string, unknown> }
-async function failure(r: Response): Promise<never> {
+// 단독 검증용으로 내보낸다: scripts/apiError.check.ts
+export async function failure(r: Response): Promise<never> {
   const body = await r.json().catch(() => null)
   const detail = body?.detail
   const detailObj = detail && typeof detail === "object" ? detail : null
   const code: string | undefined = detailObj?.code ?? body?.code
-  const rawMsg = detailObj?.msg ?? (typeof detail === "string" ? detail : undefined) ?? body?.error
+  // 친절한 문구(error)를 원시 예외 문자열(detail)보다 먼저. 일반 500 은 둘 다 주는데, 예전엔 detail 이
+  // 먼저 잡혀 'database is locked' 같은 내부 메시지가 화면에 그대로 나갔다. detail 문자열은 FastAPI 의
+  // 기본 HTTPException(detail="…") 처럼 그것밖에 없을 때만 쓴다.
+  const rawMsg = detailObj?.msg ?? body?.error ?? (typeof detail === "string" ? detail : undefined)
   const e = new Error(typeof rawMsg === "string" ? rawMsg : `HTTP ${r.status}`) as ApiError
   if (code) e.code = code
-  const d = detailObj?.detail ?? body?.detail_text
+  const d = detailObj?.detail
   if (d != null) e.params = { detail: d }
   throw e
 }
@@ -144,8 +148,8 @@ export const reorderFolder = (folderId: number, order: { kind: "turn" | "session
   // count = 시도한 개수, changed = 실제 갱신된 개수. 다르면 그 사이 항목 구성이 바뀐 것이다.
   postJSON<{ ok: boolean; count: number; changed: number }>("/api/folders/item/reorder", { folder_id: folderId, order })
 
-export const listHidden = (limit = 200) =>
-  getJSON<{ hidden: HiddenItem[]; count: number }>(`/api/hidden?limit=${limit}`)
+// limit 0 = 개수만(좌측 배지). 그 밖엔 묶음까지.
+export const listHidden = (limit = 1) => getJSON<FoldedGroups>(`/api/hidden?limit=${limit}`)
 
 // 세션 동기화 감시(Syncthing 충돌 해소) 상태·토글.
 export interface SyncStatus {

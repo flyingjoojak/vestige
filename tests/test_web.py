@@ -220,32 +220,36 @@ def test_export_skips_folded_turns(tmp_path, monkeypatch):
 
 
 def test_api_hidden_lists_recent_first_with_count(tmp_path, monkeypatch):
-    """접힌 턴 모아보기(#128): 최근 접은 순 + 배지용 count. limit=0 이면 개수만."""
+    """접힘 화면(#128): 세션 묶음이 최근 접은 순 + 배지용 count. limit=0 이면 개수만.
+
+    묶는 방식 자체는 test_folded_groups.py 가 본다. 여기선 순서와 엔드포인트 모양만.
+    """
     from vestige.models import Turn
     from vestige.store import ArchiveDB
 
     db = ArchiveDB(tmp_path / "a.db")
-    for i, q in ((1, "먼저접음"), (2, "나중접음")):
-        db.upsert_turn(Turn(id=f"s1:u{i}", session_id="s1", uuid=f"u{i}", parent_uuid=None,
-                             timestamp=f"2026-07-24T0{i}:00:00Z", project="p", question=q, answer="a", actions=()), source_file=None)
+    for sid, q in (("s1", "먼저접음"), ("s2", "나중접음")):
+        db.upsert_turn(Turn(id=f"{sid}:u1", session_id=sid, uuid="u1", parent_uuid=None,
+                             timestamp="2026-07-24T01:00:00Z", project="p", question=q, answer="a", actions=()), source_file=None)
     db.commit()
     monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
 
-    web.api_hide({"turn_id": "s1:u1"}); web.api_hide({"turn_id": "s1:u2"})
+    web.api_hide({"turn_id": "s1:u1"}); web.api_hide({"turn_id": "s2:u1"})
     # time.time() 해상도로 순서가 흔들리지 않게 접은 시각을 벌려둔다.
     db.conn.execute("UPDATE hidden_turns SET hidden_at=100 WHERE turn_id='s1:u1'")
-    db.conn.execute("UPDATE hidden_turns SET hidden_at=200 WHERE turn_id='s1:u2'")
+    db.conn.execute("UPDATE hidden_turns SET hidden_at=200 WHERE turn_id='s2:u1'")
     db.commit()
 
     r = web.api_hidden()
     assert r["count"] == 2
-    assert [h["turn_id"] for h in r["hidden"]] == ["s1:u2", "s1:u1"]   # 최근 접은 순
-    assert r["hidden"][0]["headline"] == "나중접음" and r["hidden"][0]["session_id"] == "s1"
+    assert [g["session_id"] for g in r["sessions"]] == ["s2", "s1"]     # 최근 접은 순
+    assert r["sessions"][0]["headline"] == "나중접음"
 
-    assert web.api_hidden(limit=0) == {"hidden": [], "count": 2}       # 배지용 경량 호출
+    assert web.api_hidden(limit=0) == {"sessions": [], "chats": [], "count": 2}   # 배지용 경량 호출
 
-    web.api_unhide({"turn_id": "s1:u2"})
-    assert web.api_hidden()["count"] == 1
+    web.api_unhide({"turn_id": "s1:u1"})                                  # 펼치면 묶음에서 빠진다
+    r = web.api_hidden()
+    assert r["count"] == 1 and [g["session_id"] for g in r["sessions"]] == ["s2"]
 
 
 def test_api_hide_rejects_missing_target():
@@ -823,3 +827,22 @@ def test_syncthing_status_does_not_pile_up_rest_calls(monkeypatch):
 
     assert web.api_syncthing_status()["sync"] == {"state": "idle"}   # TTL 안 - 캐시 값
     assert len(calls) == 1
+
+
+def test_unexpected_db_error_has_code_and_never_suggests_deleting_the_db():
+    """일반 500: 화면이 번역할 code 가 있고, DB 를 지우라고 하지 않는다.
+
+    예전 문구는 "archive.db 가 손상됐을 수 있어요(삭제하면 재생성됩니다)" 였다. 이 오류는 잠깐 겹친
+    'database is locked' 에서도 나는데, 믿고 지우면 원본 로그가 이미 사라진 대화는 영영 복구할 수 없다.
+    """
+    import asyncio
+    import json
+    import sqlite3
+
+    resp = asyncio.run(web._friendly_error(None, sqlite3.OperationalError("database is locked")))
+    body = json.loads(resp.body)
+    assert resp.status_code == 500 and body["code"] == "server_db_error"
+    assert "삭제" not in body["error"] and "재생성" not in body["error"]
+
+    other = json.loads(asyncio.run(web._friendly_error(None, ValueError("x"))).body)
+    assert other["code"] == "server_error"

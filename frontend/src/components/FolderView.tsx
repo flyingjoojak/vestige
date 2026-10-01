@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, FolderPlus,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, ExternalLink, FolderPlus,
   Folder as FolderIcon, GripVertical, Loader2,
   MessagesSquare, Move, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
@@ -151,7 +151,9 @@ function FolderTree({ parent, byParent, sel, collapsed, depth, lines = [], onPic
   )
 }
 
-export function FolderView() {
+// onOpenInSessions: 폴더 안의 대화를 세션 목록 화면에서 연다. 이 화면의 채팅은 내용 확인용이라
+// 세션 재개나 세션 안 검색은 세션 목록에서만 된다. turn 이 빈 문자열이면 그 세션의 마지막 대화로.
+export function FolderView({ onOpenInSessions }: { onOpenInSessions?: (session: string, turn: string) => void } = {}) {
   const { t } = useTranslation()
   const { confirm, prompt } = useDialogs()
   const [folders, setFolders] = useState<Folder[] | null>(null)
@@ -737,7 +739,14 @@ export function FolderView() {
         {openConv?.session
           // 턴 항목은 그 턴으로, 세션 항목은(지목한 턴 없음) 마지막 대화로.
           ? <ChatThread key={`${openConv.session}:${openConv.turn ?? ""}`}
-              session={openConv.session} focusTurn={openConv.turn} focusLast={!openConv.turn} />
+              session={openConv.session} focusTurn={openConv.turn} focusLast={!openConv.turn}
+              headerAction={onOpenInSessions && (
+                <button type="button" onClick={() => onOpenInSessions(openConv.session, openConv.turn ?? "")}
+                  title={t("folders.goToSessionHint")}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
+                  <ExternalLink aria-hidden className="size-3.5" />{t("folders.goToSession")}
+                </button>
+              )} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("folders.pickItemPrompt")}
             </div>}

@@ -198,3 +198,30 @@ def test_group_keeps_every_turn_when_boundaries_disagree():
     proc = [({"start": True, "name": "앞 턴"}, 0, 10), ({"name": "끼어든 턴"}, 10, 20)]
     out = _group_with_offsets(proc, 20, Disagreeing())
     assert [t for t, _ in out] == ["앞 턴", "끼어든 턴"], "구간 안의 뒤 턴을 버렸다"
+
+
+def test_corrupt_line_is_reported_to_the_index_status(tmp_path, monkeypatch):
+    """깨진 줄은 건너뛰되 화면 오류("ERROR " 로그)로 알린다 - 그 자리의 대화가 영구히 빠지므로.
+
+    예전엔 경고 로그만 남겨 앱 어디에도 안 보였다. 나머지 턴은 정상으로 뽑혀 '0턴' 감지에도 안 걸린다.
+    """
+    from vestige import indexer as I
+    from vestige.sources.claude_code import ClaudeCodeAdapter
+
+    f = tmp_path / "s1.jsonl"
+    good = _turn("s1", "u1", "정상 질문입니다 상세 내용") + "\n" + _assistant("s1", "답") + "\n"
+    f.write_text(good + '{"type": "user", 깨진 줄\n' + _turn("s1", "u2", "두번째 질문입니다 상세", ts="2026-07-24T00:05:00Z")
+                 + "\n" + _assistant("s1", "답2") + "\n", encoding="utf-8")
+    import os
+    import time
+    old = time.time() - 3600
+    os.utime(f, (old, old))   # 진행 중 턴 보류(2분)에 안 걸리게 - 마지막 턴까지 확정
+    monkeypatch.setattr(I, "discover_files", lambda recent_first=True: [(str(f), ClaudeCodeAdapter())])
+    monkeypatch.setattr(I.raw_archive, "mirror_file", lambda *a, **k: None)
+    db = ArchiveDB(tmp_path / "a.db")
+    logs = []
+    I.index_all(db, VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json"), FakeEmbedder(), log_fn=logs.append)
+
+    errs = [m for m in logs if m.startswith("ERROR ") and "깨진 로그" in m]
+    assert len(errs) == 1 and "1줄" in errs[0], logs
+    assert db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == 2   # 나머지는 정상
