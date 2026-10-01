@@ -33,6 +33,7 @@ export interface SessionTurn {
   tags: string[]
   hidden?: boolean   // 접힘(#128) - 제자리에 한 줄로만 표시되고 검색·지도에선 빠짐
   queued?: boolean   // 작업 중 끼어들어 친 질문(#246). 재색인 전 옛 턴은 undefined
+  live?: boolean     // 아직 색인 전(#249) - 로그에서 바로 읽음. 검색·지도에 없고 접기·폴더 담기 불가
 }
 
 export type SessionSource = "claude-code" | "codex"
@@ -49,6 +50,17 @@ export interface SessionDetail {
   can_restore?: boolean        // 원문은 없지만 보존된 원본이 있어 복구 가능(#163 P1)
   subagent?: boolean           // 배경(서브에이전트) 대화 — 직접 재개 불가
   parent?: string | null       // 파생된 부모 세션 id(있으면 역링크)
+  db_count?: number            // 색인된 턴 수(#249) - 바뀌면 전체를 다시 받는다
+  active?: boolean             // 원문이 최근 바뀜 → 꼬리를 주기적으로 다시 읽는다
+  live_skipped?: number        // 꼬리가 너무 커서 안 읽은 바이트 수(0 = 다 읽음)
+}
+
+// /api/session/tail - 활동 중인 세션의 색인 전 꼬리만(#249)
+export interface SessionTail {
+  turns: SessionTurn[]
+  db_count: number
+  active: boolean
+  live_skipped: number
 }
 
 export interface SessionRow {

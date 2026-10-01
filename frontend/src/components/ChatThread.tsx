@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
-import { getSession, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
+import { getSession, getSessionTail, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
+import { mergeTail } from "@/lib/liveTail"
 import { AddToFolder } from "./AddToFolder"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -34,7 +35,9 @@ function FoldedTurn({ t, i, highlight, onUnhide }: {
 }
 
 // 한 턴을 채팅 말풍선(질문 우 / 답변 좌)으로. 접고 펴는 것 없이 항상 펼쳐 보여줌.
-function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highlight: boolean; onHide: (id: string) => void }) {
+// memo: 활동 중인 세션은 몇 초마다 꼬리를 다시 받는다(#249). 안 바뀐 턴은 같은 객체로 오므로
+// 다시 그리지 않는다 - 턴마다 마크다운 렌더가 비싸다.
+const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highlight: boolean; onHide: (id: string) => void }) {
   const { t: tr } = useTranslation()
   const [openBash, setOpenBash] = useState(false)   // bash는 자동노출 X, 눌러서만
   const ref = useRef<HTMLDivElement | null>(null)
@@ -48,18 +51,23 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
         {/* 앞 답변이 끝나기 전에 끼어든 질문(#246). 답변이 중간에 갈리는 이유를 읽는 쪽이 알 수 있게. */}
         {t.queued && <span title={tr("chat.queuedHint")}
           className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">{tr("chat.queued")}</span>}
+        {/* 로그에서 바로 읽은 턴(#249). 아직 DB 에 없어 검색·지도에 안 나오고 접기·폴더 담기도 안 된다. */}
+        {t.live && <span title={tr("chat.liveHint")}
+          className="shrink-0 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-400">{tr("chat.live")}</span>}
         {t.summary && (
           <span className="min-w-0 flex-1 truncate">
             <FileText className="mr-1 -mt-0.5 inline size-3 text-primary/70" />{t.summary}
           </span>
         )}
-        <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <AddToFolder target={{ turnId: t.id }} />
-          <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
-            className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
-            <ChevronsDownUp className="size-3.5" />
-          </button>
-        </span>
+        {!t.live && (
+          <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <AddToFolder target={{ turnId: t.id }} />
+            <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
+              className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
+              <ChevronsDownUp className="size-3.5" />
+            </button>
+          </span>
+        )}
       </div>
       <div className="flex flex-col items-end">
         <span className="mb-1 mr-1 text-[10px] font-medium text-muted-foreground">{tr("chat.question")}</span>
@@ -84,7 +92,11 @@ function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i: number; highligh
       )}
     </div>
   )
-}
+})
+
+// 활동 중인 세션의 꼬리를 다시 읽는 간격(#249). Claude Code 는 메시지·도구 호출 하나가 끝날
+// 때마다 로그에 한 줄씩 붙이므로 단계 단위로 이 정도 늦게 따라간다.
+const LIVE_POLL_MS = 4000
 
 // 세션 전체를 채팅 스레드로 렌더. focusTurn이 있으면 그 턴을 강조+상단 스크롤.
 const PAD = 25   // 포커스 턴 위/아래로 이만큼만 먼저 렌더(큰 세션 로딩 지연 방지)
@@ -119,6 +131,52 @@ export function ChatThread(
     }).catch((e) => setErr(errText(t, e, "chat.loadFailed")))
   }, [session, focusTurn, focusLast, t])
 
+  // 실시간 표시(#249): 활동 중이면 몇 초마다 꼬리만 받아 합친다. 세션 전체(수 MB)를 다시 받지
+  // 않는다. 색인이 진행돼 DB 턴 수가 바뀐 경우에만 전체를 다시 받는다(정제·접힘이 붙었을 수 있다).
+  const dataRef = useRef(data)
+  dataRef.current = data
+  const active = data?.active === true
+  useEffect(() => {
+    if (!active) return
+    let stop = false
+    let busy = false   // 느린 응답이 겹쳐 쌓이지 않게
+    const tick = async () => {
+      if (stop || busy || document.visibilityState !== "visible") return
+      busy = true
+      try {
+        const tail = await getSessionTail(session)
+        if (stop) return
+        if (dataRef.current && tail.db_count !== dataRef.current.db_count) {
+          const full = await getSession(session)
+          if (!stop) setData(full)
+        } else {
+          // 함수형 갱신: 그 사이 접기 같은 낙관적 반영이 있었어도 가장 최신 상태에 합친다.
+          setData((cur) => {
+            if (!cur) return cur
+            const m = mergeTail(cur, tail)
+            return m === "refetch" ? cur : m
+          })
+        }
+      } catch {
+        // 실시간 표시는 덤이다. 실패해도 이미 보이는 대화는 그대로 두고 다음 주기에 다시 시도한다.
+      } finally {
+        busy = false
+      }
+    }
+    const id = setInterval(tick, LIVE_POLL_MS)
+    return () => { stop = true; clearInterval(id) }
+  }, [active, session])
+
+  // 끝까지 보고 있었으면 새로 붙은 턴까지 렌더 창을 넓힌다. 중간을 보고 있으면 건드리지 않는다.
+  const prevLen = useRef(0)
+  const turnCount = data?.turns.length ?? 0
+  useEffect(() => {
+    const before = prevLen.current
+    prevLen.current = turnCount
+    if (before === 0) return   // 첫 로드는 windowFor 가 이미 정했다
+    setRange((r) => (r.e >= before && turnCount > r.e ? { ...r, e: turnCount } : r))
+  }, [turnCount])
+
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
     setData((d) => (d ? { ...d, turns: d.turns.map((x) => (ids.has(x.id) ? { ...x, hidden: folded } : x)) } : d))
@@ -133,13 +191,19 @@ export function ChatThread(
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
+  // Turn 이 memo 라 콜백이 매 렌더 새로 만들어지면 memo 가 무력해진다 → 고정한다.
+  const foldRef = useRef(foldTurn)
+  foldRef.current = foldTurn
+  const onHide = useCallback((id: string) => foldRef.current(id, true), [])
+  const onUnhide = useCallback((id: string) => foldRef.current(id, false), [])
   // 세션 전체 접기 — 확인 후 이 세션의 모든 턴을 한 번에(목록에선 '접힘'으로 남는다).
   async function foldWholeSession() {
     const ok = await confirm({
       title: t("chat.foldSession"), description: t("chat.foldSessionConfirm"), confirmLabel: t("chat.foldSession"),
     })
     if (!ok) return
-    const ids = new Set((data?.turns ?? []).map((x) => x.id))
+    // 색인 전 턴(#249)은 DB 에 없어 서버가 못 접는다 — 화면에서만 접혔다가 다음 주기에 다시 펼쳐진다.
+    const ids = new Set((data?.turns ?? []).filter((x) => !x.live).map((x) => x.id))
     setFolded(ids, true)
     try {
       await apiHideSession(session)
@@ -191,6 +255,12 @@ export function ChatThread(
         )}
       </div>
       {hideErr && <div className="shrink-0 px-5 pt-2 text-[11px] text-destructive">{hideErr}</div>}
+      {/* 색인이 크게 밀려 꼬리를 안 읽었다(#249). 조용히 빠뜨리면 대화가 사라진 것처럼 보인다. */}
+      {(data?.live_skipped ?? 0) > 0 && (
+        <div role="status" className="shrink-0 px-5 pt-2 text-[11px] text-muted-foreground">
+          {t("chat.liveSkipped", { mb: ((data?.live_skipped ?? 0) / 1048576).toFixed(1) })}
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {/* errText 가 이미 사용자용 문장을 만든다 — '오류: ' 를 덧붙이면 말이 겹친다. */}
         {err && <div role="alert" className="py-10 text-center text-muted-foreground">{err}</div>}
@@ -202,8 +272,8 @@ export function ChatThread(
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadPrev", { count: range.s })}</button>
           )}
           {turns.slice(range.s, range.e).map((turn, j) => (turn.hidden
-            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onUnhide={(id) => foldTurn(id, false)} />
-            : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onHide={(id) => foldTurn(id, true)} />))}
+            ? <FoldedTurn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onUnhide={onUnhide} />
+            : <Turn key={turn.id} t={turn} i={range.s + j} highlight={turn.id === focusId} onHide={onHide} />))}
           {data && range.e < turns.length && (
             <button onClick={() => setRange((r) => ({ ...r, e: Math.min(turns.length, r.e + 50) }))}
               className="mx-auto block rounded-md border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">{t("chat.loadNext", { count: turns.length - range.e })}</button>
