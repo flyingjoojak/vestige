@@ -1,4 +1,4 @@
-import type { Folder, FolderDetail, HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, Stats } from "./types"
+import type { Folder, FolderDetail, HiddenItem, SearchResult, SessionDetail, SessionRow, SessionSource, SessionTail, Stats } from "./types"
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url)
@@ -51,6 +51,8 @@ export const getSources = () =>
 
 export const getSession = (id: string) =>
   getJSON<SessionDetail>(`/api/session?id=${encodeURIComponent(id)}`)
+export const getSessionTail = (id: string) =>
+  getJSON<SessionTail>(`/api/session/tail?id=${encodeURIComponent(id)}`)
 
 // 세션 제목을 직접 지정(빈 값이면 기본 제목으로 되돌림). 원문 대화는 건드리지 않는다.
 export const setSessionTitle = (sessionId: string, title: string) =>

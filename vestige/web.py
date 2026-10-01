@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -612,6 +613,14 @@ def api_session(id: str = Query(...), limit: int = 2000):
     project = (info[2] if info else "") or ""
     src_file = _find_source_file(source, id, stored)
     is_sub, parent = _subagent_info(stored)
+    db_count = len(turns)
+    live, live_skipped = _live_tail(db, source, stored, is_sub)
+    at = {t["id"]: i for i, t in enumerate(turns)}
+    for row in _live_rows(db, live):
+        if row["id"] in at:
+            turns[at[row["id"]]] = row      # 보류됐던 마지막 턴의 더 최신 판본
+        else:
+            turns.append(row)
     from . import raw_archive
     # 원문이 없어도(정리로 유실) 보존된 원본이 있으면 복구 가능 — 배경 대화는 애초에 재개가
     # 안 되니(위 resume_cmd) 복구도 의미 없어 제외.
@@ -629,7 +638,25 @@ def api_session(id: str = Query(...), limit: int = 2000):
         "can_restore": can_restore,
         "subagent": is_sub,
         "parent": parent,
+        "db_count": db_count,             # 색인된 턴 수 — 바뀌면 화면이 전체를 다시 받는다
+        "active": _is_active(stored),     # 활동 중이면 화면이 /api/session/tail 을 주기적으로 부른다
+        "live_skipped": live_skipped,     # 꼬리가 너무 커서 안 읽은 바이트 수(0 = 다 읽음)
     }
+
+
+@app.get("/api/session/tail")
+def api_session_tail(id: str = Query(...)):
+    """활동 중인 세션의 색인 전 꼬리만. 몇 초마다 불리므로 세션 전체(수 MB)를 다시 보내지 않는다."""
+    db = ArchiveDB()
+    info = db.session_source(id)
+    if info is None:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
+    source, stored = info[0], info[1]
+    is_sub, _parent = _subagent_info(stored)
+    live, live_skipped = _live_tail(db, source, stored, is_sub)
+    db_count = db.conn.execute("SELECT COUNT(*) FROM turns WHERE session_id=?", (id,)).fetchone()[0]
+    return {"turns": _live_rows(db, live), "db_count": db_count,
+            "active": _is_active(stored), "live_skipped": live_skipped}
 
 
 def _turns_to_markdown(sid: str, project: str, turns: list[dict]) -> str:
@@ -935,6 +962,74 @@ def _resume_argv(source: str, sid: str) -> list[str]:
 
 def _resume_cmd_str(source: str, sid: str) -> str:
     return " ".join(_resume_argv(source, sid))
+
+
+# 실시간 표시(#249): 아직 색인 안 된 로그 꼬리를 그 자리에서 읽어 채팅에 붙인다.
+# 색인은 10분 주기에 진행 중인 턴을 2분 보류하므로, 그것만으로는 작업 중인 세션이 안 보인다.
+# 꼬리는 평소 수십~수백 KB(실측 1~23ms)다. 색인이 크게 밀리면 커지는데, 그땐 읽지 않고
+# 크기만 알린다 — 몇 초마다 부르는 경로라 수백 MB 를 매번 파싱하면(실측 4~5초) 화면이 멈춘다.
+_LIVE_MAX_BYTES = 5 * 1024 * 1024
+_ACTIVE_SECS = 600   # 원문이 이 안에 바뀌었으면 '활동 중' → 화면이 꼬리를 주기적으로 다시 읽는다
+
+
+def _live_tail(db: ArchiveDB, source: str, stored: str | None, is_sub: bool) -> tuple[list, int]:
+    """색인 전 꼬리의 턴들(DB 에 쓰지 않는다). 반환 (턴들, 건너뛴 바이트 수).
+
+    커서 키는 turns.source_file 과 같은 문자열이다(색인기가 같은 값을 쓴다). 보류된 마지막 턴이
+    있으면 그 시작부터 읽으므로, DB 에 있던 그 턴의 더 최신 판본도 함께 나온다.
+    """
+    if not stored:
+        return [], 0
+    try:
+        size = os.path.getsize(stored)
+    except OSError:
+        return [], 0
+    offset, _, _ = db.get_cursor(stored)
+    hold = db.get_hold(stored)
+    start = hold if hold is not None else offset
+    if start >= size:
+        return [], 0
+    if size - start > _LIVE_MAX_BYTES:
+        return [], size - start
+    from .sources import ADAPTERS
+    adapter = ADAPTERS["codex" if source == "codex" else "subagent" if is_sub else "claude-code"]
+    try:
+        objs = [o for o, _end in adapter.read_records(stored, start)]
+        return adapter.extract_turns(objs), 0
+    except Exception as e:  # noqa: BLE001 — 실시간 표시는 덤이다. 실패해도 색인된 대화는 그대로 보인다
+        logging.getLogger(__name__).warning("실시간 꼬리 읽기 실패 %s: %s", stored, e)
+        return [], 0
+
+
+def _live_rows(db: ArchiveDB, live: list) -> list[dict]:
+    """꼬리 턴을 api_session 과 같은 모양으로. DB 에 이미 있는 턴(보류됐던 마지막 턴)은
+    정제·접힘을 이어받고 live 가 아니다 — 접기·폴더 담기가 그대로 된다."""
+    if not live:
+        return []
+    ids = [t.id for t in live]
+    known = {r["id"]: r for r in db.conn.execute(
+        f"SELECT t.id, t.summary, t.tags, (h.turn_id IS NOT NULL) AS hidden FROM turns t "
+        f"LEFT JOIN hidden_turns h ON h.turn_id = t.id WHERE t.id IN ({','.join('?' * len(ids))})", ids)}
+    rows = []
+    for t in live:
+        k = known.get(t.id)
+        rows.append({
+            "id": t.id, "timestamp": t.timestamp, "question": t.question, "answer": t.answer,
+            "actions": [a.render() for a in t.actions],
+            "summary": k["summary"] if k else None,
+            "tags": json.loads(k["tags"]) if k and k["tags"] else [],
+            "hidden": bool(k["hidden"]) if k else False,
+            "queued": t.queued,
+            "live": k is None,   # 아직 DB 에 없음 = 검색·지도에 안 나오고 접기·폴더 담기 불가
+        })
+    return rows
+
+
+def _is_active(stored: str | None) -> bool:
+    try:
+        return bool(stored) and (time.time() - os.path.getmtime(stored)) < _ACTIVE_SECS
+    except OSError:
+        return False
 
 
 def _find_source_file(source: str, sid: str, stored: str | None) -> Path | None:
