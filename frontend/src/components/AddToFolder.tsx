@@ -30,6 +30,8 @@ export function AddToFolder({ target, className, showLabel }: {
   const panelId = useId()
 
   const PANEL_W = 208, PANEL_MAX_H = 288
+  // 위치가 정해져 패널이 그려지면 그리로 포커스(포털이라 Tab 순서로는 닿지 않는다).
+  useEffect(() => { if (open && pos) panelRef.current?.focus() }, [open, pos])
   function place() {
     const r = triggerRef.current?.getBoundingClientRect()
     if (!r) return
@@ -149,7 +151,11 @@ export function AddToFolder({ target, className, showLabel }: {
           {/* 바깥 클릭 시 닫힘(장식용, AT엔 숨김) */}
           <button type="button" aria-hidden="true" tabIndex={-1}
             className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
-          <div id={panelId} ref={panelRef} role="group" aria-label={t("folders.addTo")}
+          {/* 패널은 body 끝에 붙어(포털) 문서 순서상 트리거와 멀다. 열 때 포커스를 옮기지 않으면 Tab 으로는
+              패널 안 버튼에 닿을 수 없었다. 열면 패널로 옮기고, 포커스가 패널 밖으로 나가면 닫는다(키보드
+              사용자가 안 보이는 패널 뒤에 남지 않게). */}
+          <div id={panelId} ref={panelRef} role="group" aria-label={t("folders.addTo")} tabIndex={-1}
+            onBlur={(e) => { if (!panelRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false) }}
             onClick={(e) => e.stopPropagation()}
             style={{ top: pos.top, left: pos.left, width: PANEL_W, maxHeight: PANEL_MAX_H,
                      transform: pos.flip ? "translateY(-100%)" : undefined }}

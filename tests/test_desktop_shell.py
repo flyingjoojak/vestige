@@ -96,3 +96,24 @@ def test_decorative_elements_above_click_overlays_pass_clicks_through():
             if "aria-hidden" in ln and "className=" in ln and raised and "pointer-events-none" not in ln:
                 bad.append(f"{f.name}:{n}: {ln.strip()[:90]}")
     assert not bad, "클릭을 삼키는 장식:\n" + "\n".join(bad)
+
+
+def test_every_backend_error_code_has_ko_and_en_text():
+    """백엔드가 내는 모든 에러 code 에 ko·en 문구가 있어야 한다.
+
+    키가 없으면 화면은 서버의 한국어 원문을 그대로 쓴다 - 영문 화면에도 한국어가 나온다.
+    풀리뷰에서 5개가 그렇게 빠져 있었다(기기 해제 실패·복구 실패 등).
+    """
+    import json
+    import re
+
+    codes = {}
+    for f in (ROOT / "vestige").rglob("*.py"):
+        for m in re.finditer(r'"code":\s*"([a-z0-9_]+)"', f.read_text(encoding="utf-8")):
+            codes.setdefault(m.group(1), f.name)
+    assert len(codes) > 20, "코드를 거의 못 찾았다 - 검사가 낡았는지 확인할 것"
+    for lang in ("ko", "en"):
+        errs = json.loads((ROOT / "frontend" / "src" / "i18n" / "locales" / f"{lang}.json")
+                          .read_text(encoding="utf-8"))["errors"]
+        missing = sorted(f"{c} ({src})" for c, src in codes.items() if c not in errs)
+        assert not missing, f"{lang}.json errors 에 없는 코드: {missing}"

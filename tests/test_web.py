@@ -827,3 +827,22 @@ def test_syncthing_status_does_not_pile_up_rest_calls(monkeypatch):
 
     assert web.api_syncthing_status()["sync"] == {"state": "idle"}   # TTL 안 - 캐시 값
     assert len(calls) == 1
+
+
+def test_unexpected_db_error_has_code_and_never_suggests_deleting_the_db():
+    """일반 500: 화면이 번역할 code 가 있고, DB 를 지우라고 하지 않는다.
+
+    예전 문구는 "archive.db 가 손상됐을 수 있어요(삭제하면 재생성됩니다)" 였다. 이 오류는 잠깐 겹친
+    'database is locked' 에서도 나는데, 믿고 지우면 원본 로그가 이미 사라진 대화는 영영 복구할 수 없다.
+    """
+    import asyncio
+    import json
+    import sqlite3
+
+    resp = asyncio.run(web._friendly_error(None, sqlite3.OperationalError("database is locked")))
+    body = json.loads(resp.body)
+    assert resp.status_code == 500 and body["code"] == "server_db_error"
+    assert "삭제" not in body["error"] and "재생성" not in body["error"]
+
+    other = json.loads(asyncio.run(web._friendly_error(None, ValueError("x"))).body)
+    assert other["code"] == "server_error"

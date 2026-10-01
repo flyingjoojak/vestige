@@ -410,11 +410,17 @@ async def _friendly_error(request, exc):  # noqa: ANN001 — FastAPI 핸들러 �
     from fastapi.responses import JSONResponse
     # 관측성: 삼키기 전에 전체 트레이스백을 로그(exe면 data/app.log)로 남긴다.
     traceback.print_exception(type(exc), exc, exc.__traceback__)
+    # code 를 붙여 화면이 번역하게 한다(없으면 영문 화면에도 이 한국어가 나간다).
+    # 예전 문구는 "archive.db 가 손상됐을 수 있어요(삭제하면 재생성됩니다)" 였다. 이 오류는 다른 프로세스와
+    # 잠깐 겹친 'database is locked' 에서도 나는데, 그 말을 믿고 지우면 폴더·제목·접힘이 사라지고 원본
+    # 로그가 이미 지워진(Claude Code 는 30일 뒤 지운다) 대화는 영영 복구할 수 없다. 지우라고 하지 않는다.
     if isinstance(exc, (sqlite3.Error, OSError)):
-        msg = "데이터에 접근하지 못했어요 — data 폴더의 archive.db가 손상됐을 수 있어요(삭제하면 재생성됩니다)."
+        code = "server_db_error"
+        msg = "데이터에 접근하지 못했어요. 잠시 후 다시 시도해 주세요. 계속되면 앱을 다시 시작해 주세요."
     else:
+        code = "server_error"
         msg = "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
-    return JSONResponse(status_code=500, content={"error": msg, "detail": str(exc)[:300]})
+    return JSONResponse(status_code=500, content={"code": code, "error": msg, "detail": str(exc)[:300]})
 
 
 @app.get("/api/debug/index")
