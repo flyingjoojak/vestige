@@ -890,10 +890,10 @@ def api_folder(id: int = Query(...)):
 
 
 @app.get("/api/hidden")
-def api_hidden(limit: int = 200):
-    """접힌 턴 모아보기(#128). limit=0 이면 개수만(좌측 메뉴 배지용 가벼운 호출)."""
+def api_hidden(limit: int = 1):
+    """접힘 화면(#128): 접은 세션 / 일부 접힌 세션의 채팅(세션별 묶음). limit=0 이면 개수만(좌측 배지)."""
     db = ArchiveDB()
-    return {"hidden": db.list_hidden(limit) if limit > 0 else [], "count": db.hidden_count()}
+    return db.folded_groups(with_items=limit != 0)
 
 
 @app.post("/api/session/title")

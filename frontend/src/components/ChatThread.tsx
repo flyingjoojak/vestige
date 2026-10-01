@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
 import { getSession, getSessionTail, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
@@ -111,8 +111,10 @@ function windowFor(d: Detail, focusTurn?: string, focusLast?: boolean) {
   return { s: Math.max(0, c - PAD), e: Math.min(n, c + PAD + 1) }
 }
 
+// headerAction: 이 채팅을 띄운 화면이 머리줄에 붙이는 동작(예: 폴더 화면의 '세션으로 이동').
 export function ChatThread(
-  { session, focusTurn, focusLast }: { session: string; focusTurn?: string; focusLast?: boolean },
+  { session, focusTurn, focusLast, headerAction }:
+  { session: string; focusTurn?: string; focusLast?: boolean; headerAction?: ReactNode },
 ) {
   const { t } = useTranslation()
   const { confirm } = useDialogs()
@@ -238,6 +240,7 @@ export function ChatThread(
           {t("chat.sessionLabel", { id: session.slice(0, 8) })}{data ? ` · ${t("chat.turnCount", { count: data.count })}` : ""}
           {foldedCount > 0 && ` · ${t("chat.foldedCount", { count: foldedCount })}`}
         </span>
+        {headerAction}
         {data && turns.length > 0 && (
           <AddToFolder target={{ sessionId: session }} showLabel
             className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted" />
