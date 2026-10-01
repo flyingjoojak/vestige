@@ -9,15 +9,19 @@ async function getJSON<T>(url: string): Promise<T> {
 // 실패 응답을 code(errors.* 번역키)와 params(detail 등)를 실은 Error로 던진다.
 // 표시부(errText)가 code를 t()로 번역하고, code가 없으면 message를 그대로 쓴다.
 export type ApiError = Error & { code?: string; params?: Record<string, unknown> }
-async function failure(r: Response): Promise<never> {
+// 단독 검증용으로 내보낸다: scripts/apiError.check.ts
+export async function failure(r: Response): Promise<never> {
   const body = await r.json().catch(() => null)
   const detail = body?.detail
   const detailObj = detail && typeof detail === "object" ? detail : null
   const code: string | undefined = detailObj?.code ?? body?.code
-  const rawMsg = detailObj?.msg ?? (typeof detail === "string" ? detail : undefined) ?? body?.error
+  // 친절한 문구(error)를 원시 예외 문자열(detail)보다 먼저. 일반 500 은 둘 다 주는데, 예전엔 detail 이
+  // 먼저 잡혀 'database is locked' 같은 내부 메시지가 화면에 그대로 나갔다. detail 문자열은 FastAPI 의
+  // 기본 HTTPException(detail="…") 처럼 그것밖에 없을 때만 쓴다.
+  const rawMsg = detailObj?.msg ?? body?.error ?? (typeof detail === "string" ? detail : undefined)
   const e = new Error(typeof rawMsg === "string" ? rawMsg : `HTTP ${r.status}`) as ApiError
   if (code) e.code = code
-  const d = detailObj?.detail ?? body?.detail_text
+  const d = detailObj?.detail
   if (d != null) e.params = { detail: d }
   throw e
 }
