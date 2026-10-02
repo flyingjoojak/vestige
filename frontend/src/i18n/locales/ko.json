@@ -205,7 +205,7 @@
     "fullReindex": "전체 재색인",
     "reindexTitleCurrent": "전체 재색인 (현재 모델)",
     "reindexTitleChange": "임베딩 모델 변경 = 전체 재색인",
-    "reindexDescCurrent": "<b>{{model}}</b>(현재 모델)로 기존 벡터를 모두 버리고 전 대화를 처음부터 다시 임베딩합니다. 모델은 그대로라 다운로드는 없습니다.",
+    "reindexDescCurrent": "<b>{{model}}</b>(현재 모델)로 대화 로그를 처음부터 다시 읽습니다. 내용이 그대로인 대화는 다시 임베딩하지 않아서, 바뀐 부분이 적으면 몇 분 안에 끝납니다. 모델은 그대로라 다운로드는 없습니다.",
     "reindexDescChange": "<b>{{model}}</b>로 바꾸면 기존 벡터를 모두 버리고 전 대화를 다시 임베딩합니다. 벡터가 모델마다 다른 좌표계라 섞을 수 없어 전체 재색인이 필요합니다.",
     "reindexTail": "예상: 재색인 <b>약 {{min}}분</b>(이 기기 기준){{download}}. 임베딩 중 RAM 약 {{ram}}GB를 씁니다. 그동안 검색 품질이 일시적으로 떨어질 수 있습니다. 계속할까요?",
     "reindexDownload": " + 새 모델 최초 다운로드 약 {{size}}GB",
@@ -228,7 +228,9 @@
     "indexModeHint_off": "자동 색인을 끕니다. 필요할 때 아래 「지금 색인」으로 직접 실행하세요.",
     "indexModeHint_interval": "설정한 간격(분)마다 새 대화를 자동으로 색인해요.",
     "indexModeHint_realtime": "새 대화가 생기면 곧바로(수초 내) 자동으로 색인해요.",
-    "indexModeHint_scheduled": "매일 지정한 시각에 한 번 자동으로 색인해요."
+    "indexModeHint_scheduled": "매일 지정한 시각에 한 번 자동으로 색인해요.",
+    "reindexTailCurrent": "예상: 로그를 다시 읽는 데 몇 분, 그리고 바뀐 대화만큼 임베딩합니다(전부 바뀌면 <b>최대 약 {{min}}분</b>, 이 기기 기준). 임베딩 중 RAM 약 {{ram}}GB를 씁니다. 기존 벡터는 그대로 두므로 그동안에도 검색은 평소처럼 됩니다. 계속할까요?",
+    "estReindexMinMax": "최대 약 {{min}}분"
   },
   "chat": {
     "selected": "선택",
