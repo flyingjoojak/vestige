@@ -75,13 +75,23 @@ export function mdToHtml(src: string): string {
     const h = line.match(/^\s*#{1,6}\s+(.+)$/)
     if (h) { out.push(`<div class="cm-h">${inline(h[1])}</div>`); i++; continue }
 
-    // 리스트(연속 항목 묶기)
-    if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+    // 리스트(연속 항목 묶기). 번호 목록은 <ol> 에 적힌 번호 그대로(value) - 예전엔 점 목록으로 그려
+    // "3. 커밋해줘" 의 3 이 사라졌다.
+    if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = []
-      while (i < lines.length && (/^\s*[-*+]\s+/.test(lines[i]) || /^\s*\d+\.\s+/.test(lines[i]))) {
-        items.push(inline(lines[i].replace(/^\s*(?:[-*+]|\d+\.)\s+/, ""))); i++
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push(inline(lines[i].replace(/^\s*[-*+]\s+/, ""))); i++
       }
       out.push(`<ul class="cm-ul">${items.map((it) => `<li>${it}</li>`).join("")}</ul>`)
+      continue
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = []
+      let m: RegExpMatchArray | null
+      while (i < lines.length && (m = lines[i].match(/^\s*(\d+)\.\s+(.*)$/))) {
+        items.push(`<li value="${Number(m[1])}">${inline(m[2])}</li>`); i++
+      }
+      out.push(`<ol class="cm-ol">${items.join("")}</ol>`)
       continue
     }
 
@@ -93,7 +103,7 @@ export function mdToHtml(src: string): string {
   let html = ""
   for (const seg of out) {
     if (seg === "") continue
-    html += /^<(pre|div|ul|table)/.test(seg) ? seg : seg + "<br>"
+    html += /^<(pre|div|ul|ol|table)/.test(seg) ? seg : seg + "<br>"
   }
   return html.replace(/(<br>)+$/, "")
 }
