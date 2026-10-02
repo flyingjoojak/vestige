@@ -246,3 +246,28 @@ def test_iter_json_lines_offset_and_tailsafe(tmp_path: Path):
     got2 = list(iter_json_lines(p, start_offset=offset))
     assert len(got2) == 1
     assert got2[0][0] == {"a": 2}
+
+
+def test_thinking_narration_is_kept_in_the_answer():
+    """글자가 있는 thinking(진행 안내문)은 답변에 순서대로 남는다. 빈 thinking 은 건너뛴다.
+
+    터미널에서 보이던 "사실관계를 모두 수집했습니다. 이제 …하겠습니다" 가 로그엔 thinking 으로만
+    남아 Vestige 에서만 빠졌다(실측: 최대 249자 - 긴 추론문은 없었다).
+    """
+    from vestige.parser import extract_turns
+
+    S = "s-think"
+    objs = [
+        {"type": "user", "sessionId": S, "uuid": "u1", "parentUuid": None, "timestamp": "2026-10-02T00:00:00Z",
+         "cwd": "/p", "message": {"role": "user", "content": "검토 진행해줘"}},
+        {"type": "assistant", "sessionId": S, "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "먼저 엔진을 살펴보겠습니다."}]}},
+        {"type": "assistant", "sessionId": S, "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": "x"}]}},              # 서명만 - 건너뛴다
+        {"type": "assistant", "sessionId": S, "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "사실관계를 모두 수집했습니다. 이제 검토서를 쓰겠습니다.\n\n"}]}},
+        {"type": "assistant", "sessionId": S, "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "검토서를 저장했습니다."}]}},
+    ]
+    (t,) = extract_turns(objs)
+    assert t.answer == "먼저 엔진을 살펴보겠습니다.\n사실관계를 모두 수집했습니다. 이제 검토서를 쓰겠습니다.\n검토서를 저장했습니다."
