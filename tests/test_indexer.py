@@ -279,3 +279,30 @@ def test_reindex_keeps_vectors_only_for_the_same_model():
     assert web._must_reset_vectors("intfloat/multilingual-e5-large-int8", "intfloat/multilingual-e5-large-int8") is False
     assert web._must_reset_vectors("intfloat/multilingual-e5-large-int8", "BAAI/bge-m3") is True
     assert web._must_reset_vectors(None, "intfloat/multilingual-e5-large-int8") is True   # 모르면 비운다
+
+
+def test_embedding_does_not_hold_the_db_write_lock(tmp_path):
+    """임베딩(느림)하는 동안 다른 연결이 바로 쓸 수 있어야 한다. 예전엔 턴·청크를 쓴 트랜잭션을
+    연 채로 임베딩해, 색인 중 앱의 접기·폴더·제목 저장이 55초씩 멈췄다(busy_timeout 60초)."""
+    import sqlite3
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 3)
+    path = tmp_path / "a.db"
+    db = ArchiveDB(path)
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    blocked = []
+
+    class _WritingEmbedder(FakeEmbedder):
+        def embed_passages(self, texts):
+            other = sqlite3.connect(str(path), timeout=0)   # 기다리지 않는다: 잠겨 있으면 즉시 실패
+            try:
+                other.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('probe','1')")
+                other.commit()
+            except sqlite3.OperationalError as e:
+                blocked.append(str(e))
+            finally:
+                other.close()
+            return super().embed_passages(texts)
+
+    index_file(f, db, vi, _WritingEmbedder(), idle_secs=0, checkpoint_turns=50)
+    assert blocked == []
