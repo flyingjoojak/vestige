@@ -225,3 +225,57 @@ def test_corrupt_line_is_reported_to_the_index_status(tmp_path, monkeypatch):
     errs = [m for m in logs if m.startswith("ERROR ") and "깨진 로그" in m]
     assert len(errs) == 1 and "1줄" in errs[0], logs
     assert db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0] == 2   # 나머지는 정상
+
+
+class _CountingEmbedder(FakeEmbedder):
+    def __init__(self):
+        self.texts = 0
+
+    def embed_passages(self, texts):
+        self.texts += len(texts)
+        return super().embed_passages(texts)
+
+
+def test_reparse_skips_chunks_whose_text_and_vector_are_unchanged(tmp_path):
+    """재색인(커서를 비우고 로그를 처음부터 다시 읽기)은 바뀐 청크만 다시 임베딩한다.
+
+    예전엔 내용이 그대로인 청크까지 전부 다시 임베딩해 이 기기 기준 1시간 20분이 걸렸다.
+    """
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 4)
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    first = _CountingEmbedder()
+    index_file(f, db, vi, first, idle_secs=0)
+    assert first.texts >= 4
+
+    # 1) 그대로 다시 읽기 - 임베딩 0건
+    db.clear_cursors()
+    again = _CountingEmbedder()
+    index_file(f, db, vi, again, idle_secs=0)
+    assert again.texts == 0, f"안 바뀐 청크를 {again.texts}개 다시 임베딩했다"
+
+    # 2) 한 턴만 바뀌면 그 턴의 청크만
+    lines = f.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[3])   # 턴 1 의 답변. 한글이 \u 로 이스케이프돼 있어 문자열 치환은 안 먹는다
+    rec["message"]["content"][0]["text"] += " - 나중에 이어 붙은 내용"
+    lines[3] = json.dumps(rec)
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    db.clear_cursors()
+    changed = _CountingEmbedder()
+    index_file(f, db, vi, changed, idle_secs=0)
+    assert 1 <= changed.texts < first.texts, (changed.texts, first.texts)
+
+    # 3) 벡터를 비우면(모델 교체) 전부 다시
+    vi.reset()
+    db.clear_cursors()
+    full = _CountingEmbedder()
+    index_file(f, db, vi, full, idle_secs=0)
+    assert full.texts == first.texts
+
+
+def test_reindex_keeps_vectors_only_for_the_same_model():
+    from vestige import web
+    assert web._must_reset_vectors("intfloat/multilingual-e5-large-int8", "intfloat/multilingual-e5-large-int8") is False
+    assert web._must_reset_vectors("intfloat/multilingual-e5-large-int8", "BAAI/bge-m3") is True
+    assert web._must_reset_vectors(None, "intfloat/multilingual-e5-large-int8") is True   # 모르면 비운다

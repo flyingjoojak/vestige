@@ -2048,10 +2048,16 @@ def api_onboarding_choose(payload: dict):
     return {"ok": True, "model": model}
 
 
+def _must_reset_vectors(stored_model: str | None, model: str) -> bool:
+    """재색인 때 벡터를 비워야 하나. 모델이 바뀌었거나 어떤 모델로 만든 벡터인지 모르면 비운다."""
+    return stored_model != model
+
+
 @app.post("/api/reindex")
 def api_reindex(payload: dict):
     """전체 재색인(백그라운드). model 생략/빈값이면 **현재 모델로** 재색인, 지정하면 그 모델로 교체 후 재색인.
-    기존 벡터를 폐기하고 처음부터 다시 임베딩한다.
+    로그를 처음부터 다시 읽는다. 같은 모델이면 벡터를 지우지 않고 바뀐 청크만 다시 임베딩하고,
+    모델이 바뀌면 벡터를 비우고 전부 다시 임베딩한다.
     fast=true: 재파싱 없이 chunks에서 병렬 대량 임베딩(고RAM 기기 전용, parallel 프로세스 수)."""
     from . import config as C
     payload = payload or {}
@@ -2123,7 +2129,14 @@ def api_reindex(payload: dict):
                         progress_fn=lambda d, t: _reindex_state.update(done_chunks=d, total_chunks=t))
             else:
                 db.clear_cursors()
-                vi.reset()
+                # 같은 모델이면 벡터를 지우지 않는다 - 색인기가 텍스트가 그대로인 청크는 건너뛰므로
+                # 바뀐 부분만 다시 임베딩된다. 모델이 바뀌면 벡터 공간이 달라 전부 다시 해야 한다.
+                if _must_reset_vectors(db.get_meta("embed_model"), model):
+                    vi.reset()
+                else:
+                    # 바뀐 청크만 임베딩하므로 '전체 청크 수'를 분모로 쓰면 진행률이 20%쯤에서 멈춘 듯
+                    # 보이다 끝난다. 0 이면 화면이 파일 단위 진행률(정확하다)로 보여준다.
+                    _reindex_state["total_chunks"] = 0
                 total = index_all(
                     db, vi, emb, log_fn=log,
                     progress_fn=lambda d, t: _reindex_state.update(done_files=d, total_files=t),

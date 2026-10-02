@@ -76,6 +76,9 @@ class VectorIndex:
         top = top[np.argsort(-scores[top])]
         return [(self.ids[i], float(scores[i])) for i in top]
 
+    def has(self, key: str) -> bool:
+        return key in self._pos
+
     def keys(self) -> list[str]:
         """전체 chunk_key 목록(벡터 로드 없이) — reconcile용."""
         return list(self.ids)
@@ -191,6 +194,9 @@ class SqliteVecIndex:
                 n += 1
         self.conn.commit()
         return n
+
+    def has(self, key: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM vkeys WHERE key=?", (key,)).fetchone() is not None
 
     def keys(self) -> list[str]:
         """전체 chunk_key 목록 — reconcile용."""
