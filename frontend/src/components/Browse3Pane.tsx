@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, Pencil, TerminalSquare, Type, X } from "lucide-react"
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Blend, Bot, Brain, Check, ChevronRight, ChevronsDownUp, Copy, FileDown, Loader2, MessagesSquare, RotateCcw, Pencil, TerminalSquare, Type, Undo2, X } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -8,7 +8,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
 import { useDebounced } from "@/lib/useDebounced"
-import { getGraph3D, getSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, type SearchMode } from "@/lib/api"
+import { getGraph3D, getSession, hideSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, unhideSession, type SearchMode } from "@/lib/api"
 import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -61,6 +61,11 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const [opening, setOpening] = useState(false)
   const [restoring, setRestoring] = useState(false)   // 원본 복구 진행 중(#163 P1)
   const [resumeMsg, setResumeMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // 목록에서 바로 접은 세션(이번 화면에서만). 접은 세션은 목록에서 빠지지만, 방금 접은 건 그 자리에
+  // '접힘 · 되돌리기'로 남긴다 - 확인 창 없이 한 번에 접되, 잘못 누른 걸 그 자리에서 되돌릴 수 있게.
+  // 접기를 누른 행 id -> 같이 접은 세션들(자기 + 딸린 하위 에이전트 세션). 되돌리기는 누른 행에만 단다.
+  const [justFolded, setJustFolded] = useState<Map<string, string[]>>(new Map())
+  const [foldErr, setFoldErr] = useState<{ id: string; text: string } | null>(null)
   const [detail, setDetail] = useState<SessionDetail | null>(null)   // 선택 세션 상세(출처·재개커맨드·원문존재)
   const [detailErr, setDetailErr] = useState(false)                  // 세션 상세 로드 실패
 
@@ -197,7 +202,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
 
   // 그룹 목록 로드(실패=에러 상태로 구분, 재시도 가능)
   const loadGroups = useCallback(() => {
-    setGroupsErr(false); setGroups(null)
+    setGroupsErr(false); setGroups(null); setJustFolded(new Map()); setFoldErr(null)   // 다시 불러오면 접은 세션은 빠진다
     if (kind === "sessions") {
       listSessions().then((r) => setGroups((r.sessions || []).map((s) => ({
         id: s.session, label: s.headline || t("browse.untitled"), count: s.count,
@@ -287,6 +292,24 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   useEffect(() => { void runSearch(dq, mode) }, [dq, mode, since, until])   // eslint-disable-line react-hooks/exhaustive-deps
 
   function pickGroup(id: string) { setSel(id); setSelTurn(null) }
+
+  // 세션을 목록에서 바로 접고 펼친다(매번 세션에 들어가 '세션 전체 접기'를 누르지 않게).
+  // 딸린 하위 에이전트 세션도 같이 접는다 - 부모만 접으면 부모가 목록에서 빠지면서 하위 세션들이
+  // 부모를 잃고 목록 맨 위로 튀어나왔다(브라우저로 확인: 접은 뒤 다시 불러오면 행이 오히려 늘었다).
+  async function setSessionFolded(id: string, folded: boolean) {
+    setFoldErr(null)
+    const ids = folded ? [id, ...(kids.get(id) ?? []).map((k) => k.id)] : (justFolded.get(id) ?? [id])
+    const set = new Set(ids)
+    const flip = (v: boolean) => setGroups((gs) => gs?.map((g) => (set.has(g.id) ? { ...g, folded: v } : g)) ?? gs)
+    flip(folded)                                          // 낙관적 반영
+    setJustFolded((prev) => { const n = new Map(prev); if (folded) n.set(id, ids); else n.delete(id); return n })
+    try {
+      await Promise.all(ids.map((x) => (folded ? hideSession(x) : unhideSession(x))))
+    } catch (e) {
+      flip(!folded)                                       // 서버가 거부하면 화면도 되돌린다
+      setFoldErr({ id, text: errText(t, e, "chat.foldFailed") })
+    }
+  }
   const selGroup = groups?.find((g) => g.id === sel)
   const title = kind === "sessions" ? t("browse.sessionsTitle") : t("browse.clustersTitle")
 
@@ -301,7 +324,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   // 하위 에이전트 세션을 부모 아래로 모은다(판단은 lib/subagents.ts - 단독 검증 가능).
   // 통째로 접은 세션은 목록에서 뺀다. 단, 지금 열려 있는 세션은 남긴다 - 접힘 화면에서 '세션 열기'로
   // 들어오면 그 세션이 선택된 채로 오는데, 목록에서 사라지면 어디를 보고 있는지 알 수 없다.
-  const visibleGroups = groups ? groups.filter((g) => !g.folded || g.id === sel) : null
+  const keptFolded = new Set([...justFolded.values()].flat())   // 방금 접은 것은 그 자리에 남긴다
+  const visibleGroups = groups ? groups.filter((g) => !g.folded || g.id === sel || keptFolded.has(g.id)) : null
   const { top, kids } = nestSubagents(visibleGroups ?? [])
 
   // 그룹 목록 - 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
@@ -344,9 +368,26 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
             : "mt-0.5 block truncate text-[11.5px] text-muted-foreground tabular-nums"}>{g.sub}</span>
         </button>
         {g.folded && <span className="pointer-events-none shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
+        {kind === "sessions" && foldErr?.id === g.id && (
+          <span role="alert" className="relative z-10 shrink-0 text-[10.5px] text-destructive">{foldErr.text}</span>
+        )}
+        {kind === "sessions" && g.folded && justFolded.has(g.id) && (
+          // 방금 접은 행: 되돌리기는 항상 보인다(마우스를 올려야 보이면 잘못 누른 걸 못 찾는다).
+          <button type="button" onClick={() => setSessionFolded(g.id, false)}
+            className="relative z-10 inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+            <Undo2 aria-hidden className="size-3" />{t("browse.undoFold")}
+          </button>
+        )}
         {kind === "sessions" && (
-          <span className="relative z-10 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ sessionId: g.id }} />
+            {!g.folded && (
+              <button type="button" onClick={() => setSessionFolded(g.id, true)}
+                title={t("browse.foldSessionHint")} aria-label={t("chat.foldSession")}
+                className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
+                <ChevronsDownUp className="size-3.5" />
+              </button>
+            )}
           </span>
         )}
       </>
