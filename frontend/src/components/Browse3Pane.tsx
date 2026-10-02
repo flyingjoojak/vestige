@@ -392,14 +392,17 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         )}
       </>
     )
+    // 세션 줄엔 cm-cv-row(화면 밖 생략)를 안 쓴다. 화면 밖 줄을 어림 높이(94px)로 두다가 그릴 때 실제(73px)로
+    // 줄어 목록 높이가 스크롤하는 내내 바뀌었다(끝까지 53번, 7648 -> 6549px) - 휠 클릭 자동 스크롤에서 화면이
+    // 출렁였다. 세션은 수십~수백 줄이라 다 그려도 싸다.
     return compact ? (
       <div key={g.id}
-        className={`cm-cv-row group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${indent} ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+        className={`group relative flex w-full items-center gap-2.5 rounded-lg border p-3 transition-colors ${indent} ${sel === g.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
         {body}
       </div>
     ) : (
       <div key={g.id}
-        className={`cm-cv-row group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md ${indent}`}>
+        className={`group relative flex w-full items-center gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-px hover:shadow-md ${indent}`}>
         {body}
         {/* 장식이다. transform(group-hover:translate-x)이 stacking context 를 만들어
             클릭 오버레이(after:inset-0) 위로 올라가서, 마우스를 올린 상태 - 즉 누르려는
