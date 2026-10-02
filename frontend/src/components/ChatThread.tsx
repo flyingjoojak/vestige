@@ -87,7 +87,14 @@ const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
             <ChevronRight className={`size-3.5 transition-transform ${openBash ? "rotate-90" : ""}`} />{tr("chat.actions", { count: t.actions.length })}
           </button>
-          {openBash && <pre className="cm-code cm-md mt-2">{t.actions.join("\n")}</pre>}
+          {/* 예전엔 className="cm-code cm-md" 였는데 스타일 규칙이 '.cm-md .cm-code'(안에 든 것)라 같은
+              요소에선 하나도 안 먹었다 - 브라우저 기본 <pre> 로 줄바꿈 없이 칸 밖으로 넘치고 글자도 대화보다
+              컸다. 칸 안에서 줄을 바꾸고(긴 명령도 아무 데서나), 대화보다 작게. */}
+          {openBash && (
+            <pre className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-[11.5px] leading-relaxed text-foreground/90 [overflow-wrap:anywhere]">
+              {t.actions.join("\n")}
+            </pre>
+          )}
         </div>
       )}
     </div>
