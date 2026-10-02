@@ -178,6 +178,8 @@
 .cm-md .cm-a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 .cm-md .cm-ul { margin: 5px 0; padding-left: 18px; list-style: disc; }
 .cm-md .cm-ul li { margin: 2px 0; }
+.cm-md .cm-ol { margin: 5px 0; padding-left: 22px; list-style: decimal; }
+.cm-md .cm-ol li { margin: 2px 0; }
 /* 표를 진짜 표로 */
 .cm-md .cm-tblwrap { overflow-x: auto; margin: 8px 0; }
 .cm-md .cm-tbl { border-collapse: collapse; font-size: 12.5px; width: max-content; max-width: 100%; }
