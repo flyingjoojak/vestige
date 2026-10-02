@@ -591,7 +591,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               {!searching && hits.length === 0 && <div className={`py-6 text-center ${searchErr ? "text-destructive" : "text-muted-foreground"}`}>{searchErr || t("browse.noResults")}</div>}
               {hits.map((h) => (
                 <button key={h.id} onClick={() => setSelTurn({ session: h.session_full, turn: h.id })}
-                  className={`cm-cv-row w-full rounded-lg border p-2.5 text-left transition-colors ${selTurn?.turn === h.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
+                  className={`w-full rounded-lg border p-2.5 text-left transition-colors ${selTurn?.turn === h.id ? "border-primary/50 bg-primary/5" : "bg-card hover:bg-muted/50"}`}>
                   <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
                     {h.sources.map((s) => <Badge key={s} variant={s === "keyword" ? "secondary" : "default"} className="h-4 px-1.5 text-[9.5px]">{t(s === "keyword" ? "search.srcKeyword" : "search.srcSemantic")}</Badge>)}
                     <span>{h.cosine != null ? `cos ${h.cosine.toFixed(2)}` : t("browse.keywordMatch")}</span><span className="opacity-40">·</span><span>{fmtTime(h.timestamp)}</span>

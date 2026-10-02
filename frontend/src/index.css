@@ -140,7 +140,10 @@
    그대로 유지). 창 리사이즈와 스크롤 시 프레임당 비용을 크게 줄여 옵시디언처럼 즉각 반응하게 한다.
    contain-intrinsic-size 의 auto 키워드가 한 번 그려진 실제 높이를 기억해 스크롤바 점프를 막는다
    (뒤의 px 값은 첫 페인트 전 추정치일 뿐). */
-.cm-cv-row  { content-visibility: auto; contain-intrinsic-size: auto 60px; }
+/* 어림 높이는 실제 줄 높이와 같아야 한다. 다르면 줄이 화면에 들어와 그려질 때마다 높이가 바뀌어 목록이
+   출렁인다(휠 클릭 자동 스크롤에서 특히). 이 값(54px)은 내용 높이라 패딩·테두리(22px)가 더해져 76px =
+   대화 목록 줄(p-2.5, 제목 두 줄)의 실측 높이다(705줄 중 646줄). 줄 모양이 다른 목록엔 쓰지 말 것. */
+.cm-cv-row  { content-visibility: auto; contain-intrinsic-size: auto 54px; }
 
 /* 마크다운 렌더 */
 .cm-md { line-height: 1.6; word-break: break-word; }
