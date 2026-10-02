@@ -385,7 +385,9 @@
     "renameSessionHint": "이 세션을 부를 이름이에요. 대화 내용은 그대로고, 비우면 원래 제목으로 돌아가요.",
     "searchFailed": "검색에 실패했어요",
     "restorePartial": "보존본 일부가 손상돼 앞부분만 복구했어요",
-    "subCount": "하위 {{count}}개"
+    "subCount": "하위 {{count}}개",
+    "undoFold": "되돌리기",
+    "foldSessionHint": "세션 전체 접기 - 세션 목록에서 빠지고 접힘 화면에 모여요"
   },
   "mcp": {
     "sectionTitle": "MCP 연동",

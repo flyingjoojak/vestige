@@ -285,7 +285,14 @@ def _assistant_parts(obj: dict) -> tuple[list[str], list[Action]]:
                 texts.append(b.get("text", ""))
             elif bt == "tool_use":
                 actions.append(_summarize_action(b))
-            # thinking 블록은 임베딩·아카이브에서 제외
+            elif bt == "thinking":
+                # 글자가 있는 thinking 은 진행 안내문이다("사실관계를 모두 수집했습니다. 이제 …하겠습니다").
+                # 터미널에서도 사용자에게 보이는 말인데, 예전엔 통째로 버려 Vestige 에서만 빠졌다.
+                # 실측(메인 세션 197개): 글자 있는 것 322개, 최대 249자·중앙값 119자, 합쳐도 일반 답변의
+                # 0.9% - 긴 추론문은 없었다. 대부분의 thinking 은 글자 없이 서명만 있어 그대로 건너뛴다.
+                think = (b.get("thinking") or "").strip()
+                if think:
+                    texts.append(think)
     return texts, actions
 
 
