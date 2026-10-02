@@ -226,6 +226,11 @@ def index_file(
 
     def flush_vectors() -> None:
         if buf_texts:
+            # 임베딩(배치 하나에 수 초~수십 초) 전에 지금까지 쓴 턴·청크를 커밋해 쓰기 잠금을 놓는다.
+            # 안 놓으면 그동안 앱의 쓰기(접기·폴더·제목)가 busy_timeout(60초) 가까이 멈췄다가 실패한다.
+            # 커서는 checkpoint 에서만 전진하므로, 여기서 죽어도 다음 회차가 같은 턴을 다시 읽어
+            # 벡터 없는 청크를 임베딩한다(텍스트가 같아도 vi.has 가 거짓이라 건너뛰지 않는다).
+            db.commit()
             n = len(buf_texts)
             vi.add(buf_keys, embedder.embed_passages(buf_texts))
             buf_texts.clear()
