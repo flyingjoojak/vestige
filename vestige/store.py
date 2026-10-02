@@ -695,6 +695,11 @@ class ArchiveDB:
         return [_row_to_turn(r) for r in reversed(before)] + [_row_to_turn(r) for r in after]
 
     # --- 청크 -----------------------------------------------------------
+    def chunk_texts(self, turn_id: str) -> dict[int, str]:
+        """turn_id 의 지금 저장된 청크 {순번: 텍스트}. 다시 임베딩할지 가를 때 쓴다."""
+        return {r["idx"]: r["text"] for r in self.conn.execute(
+            "SELECT idx, text FROM chunks WHERE turn_id=?", (turn_id,))}
+
     def trim_chunks(self, turn_id: str, keep: int) -> list[str]:
         """turn_id 의 청크 중 순번 keep 이상을 지우고 지운 chunk_key 를 돌려준다(벡터 정리용).
 

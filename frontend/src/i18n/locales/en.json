@@ -205,7 +205,7 @@
     "fullReindex": "Full re-index",
     "reindexTitleCurrent": "Full re-index (current model)",
     "reindexTitleChange": "Changing embedding model = full re-index",
-    "reindexDescCurrent": "Using <b>{{model}}</b> (current model), this discards all existing vectors and re-embeds every conversation from scratch. The model stays the same, so there's no download.",
+    "reindexDescCurrent": "Using <b>{{model}}</b> (current model), this re-reads every conversation log from the start. Conversations whose content hasn't changed aren't re-embedded, so it takes only a few minutes when little has changed. The model stays the same, so there's no download.",
     "reindexDescChange": "Switching to <b>{{model}}</b> discards all existing vectors and re-embeds every conversation. Vectors live in a different coordinate space per model and can't be mixed, so a full re-index is required.",
     "reindexTail": "Estimated: re-index <b>~{{min}}m</b> (on this device){{download}}. Uses ~{{ram}}GB RAM while embedding. Search quality may dip temporarily in the meantime. Continue?",
     "reindexDownload": " + first download of the new model, ~{{size}}GB",
@@ -228,7 +228,9 @@
     "indexModeHint_off": "Auto-indexing is off. Use \"Index now\" below to index manually.",
     "indexModeHint_interval": "Automatically indexes new conversations on the interval you set (minutes).",
     "indexModeHint_realtime": "Indexes new conversations automatically as soon as they appear (within seconds).",
-    "indexModeHint_scheduled": "Indexes once a day at the time you set."
+    "indexModeHint_scheduled": "Indexes once a day at the time you set.",
+    "reindexTailCurrent": "Estimated: a few minutes to re-read the logs, plus embedding for whatever changed (<b>up to ~{{min}}m</b> if everything changed, on this device). Uses ~{{ram}}GB RAM while embedding. Existing vectors are kept, so search works as usual in the meantime. Continue?",
+    "estReindexMinMax": "up to ~{{min}}m"
   },
   "chat": {
     "selected": "Selected",

@@ -255,8 +255,18 @@ def index_file(
             stale = db.trim_chunks(turn.id, len(chunks))
             if stale:
                 vi.remove(stale)
+            before = db.chunk_texts(turn.id) if chunks else {}
             for c in chunks:
                 db.add_chunks([c])
+                # 텍스트가 그대로이고 벡터도 있으면 다시 임베딩하지 않는다. 재색인은 턴 경계를 고치려고
+                # 로그를 처음부터 다시 읽는 것인데, 예전엔 내용이 안 바뀐 청크까지 전부 다시 임베딩해
+                # (이 기기 청크 1.6만 개, 약 1시간 20분) 사실상 쓸 수가 없었다. 진행 중인 턴이 자랄 때도
+                # 앞쪽 청크를 매번 다시 임베딩하지 않게 된다.
+                # ponytail: 임베딩 입력엔 직전 질문이 맥락으로 붙는다(_contextual). 끼어든 질문이 새로
+                # 갈라져 직전 질문만 바뀐 청크는 옛 맥락의 벡터를 그대로 쓴다 - 맥락은 앞부분 일부만 붙는
+                # 보조 신호라 받아들인다. 정확히 맞추려면 임베딩 입력의 해시를 청크와 함께 저장해 비교할 것.
+                if before.get(c.index) == c.text and vi.has(f"{c.turn_id}#{c.index}"):
+                    continue
                 buf_texts.append(_contextual(ctx, c.text, turn.project))
                 buf_keys.append(f"{c.turn_id}#{c.index}")
                 if len(buf_texts) >= batch:

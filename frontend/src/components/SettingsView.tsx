@@ -1147,7 +1147,7 @@ export function SettingsView() {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {t("settings.diskLabel", { gb: m.size_gb })} · <b className="text-foreground/80">{t("settings.ramApprox", { gb: m.ram_gb })}</b>
-                        {m.est_reindex_min != null && <> · {t("settings.estReindexLabel")} <b className="text-foreground/80 tabular-nums">{t("settings.estReindexMin", { min: m.est_reindex_min })}</b></>}
+                        {m.est_reindex_min != null && <> · {t("settings.estReindexLabel")} <b className="text-foreground/80 tabular-nums">{t(m.current ? "settings.estReindexMinMax" : "settings.estReindexMin", { min: m.est_reindex_min })}</b></>}
                       </span>
                     </span>
                   }>
@@ -1193,7 +1193,8 @@ export function SettingsView() {
                 ? <Trans i18nKey="settings.reindexDescCurrent" values={{ model: shortModelName(confirmModel?.model ?? "") }} components={{ b: <b /> }} />
                 : <Trans i18nKey="settings.reindexDescChange" values={{ model: shortModelName(confirmModel?.model ?? "") }} components={{ b: <b /> }} />}
               <br /><br />
-              <Trans i18nKey="settings.reindexTail"
+              {/* 같은 모델이면 바뀐 청크만 다시 임베딩한다 - 예상 시간은 '전부 바뀌면'의 최대치다. */}
+              <Trans i18nKey={confirmModel?.current ? "settings.reindexTailCurrent" : "settings.reindexTail"}
                 values={{
                   min: confirmModel?.est_reindex_min, ram: confirmModel?.ram_gb,
                   download: confirmModel?.current ? "" : t("settings.reindexDownload", { size: confirmModel?.size_gb }),
