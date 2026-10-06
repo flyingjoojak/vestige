@@ -8,7 +8,7 @@ import { ChatThread } from "./ChatThread"
 import { SourceFilter } from "./SourceFilter"
 import { AddToFolder } from "./AddToFolder"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
-import { getSources, hideTurn, listSessions, search, unhideTurn, type SearchMode, type SourceOption } from "@/lib/api"
+import { getSources, hideTurn, listSessions, search, unhideTurn, warmEmbedder, type SearchMode, type SourceOption } from "@/lib/api"
 import { fmtTime } from "@/lib/format"
 import { sourceLabel } from "@/lib/source"
 import { errText } from "@/lib/errors"
@@ -73,6 +73,8 @@ export function SearchView() {
       hideErrTimer.current = setTimeout(() => setHideErr(""), 4000)
     }
   }
+
+  useEffect(() => { warmEmbedder() }, [])   // 검색 화면을 열면 질문을 치는 동안 모델을 올려 둔다
 
   useEffect(() => {
     let alive = true

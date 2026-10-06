@@ -58,7 +58,8 @@ def test_hit_to_dict_shape():
 
     d = web._hit_to_dict(H())
     assert d["question"] == "질문"
-    assert d["actions"] == ["Edit(x.py)"]
+    # 화면이 안 쓰는 무거운 칸은 보내지 않는다(결과 100개 기준 응답의 80%였다)
+    assert "answer" not in d and "actions" not in d and "thread" not in d
     assert d["sources"] == ["semantic", "keyword"]
     assert d["cosine"] == 0.87
 
@@ -846,3 +847,17 @@ def test_unexpected_db_error_has_code_and_never_suggests_deleting_the_db():
 
     other = json.loads(asyncio.run(web._friendly_error(None, ValueError("x"))).body)
     assert other["code"] == "server_error"
+
+
+def test_embedder_warm_loads_in_background_once(monkeypatch):
+    """검색 화면 신호로 모델을 미리 올린다. 이미 올라가 있으면 다시 올리지 않는다."""
+    import threading
+    loaded = threading.Event()
+    calls = []
+    monkeypatch.setattr(web, "get_embedder", lambda: (calls.append(1), loaded.set()))
+    monkeypatch.setitem(web._state, "needs_onboarding", False)
+    monkeypatch.setitem(web._state, "embedder", None)
+    assert web.api_embedder_warm() == {"ok": True, "loaded": False}
+    assert loaded.wait(5) and calls == [1]
+    monkeypatch.setitem(web._state, "embedder", object())
+    assert web.api_embedder_warm() == {"ok": True, "loaded": True} and calls == [1]

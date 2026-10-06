@@ -537,6 +537,16 @@ class ArchiveDB:
                 self.conn.execute("DELETE FROM turns_fts WHERE turn_id=?", (tid,))
         return removed
 
+    def turn_brief(self, ids: list[str]) -> dict[str, sqlite3.Row]:
+        """검색 후보를 거를 때 쓰는 가벼운 칸만(본문 제외). 500개씩 묶어 조회한다."""
+        out: dict[str, sqlite3.Row] = {}
+        for i in range(0, len(ids), 500):
+            part = ids[i:i + 500]
+            out.update({r["id"]: r for r in self.conn.execute(
+                "SELECT id, session_id, project, source, timestamp, question FROM turns "
+                f"WHERE id IN ({','.join('?' * len(part))})", part)})
+        return out
+
     def get_turn(self, turn_id: str) -> Turn | None:
         row = self.conn.execute("SELECT * FROM turns WHERE id=?", (turn_id,)).fetchone()
         return _row_to_turn(row) if row else None

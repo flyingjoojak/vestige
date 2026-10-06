@@ -57,6 +57,21 @@ def _iter_all(projects_dir: str | Path | None) -> Iterator[tuple[SourceAdapter, 
             yield adapter, p
 
 
+# 화면 폴링(대기 건수 8초, 세션 목록 20초)이 쓰는 파일 목록. 로그 폴더를 훑는 데 실측 100ms 남짓,
+# 디스크 캐시가 식으면 수 초가 걸려 폴링마다 훑기엔 비싸다. 색인 자체는 이걸 쓰지 않는다(늘 새로 훑는다).
+_WALK_TTL = 8.0
+_walk_cache: dict = {"at": 0.0, "roots": None, "files": []}
+
+
+def iter_all_cached() -> list[tuple[SourceAdapter, Path]]:
+    """활성 소스의 (어댑터, path) 목록을 _WALK_TTL 동안 재사용. 루트가 바뀌면(설정 변경) 바로 다시 훑는다."""
+    roots = tuple((a.name, str(r)) for a, r in _source_pairs(None))
+    now = time.time()
+    if roots != _walk_cache["roots"] or now - _walk_cache["at"] >= _WALK_TTL:
+        _walk_cache.update(at=now, roots=roots, files=list(_iter_all(None)))
+    return _walk_cache["files"]
+
+
 def has_new_data(db, projects_dir: str | Path | None = None) -> bool:
     """커서 이후 새 바이트가 있는 파일이 하나라도 있으면 True(모델 로드 전 값싼 확인)."""
     for _adapter, p in _iter_all(projects_dir):
@@ -102,7 +117,7 @@ def count_pending(
     파일은 대기로 세지 않는다 → 증분 색인 직후 "최신"이 정확히 표시됨."""
     new = updated = 0
     now = time.time()
-    for adapter, p in _iter_all(projects_dir):
+    for adapter, p in (_iter_all(projects_dir) if projects_dir is not None else iter_all_cached()):
         try:
             stt = p.stat()
             size, mtime = stt.st_size, stt.st_mtime

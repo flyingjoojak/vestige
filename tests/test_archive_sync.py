@@ -604,3 +604,25 @@ def test_upgraded_peer_fixes_old_local_turn(tmp_path):
     old = _sync(new, "devNew", old, "devOld", proj)
     t = old.get_turn("s9:u1")
     assert t.answer == "답변1" and t.parser_version == 1
+
+
+def test_unchanged_peer_archive_is_not_reparsed(tmp_path, monkeypatch):
+    """상대 export 가 그대로면 다시 읽지 않고, 바뀌면 다시 읽는다(색인 회차마다 전체 재파싱하던 것)."""
+    import json as _json
+    from vestige import archive_sync as A
+    from vestige.store import ArchiveDB
+    root = tmp_path / "projects"
+    d = root / A.ARCHIVE_DIRNAME
+    d.mkdir(parents=True)
+    peer = d / "PEER-000001.ndjson"
+    peer.write_text("", encoding="utf-8")
+    db = ArchiveDB(tmp_path / "a.db")
+    opened = []
+    real_open = open
+    monkeypatch.setattr("builtins.open", lambda f, *a, **k: (opened.append(str(f)), real_open(f, *a, **k))[1])
+    A.import_archives(db, root, "ME-000000", log_fn=lambda m: None)
+    A.import_archives(db, root, "ME-000000", log_fn=lambda m: None)
+    assert sum(1 for f in opened if f == str(peer)) == 1, "그대로인 파일을 다시 열었다"
+    peer.write_text(_json.dumps({"x": 1}) + "\n", encoding="utf-8")   # 바뀜(크기 변화)
+    A.import_archives(db, root, "ME-000000", log_fn=lambda m: None)
+    assert sum(1 for f in opened if f == str(peer)) == 2, "바뀐 파일을 다시 읽지 않았다"
