@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { usePolling } from "@/lib/usePolling"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import { Loader2 } from "lucide-react"
@@ -53,6 +54,8 @@ function syncLabel(st: SyncthingStatus | null, t: TFunction, stalled: boolean): 
   return { text: t("statusbar.syncBothLatest"), dot: "bg-emerald-500", tone: "text-emerald-600 dark:text-emerald-400" }   // 완전 동기화 = 초록
 }
 
+const dbg = (e: unknown) => console.debug("[statusbar]", e)   // 무음 대신 진단 로그
+
 export function StatusBar() {
   const { t } = useTranslation()
   const [stats, setStats] = useState<Stats | null>(null)
@@ -60,18 +63,12 @@ export function StatusBar() {
   const [st, setSt] = useState<SyncthingStatus | null>(null)
   const progRef = useRef<{ key: string; ts: number }>({ key: "", ts: Date.now() })   // 동기 진척이 마지막으로 변한 시각(멈춤 감지)
 
-  useEffect(() => {
-    let alive = true
-    const dbg = (e: unknown) => console.debug("[statusbar]", e)   // 무음 대신 진단 로그
-    const load = () => {
-      getStats().then((r) => alive && setStats(r)).catch(dbg)
-      getIndexStatus().then((r) => alive && setIx(r)).catch(dbg)
-      getSyncthingStatus().then((r) => alive && setSt(r)).catch(dbg)
-    }
-    load()
-    const id = window.setInterval(load, 1000)   // 전부 로컬(SQLite·벡터 파일·localhost REST)이라 1초 폴링도 부담 없음
-    return () => { alive = false; window.clearInterval(id) }
-  }, [])
+  // 전부 로컬(SQLite·벡터 파일·localhost REST)이라 1초 폴링도 부담 없다. 다만 창이 안 보이면 쉬고,
+  // 백엔드가 바빠 응답이 1초를 넘기면 다음 요청을 겹쳐 보내지 않는다(usePolling).
+  // 셋을 따로 돈다 - 하나로 묶으면 느린 하나(예: 재색인 중 통계)가 색인 진행률 갱신까지 붙잡는다.
+  usePolling(() => getStats().then(setStats).catch(dbg), 1000)
+  usePolling(() => getIndexStatus().then(setIx).catch(dbg), 1000)
+  usePolling(() => getSyncthingStatus().then(setSt).catch(dbg), 1000)
 
   const pending = ix?.pending?.files ?? 0
   const idx = indexLabel(ix, pending, t)
