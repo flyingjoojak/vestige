@@ -619,6 +619,8 @@ def api_session(id: str = Query(...), limit: int = 0):
             "queued": bool(r["queued"]),
         })
     info = db.session_source(id)
+    if info is None:
+        info = _unindexed_source(id)   # 색인 전 세션: 원문 전체가 '꼬리'다(커서가 없어 0부터 읽는다)
     source = info[0] if info else "claude-code"
     stored = info[1] if info else None
     project = (info[2] if info else "") or ""
@@ -659,7 +661,7 @@ def api_session(id: str = Query(...), limit: int = 0):
 def api_session_tail(id: str = Query(...)):
     """활동 중인 세션의 색인 전 꼬리만. 몇 초마다 불리므로 세션 전체(수 MB)를 다시 보내지 않는다."""
     db = ArchiveDB()
-    info = db.session_source(id)
+    info = db.session_source(id) or _unindexed_source(id)
     if info is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
     source, stored = info[0], info[1]
@@ -958,7 +960,83 @@ def api_sessions(limit: int = 500):
             "subagent": is_sub,      # 배경(서브에이전트) 대화 여부
             "parent": parent,        # 파생된 부모 세션 id(있으면)
         })
+    try:
+        known = {r["session"] for r in out}
+        extra = [r for r in _unindexed_sessions(db) if r["session"] not in known]
+    except Exception as e:  # noqa: BLE001 — 덤이다. 실패해도 색인된 세션 목록은 그대로
+        logging.getLogger(__name__).warning("색인 전 세션 조회 실패: %s", e)
+        extra = []
+    if extra:
+        out = sorted(out + extra, key=lambda r: r["ended"] or "", reverse=True)
     return {"sessions": out}
+
+
+# 한 번도 색인 안 된 로그(커서 없음)도 세션 목록에 '색인 전'으로 띄운다. 색인은 10분 주기라
+# 새로 시작한 세션은 그동안 목록에 없었다. 머리만 읽고(_UNINDEXED_HEAD_BYTES) 파일 크기·수정
+# 시각이 같으면 다시 읽지 않는다 - 목록은 자주 불린다. path -> ((size, mtime), 줄 | None)
+_UNINDEXED_HEAD_BYTES = 1024 * 1024
+_unindexed_cache: dict[str, tuple[tuple[int, float], dict | None]] = {}
+
+
+def _unindexed_row(adapter, path: str, size: int, mtime: float) -> dict | None:
+    objs = []
+    for obj, end in adapter.read_records(path, 0):
+        objs.append(obj)
+        if end > _UNINDEXED_HEAD_BYTES:
+            break
+    turns = adapter.extract_turns(objs)
+    if not turns or not _SID_RE.fullmatch(turns[0].session_id):
+        return None
+    is_sub, parent = _subagent_info(path)
+    from datetime import datetime, timezone
+    first = turns[0]
+    return {
+        "session": first.session_id, "count": len(turns), "hidden_count": 0,
+        "started": first.timestamp,
+        # 진행 중인 세션이라 마지막 턴 시각보다 파일 수정 시각이 정확하다(정렬용)
+        "ended": datetime.fromtimestamp(mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "headline": first.question or "", "custom_title": None,
+        "source": getattr(adapter, "source_name", adapter.name),
+        "subagent": is_sub, "parent": parent,
+        "unindexed": True,       # 화면: '색인 전' 배지, 접기·폴더 담기 없음
+        "_path": path,           # api_session 이 원문을 찾는 데 쓴다(_ 로 시작하는 칸은 응답에서 뺀다)
+        "_project": first.project or "",
+    }
+
+
+def _unindexed_sessions(db: ArchiveDB) -> list[dict]:
+    from .indexer import _iter_all
+    have = {r[0] for r in db.conn.execute("SELECT file_path FROM cursors")}
+    out = []
+    for adapter, p in _iter_all(None):
+        sp = str(p)
+        if sp in have:
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        key = (st.st_size, st.st_mtime)
+        hit = _unindexed_cache.get(sp)
+        if hit is None or hit[0] != key:
+            try:
+                row = _unindexed_row(adapter, sp, st.st_size, st.st_mtime)
+            except Exception as e:  # noqa: BLE001 — 파일 하나가 깨져도 나머지는 보인다
+                logging.getLogger(__name__).warning("색인 전 로그 읽기 실패 %s: %s", sp, e)
+                row = None
+            hit = (key, row)
+            _unindexed_cache[sp] = hit
+        if hit[1]:
+            out.append({k: v for k, v in hit[1].items() if not k.startswith("_")})
+    return out
+
+
+def _unindexed_source(sid: str) -> tuple[str, str, str] | None:
+    """색인 전 세션의 (출처, 원문 경로, 프로젝트). 목록을 한 번 불렀어야 캐시에 있다(화면은 목록에서 연다)."""
+    for _key, row in _unindexed_cache.values():
+        if row and row["session"] == sid:
+            return row["source"], row["_path"], row["_project"]
+    return None
 
 
 # 세션 id 화이트리스트. 선두 '-' 금지 → 재개 CLI(claude/codex)로의 인자(플래그) 주입 차단.

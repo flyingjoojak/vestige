@@ -74,6 +74,7 @@ export interface SessionRow {
   source?: SessionSource
   subagent?: boolean           // 배경(서브에이전트) 대화 여부
   parent?: string | null       // 파생된 부모 세션 id
+  unindexed?: boolean          // 한 번도 색인 안 된 세션(로그에서 바로 읽음) - 접기·폴더 담기 불가
 }
 
 export interface Stats {
