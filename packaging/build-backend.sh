@@ -26,6 +26,10 @@ if [ ! -f packaging/build/e5int8/model.onnx ]; then
   echo "int8 e5-large 생성 중…"; python packaging/make_int8.py packaging/build/e5int8
 fi
 
+# pywebview(webview)는 뺀다: Electron 사이드카는 창을 열지 않는데 `--collect-submodules vestige` 가
+# desktop.py 의 import 를 따라 pywebview·pythonnet(약 5MB)을 끌고 왔다. 그중 win-arm64 WebView2Loader.dll 은
+# NSIS 압축 해제기가 못 풀어 설치 때마다 조용히 빠졌다(설치 파일 백엔드 1556개 vs 설치 후 1555개).
+# `vestige-backend app`(pywebview 창)은 '필요합니다' 안내로 끝난다 - 데스크탑 앱은 Electron 이 창이다.
 pyinstaller --noconfirm --onedir --name vestige-backend \
   --noconsole \
   --paths . \
@@ -39,6 +43,7 @@ pyinstaller --noconfirm --onedir --name vestige-backend \
   --collect-submodules mcp.server \
   --collect-submodules mcp.shared \
   --collect-submodules vestige \
+  --exclude-module webview \
   --add-data "frontend/dist${SEP}frontend/dist" \
   packaging/backend_entry.py
 
