@@ -29,7 +29,9 @@ from pathlib import Path
 #   예) 설치 CLI = npm 0.154.0 인데 rollout 은 ``cli_version: 0.149.1`` 로 스탬프됨.
 #   원격 감시는 npm 버전을, 실제 포맷 검증(--local)은 rollout 을 본다. 그래서 npm 이 올라가도
 #   로그 포맷은 그대로일 수 있다(#136: npm 0.154.0 로 만든 로그를 CodexAdapter 가 정상 처리 확인).
-TESTED_VERSION = "0.154.0"
+#   0.160.1 부터는 rollout 도 ``cli_version: 0.160.1`` 로 npm 과 같다(#232 #263: 질문·답변·실행된 명령
+#   ``CommandExecution`` 정상 추출, 새 줄 종류 ``world_state``·``token_usage_record`` 는 대화가 아니라 무시).
+TESTED_VERSION = "0.160.1"
 NPM_LATEST_URL = "https://registry.npmjs.org/@openai/codex/latest"
 
 
