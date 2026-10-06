@@ -355,3 +355,20 @@ def test_incremental_pass_gives_the_first_turn_its_previous_question(tmp_path):
     index_file(f, db, vi, later, idle_secs=0)
     new = [t for t in later.seen if "답변 2" in t]
     assert new and all("이전: 질문 번호 1" in t for t in new), later.seen
+
+
+def test_legacy_chunks_get_a_hash_so_later_context_changes_are_caught(tmp_path):
+    """마이그레이션 전 청크(해시 없음)는 재색인 때 지금 입력의 해시를 받는다 → 그다음부터 맥락 변화를 잡는다."""
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 3)
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    index_file(f, db, vi, FakeEmbedder(), idle_secs=0)
+    db.conn.execute("UPDATE chunks SET embed_hash=NULL")   # 옛 DB 흉내
+    db.commit()
+
+    db.clear_cursors()
+    again = _RecordingEmbedder()
+    index_file(f, db, vi, again, idle_secs=0)
+    assert again.seen == []   # 텍스트가 같으니 다시 임베딩은 안 하고
+    assert db.conn.execute("SELECT COUNT(*) c FROM chunks WHERE embed_hash IS NULL").fetchone()["c"] == 0   # 해시만 찍는다

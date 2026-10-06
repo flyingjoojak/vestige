@@ -287,6 +287,10 @@ def index_file(
                 old_text, old_hash = before.get(c.index, (None, None))
                 same = old_hash == h if old_hash is not None else old_text == c.text
                 if same and vi.has(key):
+                    if old_hash is None:
+                        # 옛 청크: 어떤 맥락으로 만든 벡터인지 모르니 지금 입력으로 만든 것으로 친다.
+                        # 안 찍으면 다음 재색인에서도 계속 텍스트로만 비교해 맥락 변화를 영영 못 잡는다.
+                        db.set_embed_hashes([(key, h)])
                     continue
                 buf_texts.append(inp)
                 buf_keys.append(key)
