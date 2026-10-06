@@ -86,29 +86,28 @@ def iter_json_lines(path: str | Path, start_offset: int = 0) -> Iterator[tuple[d
 
     end_offset = 그 줄의 개행 다음 위치 → 다음번 재개 커서.
     개행으로 끝나지 않은 마지막 조각(아직 쓰이는 중)은 산출하지 않는다.
+    한 줄씩 읽는다 - 앞부분만 필요한 쪽(색인 전 세션 목록)이 중간에 멈추면 나머지는 읽지 않는다.
+    예전엔 파일 전체를 한 번에 읽어, 수백 MB 로그면 앞 1MB 만 보려 해도 전부 메모리에 올렸다.
     """
+    offset = start_offset
     with open(path, "rb") as f:
         f.seek(start_offset)
-        data = f.read()
-
-    offset = start_offset
-    parts = data.split(b"\n")
-    for i, part in enumerate(parts):
-        if i == len(parts) - 1:
-            break  # 개행 없이 끝난 미완결 꼬리 → 보류
-        offset += len(part) + 1  # +1 = 개행
-        text = part.decode("utf-8", errors="replace").strip()
-        if not text:
-            continue
-        try:
-            obj = json.loads(text)
-        except json.JSONDecodeError:
-            # 손상된(하지만 완결된) 줄은 건너뛸 수밖에 없다 — 다만 무로그로 사라지면 나중에
-            # 검색 공백의 원인을 알 수 없으므로, 경로·오프셋·앞부분을 남겨 관측 가능하게 한다.
-            logger.warning("손상 JSON 라인 스킵: %s @%d — %.80r", path, offset, text)
-            _bad_lines.setdefault(str(path), set()).add(offset)
-            continue
-        yield obj, offset
+        for part in f:
+            if not part.endswith(b"\n"):
+                break  # 개행 없이 끝난 미완결 꼬리 → 보류
+            offset += len(part)
+            text = part.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                # 손상된(하지만 완결된) 줄은 건너뛸 수밖에 없다 — 다만 무로그로 사라지면 나중에
+                # 검색 공백의 원인을 알 수 없으므로, 경로·오프셋·앞부분을 남겨 관측 가능하게 한다.
+                logger.warning("손상 JSON 라인 스킵: %s @%d — %.80r", path, offset, text)
+                _bad_lines.setdefault(str(path), set()).add(offset)
+                continue
+            yield obj, offset
 
 
 def is_structural_noise(obj: dict) -> bool:

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
 import { getSession, getSessionTail, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
@@ -104,6 +104,8 @@ const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i
 // 활동 중인 세션의 꼬리를 다시 읽는 간격(#249). Claude Code 는 메시지·도구 호출 하나가 끝날
 // 때마다 로그에 한 줄씩 붙이므로 단계 단위로 이 정도 늦게 따라간다.
 const LIVE_POLL_MS = 4000
+// 바닥에서 이만큼 안이면 '맨 아래를 보고 있다'로 친다(따라 내려가기).
+const FOLLOW_SLACK_PX = 80
 
 // 세션 전체를 채팅 스레드로 렌더. focusTurn이 있으면 그 턴을 강조+상단 스크롤.
 const PAD = 25   // 포커스 턴 위/아래로 이만큼만 먼저 렌더(큰 세션 로딩 지연 방지)
@@ -119,9 +121,11 @@ function windowFor(d: Detail, focusTurn?: string, focusLast?: boolean) {
 }
 
 // headerAction: 이 채팅을 띄운 화면이 머리줄에 붙이는 동작(예: 폴더 화면의 '세션으로 이동').
+// onTurns: 턴 목록이 바뀔 때마다(실시간 꼬리 포함) 알린다 - 옆의 대화 목록을 같이 늘리려고.
 export function ChatThread(
-  { session, focusTurn, focusLast, headerAction }:
-  { session: string; focusTurn?: string; focusLast?: boolean; headerAction?: ReactNode },
+  { session, focusTurn, focusLast, headerAction, onTurns }:
+  { session: string; focusTurn?: string; focusLast?: boolean; headerAction?: ReactNode;
+    onTurns?: (turns: SessionTurn[]) => void },
 ) {
   const { t } = useTranslation()
   const { confirm } = useDialogs()
@@ -175,6 +179,23 @@ export function ChatThread(
     const id = setInterval(tick, LIVE_POLL_MS)
     return () => { stop = true; clearInterval(id) }
   }, [active, session])
+
+  const onTurnsRef = useRef(onTurns)
+  onTurnsRef.current = onTurns
+  useEffect(() => { if (data) onTurnsRef.current?.(data.turns) }, [data])
+
+  // 맨 아래를 보고 있었으면 새 내용(꼬리 턴·자라는 답변)을 따라 내려간다. 위를 읽고 있으면 그대로 둔다.
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(false)
+  const onScroll = () => {
+    const el = scrollerRef.current
+    if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX
+  }
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight
+    onScroll()   // 처음부터 화면에 다 들어오는 짧은 채팅은 스크롤이 안 일어나 '맨 아래'로 안 잡혔다
+  }, [data, range.e])
 
   // 끝까지 보고 있었으면 새로 붙은 턴까지 렌더 창을 넓힌다. 중간을 보고 있으면 건드리지 않는다.
   const prevLen = useRef(0)
@@ -240,6 +261,8 @@ export function ChatThread(
   const focusId = focusLast ? turns.at(-1)?.id : focusTurn
   const foldedCount = turns.filter((x) => x.hidden).length
   const allFolded = turns.length > 0 && foldedCount === turns.length
+  // 전부 색인 전(새 세션)이면 접기·폴더 담기를 감춘다 - DB 에 아직 턴이 없어 할 수 없다.
+  const anyIndexed = turns.some((x) => !x.live)
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-5 py-3 text-[13px] text-muted-foreground tabular-nums">
@@ -248,11 +271,11 @@ export function ChatThread(
           {foldedCount > 0 && ` · ${t("chat.foldedCount", { count: foldedCount })}`}
         </span>
         {headerAction}
-        {data && turns.length > 0 && (
+        {data && anyIndexed && (
           <AddToFolder target={{ sessionId: session }} showLabel
             className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted" />
         )}
-        {data && turns.length > 0 && (
+        {data && anyIndexed && (
           allFolded
             ? <button type="button" onClick={unfoldWholeSession} title={t("chat.unfoldAll")}
                 className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
@@ -271,7 +294,7 @@ export function ChatThread(
           {t("chat.liveSkipped", { mb: ((data?.live_skipped ?? 0) / 1048576).toFixed(1) })}
         </div>
       )}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div ref={scrollerRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-5 py-4">
         {/* errText 가 이미 사용자용 문장을 만든다 — '오류: ' 를 덧붙이면 말이 겹친다. */}
         {err && <div role="alert" className="py-10 text-center text-muted-foreground">{err}</div>}
         {!data && !err && <div className="grid h-full place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>}
