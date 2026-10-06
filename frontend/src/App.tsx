@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from "react"
+import { usePolling } from "@/lib/usePolling"
 import { useTranslation } from "react-i18next"
 import { MessagesSquare, Layers, Box, FoldVertical, FolderTree, Settings } from "lucide-react"
 import { Magnifier } from "@/components/ui/Magnifier"
@@ -34,6 +35,9 @@ const NAV: { v: View; icon: React.ReactNode; labelKey: string }[] = [
   { v: "settings", icon: <Settings className="size-[18px]" />, labelKey: "nav.settings" },
 ]
 
+
+// 첫 실행 배너를 띄우는 기준(아카이브가 이보다 작으면 아직 '처음 색인 중'으로 본다)
+const FIRST_RUN_TURNS = 200
 export default function App() {
   const { t } = useTranslation()
   const [view, setView] = useState<View>("search")
@@ -51,14 +55,10 @@ export default function App() {
   }
   // 좌측 메뉴 '접힘' 배지 개수. 검색·세션 어디서 접든 반영돼야 해서 가볍게 폴링한다(COUNT만).
   const [foldedCount, setFoldedCount] = useState(0)
-  const refreshFolded = useCallback(() => {
+  const refreshFolded = useCallback(() => (
     listHidden(0).then((r) => setFoldedCount(r.count)).catch(() => { /* 배지일 뿐이라 조용히 무시 */ })
-  }, [])
-  useEffect(() => {
-    refreshFolded()
-    const id = window.setInterval(refreshFolded, 5000)
-    return () => window.clearInterval(id)
-  }, [refreshFolded])
+  ), [])
+  usePolling(refreshFolded, 5000)
   // 첫 실행이면(프리즈 exe·모델 미선택) 모델 선택 화면을 먼저. null=확인중.
   const [onboard, setOnboard] = useState<boolean | null>(null)
   const [backendDown, setBackendDown] = useState(false)
@@ -81,27 +81,20 @@ export default function App() {
     return () => clearInterval(id)
   }, [backendDown, checkOnboard])
   // 모델↔벡터 불일치 배너: 폴링으로 (1) 콜드스타트 시 재시도해 결국 표시, (2) 재색인으로 해소되면 자동 사라짐.
-  useEffect(() => {
-    const load = () => getSystem().then((s) => { setMismatch(s.model_mismatch); setDrift(s.drift_sources ?? []) }).catch(() => {})
-    load()
-    const id = window.setInterval(load, 20000)
-    return () => window.clearInterval(id)
-  }, [])
+  usePolling(() => getSystem().then((s) => { setMismatch(s.model_mismatch); setDrift(s.drift_sources ?? []) }).catch(() => {}), 20000)
   // 첫 실행 색인 진행 폴링: (색인 중 또는 대기) && 아카이브가 아직 거의 빈 상태(<200턴)일 때만 배너.
-  useEffect(() => {
-    if (onboard !== false) return   // 온보딩 끝난 뒤에만
-    const load = async () => {
-      try {
-        const [ix, stats] = await Promise.all([getIndexStatus(), getStats()])
-        const turns = stats?.turns ?? 0
-        const busy = !!ix?.running || (ix?.pending?.files ?? 0) > 0
-        setFirstRun(busy && turns < 200 ? { turns } : null)
-      } catch { /* 백엔드 미기동 등은 다른 배너가 처리 */ }
-    }
-    load()
-    const id = window.setInterval(load, 4000)
-    return () => window.clearInterval(id)
-  }, [onboard])
+  // 200턴을 넘으면 배너가 다시 뜰 일이 없으니 폴링을 멈춘다 - 예전엔 앱이 켜져 있는 내내 4초마다
+  // 상태바(1초)와 같은 요청을 겹쳐 보냈다.
+  const [firstRunOver, setFirstRunOver] = useState(false)
+  usePolling(async () => {
+    try {
+      const [ix, stats] = await Promise.all([getIndexStatus(), getStats()])
+      const turns = stats?.turns ?? 0
+      const busy = !!ix?.running || (ix?.pending?.files ?? 0) > 0
+      setFirstRun(busy && turns < FIRST_RUN_TURNS ? { turns } : null)
+      if (turns >= FIRST_RUN_TURNS) setFirstRunOver(true)
+    } catch { /* 백엔드 미기동 등은 다른 배너가 처리 */ }
+  }, 4000, onboard === false && !firstRunOver)   // 온보딩 끝난 뒤에만
 
   // 드리프트 원클릭 신고: 그 소스의 리댁트 지문(대화 내용 없음)을 클립보드에 담고 프리필된 GitHub 이슈를 연다.
   async function reportDrift() {

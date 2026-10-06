@@ -5,14 +5,11 @@ export interface Hit {
   project: string
   timestamp: string
   question: string
-  answer: string
-  actions: string[]
   summary: string | null
   tags: string[]
   cosine: number | null
   sources: string[]
   source?: SessionSource   // 출처 도구(claude-code/codex)
-  thread: { question: string; answer: string }[]
 }
 
 export interface SearchResult {

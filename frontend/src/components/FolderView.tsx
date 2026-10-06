@@ -8,7 +8,7 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   createFolder, deleteFolder, getFolder, hideSession, hideTurn, listFolders, moveFolder,
-  removeFromFolder, renameFolder, renameFolderItem, reorderFolder, search, unhideSession, unhideTurn,
+  removeFromFolder, renameFolder, renameFolderItem, reorderFolder, search, unhideSession, unhideTurn, warmEmbedder,
 } from "@/lib/api"
 import { ChatThread } from "./ChatThread"
 import { useDialogs } from "@/components/ui/dialogs"
@@ -574,7 +574,7 @@ export function FolderView({ onOpenInSessions }: { onOpenInSessions?: (session: 
               )}
               <div className="relative mt-2">
                 <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input value={q} onChange={(e) => setQ(e.target.value)}
+                <Input value={q} onChange={(e) => setQ(e.target.value)} onFocus={warmEmbedder}
                   aria-label={t("folders.searchPlaceholder", { name: cur!.name })}
                   placeholder={t("folders.searchPlaceholder", { name: cur!.name })}
                   className="h-8 rounded-lg pl-8 text-[13px]" />

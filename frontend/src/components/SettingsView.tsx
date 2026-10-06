@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { usePolling } from "@/lib/usePolling"
 import { Trans, useTranslation } from "react-i18next"
 import {
   AlertTriangle, Check, Copy, Database, Loader2, Monitor, Moon,
@@ -198,12 +199,7 @@ function AutoSyncSection() {
   const [archiving, setArchiving] = useState(false)
   const [archiveMsg, setArchiveMsg] = useState<string | null>(null)
 
-  useEffect(() => {
-    const load = () => getSyncStatus().then(setSync).catch(() => setSync(null))
-    load()
-    const id = setInterval(load, 5000)   // 자동 정리 상태·해소 누계 주기 갱신
-    return () => clearInterval(id)
-  }, [])
+  usePolling(() => getSyncStatus().then(setSync).catch(() => setSync(null)), 5000)   // 자동 정리 상태·해소 누계 주기 갱신
 
   async function mergeNow() {
     setArchiving(true); setArchiveMsg(null)
@@ -255,11 +251,8 @@ function SyncthingSection() {
   const progRef = useRef<{ key: string; ts: number }>({ key: "", ts: Date.now() })   // 동기 진척이 마지막으로 변한 시각(멈춤 감지용)
 
   const load = () => getSyncthingStatus().then((d) => { setSt(d); setStErr(false) }).catch(() => setStErr(true))
-  useEffect(() => {
-    load()
-    const id = setInterval(load, 3000)
-    return () => { clearInterval(id); if (copyTimer.current) clearTimeout(copyTimer.current) }
-  }, [])
+  usePolling(load, 3000)
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current) }, [])
 
   const starting = !!st?.starting
   async function start() { setBusy(true); try { await syncthingStart() } catch { /* noop */ } finally { setBusy(false); load() } }
@@ -562,19 +555,13 @@ export function SettingsView() {
   const indexModeTimer = useRef<number | null>(null)   // 색인 모드 세그먼트 디바운스 커밋 타이머
 
   // 색인·정제 상태 폴링(진행 표시 + 버튼 비활성).
-  useEffect(() => {
-    let alive = true
-    const load = () => {
-      getIndexStatus().then((r) => alive && setIxStatus(r)).catch(() => {})
-      getEnrichStatus().then((r) => alive && setEnrichSt(r)).catch(() => {})
-      // 저장소 현황·JSONL 개수를 실시간 갱신(새로고침 없이). cfg는 setCfg만 → 폼 입력값은 안 건드림.
-      getStats().then((r) => alive && setStats(r)).catch(() => {})
-      getConfig().then((c) => alive && setCfg(c)).catch(() => {})
-    }
-    load()
-    const id = window.setInterval(load, 3000)
-    return () => { alive = false; window.clearInterval(id) }
-  }, [])
+  usePolling(() => Promise.all([
+    getIndexStatus().then(setIxStatus).catch(() => {}),
+    getEnrichStatus().then(setEnrichSt).catch(() => {}),
+    // 저장소 현황·JSONL 개수를 실시간 갱신(새로고침 없이). cfg는 setCfg만 → 폼 입력값은 안 건드림.
+    getStats().then(setStats).catch(() => {}),
+    getConfig().then(setCfg).catch(() => {}),
+  ]), 3000)
 
   async function doRunIndex() {
     setIxStatus((s) => s ? { ...s, running: true, phase: t("settings.starting") } : s)
@@ -660,8 +647,12 @@ export function SettingsView() {
     }).catch(() => {})
   }
   function startPoll() {
+    let busy = false   // 재색인 중엔 백엔드가 바쁘다 - 응답이 2초를 넘겨도 요청을 겹쳐 보내지 않는다
     poll.current = window.setInterval(async () => {
-      const r = await getEmbedModels()
+      if (busy) return
+      busy = true
+      let r
+      try { r = await getEmbedModels() } catch { return } finally { busy = false }
       setEmbed(r.models); setReindexMsg(r.reindex.msg)
       setReindexProg({ doneFiles: r.reindex.done_files, totalFiles: r.reindex.total_files, doneChunks: r.reindex.done_chunks, totalChunks: r.reindex.total_chunks })
       if (!r.reindex.running) {

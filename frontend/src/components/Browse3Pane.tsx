@@ -8,7 +8,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { ChatThread } from "./ChatThread"
 import { AddToFolder } from "./AddToFolder"
 import { useDebounced } from "@/lib/useDebounced"
-import { getGraph3D, getSession, hideSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, unhideSession, type SearchMode } from "@/lib/api"
+import { getGraph3D, getSession, hideSession, listSessions, resumeSession, restoreSession, search, setSessionTitle, unhideSession, warmEmbedder, type SearchMode } from "@/lib/api"
 import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -597,7 +597,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           )}
           <div className="relative">
             <Magnifier className="pointer-events-none absolute left-3 top-1/2 size-[17px] -translate-y-1/2 text-muted-foreground" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} aria-label={t("browse.searchPlaceholder", { title })} placeholder={t("browse.searchPlaceholder", { title })} className="h-9 rounded-lg pl-9 text-sm" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} onFocus={warmEmbedder} aria-label={t("browse.searchPlaceholder", { title })} placeholder={t("browse.searchPlaceholder", { title })} className="h-9 rounded-lg pl-9 text-sm" />
             {searching && <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
