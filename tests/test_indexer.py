@@ -306,3 +306,52 @@ def test_embedding_does_not_hold_the_db_write_lock(tmp_path):
 
     index_file(f, db, vi, _WritingEmbedder(), idle_secs=0, checkpoint_turns=50)
     assert blocked == []
+
+
+class _RecordingEmbedder(FakeEmbedder):
+    def __init__(self):
+        self.seen = []
+
+    def embed_passages(self, texts):
+        self.seen.extend(texts)
+        return super().embed_passages(texts)
+
+
+def test_reparse_reembeds_chunks_whose_context_changed(tmp_path):
+    """텍스트가 그대로여도 직전 질문(맥락)이 바뀌었으면 다시 임베딩한다. 끼어든 질문이 새로
+    갈라지면 그 뒤 턴의 직전 질문이 바뀌는데, 텍스트만 비교하면 옛 맥락의 벡터가 남았다."""
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 3)
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    index_file(f, db, vi, FakeEmbedder(), idle_secs=0)
+
+    lines = f.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[0])   # 턴 0 의 질문만 바꾼다 → 턴 1 은 텍스트 그대로, 맥락만 바뀜
+    rec["message"]["content"] += " 그리고 덧붙인 조건"
+    lines[0] = json.dumps(rec)
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    db.clear_cursors()
+    again = _RecordingEmbedder()
+    index_file(f, db, vi, again, idle_secs=0)
+
+    assert any("질문 번호 0" in t and "덧붙인 조건" in t and "이전:" not in t for t in again.seen)   # 턴 0: 텍스트가 바뀜
+    assert any(t.startswith("[") and "덧붙인 조건" in t and "답변 1" in t for t in again.seen)   # 턴 1: 맥락만 바뀜
+    assert not any("답변 2" in t for t in again.seen)   # 턴 2: 맥락(턴 1 질문)도 텍스트도 그대로
+
+
+def test_incremental_pass_gives_the_first_turn_its_previous_question(tmp_path):
+    """증분 회차의 첫 턴도 DB 의 직전 질문을 맥락으로 받는다(예전엔 빈 맥락이었다)."""
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 3)
+    db = ArchiveDB(tmp_path / "a.db")
+    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
+    # 첫 회차: 마지막 턴(2)은 진행 중일 수 있어 보류 → 커서가 턴 2 시작에 멈춘다
+    index_file(f, db, vi, FakeEmbedder(), idle_secs=10**9)
+    assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 2
+
+    # 다음 회차는 턴 2 부터 읽는다 - 이 회차 안에는 직전 질문(턴 1)이 없다
+    later = _RecordingEmbedder()
+    index_file(f, db, vi, later, idle_secs=0)
+    new = [t for t in later.seen if "답변 2" in t]
+    assert new and all("이전: 질문 번호 1" in t for t in new), later.seen

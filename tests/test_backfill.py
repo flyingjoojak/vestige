@@ -44,6 +44,9 @@ class _FakeDB:
     def set_meta(self, k, v):
         self.meta[k] = v
 
+    def set_embed_hashes(self, pairs):
+        pass
+
     def commit(self):
         self.conn.commit()
 
