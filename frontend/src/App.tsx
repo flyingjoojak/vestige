@@ -55,14 +55,10 @@ export default function App() {
   }
   // 좌측 메뉴 '접힘' 배지 개수. 검색·세션 어디서 접든 반영돼야 해서 가볍게 폴링한다(COUNT만).
   const [foldedCount, setFoldedCount] = useState(0)
-  const refreshFolded = useCallback(() => {
+  const refreshFolded = useCallback(() => (
     listHidden(0).then((r) => setFoldedCount(r.count)).catch(() => { /* 배지일 뿐이라 조용히 무시 */ })
-  }, [])
-  useEffect(() => {
-    refreshFolded()
-    const id = window.setInterval(refreshFolded, 5000)
-    return () => window.clearInterval(id)
-  }, [refreshFolded])
+  ), [])
+  usePolling(refreshFolded, 5000)
   // 첫 실행이면(프리즈 exe·모델 미선택) 모델 선택 화면을 먼저. null=확인중.
   const [onboard, setOnboard] = useState<boolean | null>(null)
   const [backendDown, setBackendDown] = useState(false)
@@ -85,12 +81,7 @@ export default function App() {
     return () => clearInterval(id)
   }, [backendDown, checkOnboard])
   // 모델↔벡터 불일치 배너: 폴링으로 (1) 콜드스타트 시 재시도해 결국 표시, (2) 재색인으로 해소되면 자동 사라짐.
-  useEffect(() => {
-    const load = () => getSystem().then((s) => { setMismatch(s.model_mismatch); setDrift(s.drift_sources ?? []) }).catch(() => {})
-    load()
-    const id = window.setInterval(load, 20000)
-    return () => window.clearInterval(id)
-  }, [])
+  usePolling(() => getSystem().then((s) => { setMismatch(s.model_mismatch); setDrift(s.drift_sources ?? []) }).catch(() => {}), 20000)
   // 첫 실행 색인 진행 폴링: (색인 중 또는 대기) && 아카이브가 아직 거의 빈 상태(<200턴)일 때만 배너.
   // 200턴을 넘으면 배너가 다시 뜰 일이 없으니 폴링을 멈춘다 - 예전엔 앱이 켜져 있는 내내 4초마다
   // 상태바(1초)와 같은 요청을 겹쳐 보냈다.
