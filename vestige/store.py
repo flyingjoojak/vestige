@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS turns(
   parser_version INTEGER
 );
 CREATE TABLE IF NOT EXISTS chunks(
-  chunk_key TEXT PRIMARY KEY, turn_id TEXT, idx INTEGER, text TEXT
+  chunk_key TEXT PRIMARY KEY, turn_id TEXT, idx INTEGER, text TEXT,
+  embed_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS cursors(
   file_path TEXT PRIMARY KEY, offset INTEGER, size INTEGER, mtime REAL, updated_at REAL,
@@ -289,6 +290,17 @@ def _mig_0015_turn_parser_version(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE turns ADD COLUMN parser_version INTEGER")
 
 
+def _mig_0016_chunk_embed_hash(conn: sqlite3.Connection) -> None:
+    """chunks 에 embed_hash 추가: 벡터를 만들 때 넣은 입력(직전 질문 맥락 + 텍스트)의 해시.
+
+    텍스트만 비교하면 끼어든 질문이 새로 갈라져 직전 질문(맥락)만 바뀐 청크가 옛 벡터로 남는다.
+    기존 행은 NULL = 어떤 입력으로 만들었는지 모름 → 그 행만 예전처럼 텍스트로 비교한다.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(chunks)")}
+    if "embed_hash" not in cols:
+        conn.execute("ALTER TABLE chunks ADD COLUMN embed_hash TEXT")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -306,6 +318,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0013_folder_sync,
     _mig_0014_turn_queued,
     _mig_0015_turn_parser_version,
+    _mig_0016_chunk_embed_hash,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -695,10 +708,23 @@ class ArchiveDB:
         return [_row_to_turn(r) for r in reversed(before)] + [_row_to_turn(r) for r in after]
 
     # --- 청크 -----------------------------------------------------------
-    def chunk_texts(self, turn_id: str) -> dict[int, str]:
-        """turn_id 의 지금 저장된 청크 {순번: 텍스트}. 다시 임베딩할지 가를 때 쓴다."""
-        return {r["idx"]: r["text"] for r in self.conn.execute(
-            "SELECT idx, text FROM chunks WHERE turn_id=?", (turn_id,))}
+    def chunk_state(self, turn_id: str) -> dict[int, tuple[str, str | None]]:
+        """turn_id 의 지금 저장된 청크 {순번: (텍스트, 임베딩 입력 해시)}. 다시 임베딩할지 가를 때 쓴다."""
+        return {r["idx"]: (r["text"], r["embed_hash"]) for r in self.conn.execute(
+            "SELECT idx, text, embed_hash FROM chunks WHERE turn_id=?", (turn_id,))}
+
+    def set_embed_hashes(self, pairs: list[tuple[str, str]]) -> None:
+        """[(chunk_key, 해시)] - 그 입력으로 벡터를 만들었다고 기록한다."""
+        self.conn.executemany("UPDATE chunks SET embed_hash=? WHERE chunk_key=?",
+                              [(h, k) for k, h in pairs])
+
+    def prev_question(self, session_id: str, timestamp: str) -> str:
+        """세션에서 timestamp 바로 앞 턴의 질문(없으면 ""). 증분 색인의 첫 턴 맥락용."""
+        r = self.conn.execute(
+            "SELECT question FROM turns WHERE session_id=? AND timestamp<? "
+            "AND COALESCE(question,'')<>'' ORDER BY timestamp DESC LIMIT 1",
+            (session_id, timestamp)).fetchone()
+        return r["question"] if r else ""
 
     def trim_chunks(self, turn_id: str, keep: int) -> list[str]:
         """turn_id 의 청크 중 순번 keep 이상을 지우고 지운 chunk_key 를 돌려준다(벡터 정리용).

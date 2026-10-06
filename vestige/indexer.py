@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -140,6 +141,11 @@ def _contextual(ctx: str, chunk_text: str, project: str) -> str:
     return f"{head}\n{chunk_text}" if head else chunk_text
 
 
+def _input_hash(text: str) -> str:
+    """임베딩 입력의 지문. 같은 입력이면 같은 벡터가 나오므로 다시 임베딩할 필요가 없다."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
 def _group_with_offsets(proc: list[tuple], final_offset: int, adapter: SourceAdapter) -> list[tuple[Turn, int]]:
     """처리 대상 레코드를 (턴, resume_offset) 목록으로. resume=다음 턴 시작(=재개 지점)."""
     starts = [i for i, (o, _s, _e) in enumerate(proc) if adapter.is_turn_start(o)]
@@ -220,6 +226,7 @@ def index_file(
     prev_q: dict[str, str] = {}
     buf_texts: list[str] = []
     buf_keys: list[str] = []
+    buf_hashes: list[str] = []
     count = 0
     since_ckpt = 0
     last_resume = offset
@@ -233,8 +240,10 @@ def index_file(
             db.commit()
             n = len(buf_texts)
             vi.add(buf_keys, embedder.embed_passages(buf_texts))
+            db.set_embed_hashes(list(zip(buf_keys, buf_hashes)))
             buf_texts.clear()
             buf_keys.clear()
+            buf_hashes.clear()
             if on_flush:
                 on_flush(n)   # 청크 단위 진행 보고(임베딩 배치가 저장될 때마다)
 
@@ -252,7 +261,11 @@ def index_file(
         written = db.upsert_turn(turn, source=src, source_file=path)   # 출처·원문경로 기록(재개용)
         count += 1
         if written:   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
-            ctx = prev_q.get(turn.session_id, "")
+            if turn.session_id not in prev_q:
+                # 증분 회차의 첫 턴도 직전 질문을 맥락으로 받는다. 예전엔 회차마다 빈 맥락으로 시작해,
+                # 같은 턴이 처음 색인될 때와 재색인될 때 임베딩 입력이 달랐다.
+                prev_q[turn.session_id] = db.prev_question(turn.session_id, turn.timestamp)
+            ctx = prev_q[turn.session_id]
             chunks = chunk_turn(turn) if should_embed(turn) else []
             # 파서 버전이 올라 턴이 짧아졌으면 뒤쪽 청크가 옛 내용으로 남는다 → 치운다.
             # 임베딩 여부와 따로 판단해야 한다: 짧아져서 임베딩 기준 아래로 내려간 턴은 청크가
@@ -260,20 +273,28 @@ def index_file(
             stale = db.trim_chunks(turn.id, len(chunks))
             if stale:
                 vi.remove(stale)
-            before = db.chunk_texts(turn.id) if chunks else {}
+            before = db.chunk_state(turn.id) if chunks else {}
             for c in chunks:
                 db.add_chunks([c])
-                # 텍스트가 그대로이고 벡터도 있으면 다시 임베딩하지 않는다. 재색인은 턴 경계를 고치려고
-                # 로그를 처음부터 다시 읽는 것인데, 예전엔 내용이 안 바뀐 청크까지 전부 다시 임베딩해
-                # (이 기기 청크 1.6만 개, 약 1시간 20분) 사실상 쓸 수가 없었다. 진행 중인 턴이 자랄 때도
-                # 앞쪽 청크를 매번 다시 임베딩하지 않게 된다.
-                # ponytail: 임베딩 입력엔 직전 질문이 맥락으로 붙는다(_contextual). 끼어든 질문이 새로
-                # 갈라져 직전 질문만 바뀐 청크는 옛 맥락의 벡터를 그대로 쓴다 - 맥락은 앞부분 일부만 붙는
-                # 보조 신호라 받아들인다. 정확히 맞추려면 임베딩 입력의 해시를 청크와 함께 저장해 비교할 것.
-                if before.get(c.index) == c.text and vi.has(f"{c.turn_id}#{c.index}"):
+                # 임베딩 입력(직전 질문 맥락 + 텍스트)이 그대로이고 벡터도 있으면 다시 임베딩하지 않는다.
+                # 재색인은 턴 경계를 고치려고 로그를 처음부터 다시 읽는 것인데, 예전엔 안 바뀐 청크까지
+                # 전부 다시 임베딩해(이 기기 1.6만 개, 약 1시간 20분) 쓸 수가 없었다. 텍스트만 보면 끼어든
+                # 질문이 새로 갈라져 맥락만 바뀐 청크를 놓치므로 입력 해시로 비교한다. 해시가 없는 옛 청크는
+                # 어떤 맥락으로 만들었는지 몰라 텍스트로만 비교한다(다음에 임베딩되면 해시가 생긴다).
+                key = f"{c.turn_id}#{c.index}"
+                inp = _contextual(ctx, c.text, turn.project)
+                h = _input_hash(inp)
+                old_text, old_hash = before.get(c.index, (None, None))
+                same = old_hash == h if old_hash is not None else old_text == c.text
+                if same and vi.has(key):
+                    if old_hash is None:
+                        # 옛 청크: 어떤 맥락으로 만든 벡터인지 모르니 지금 입력으로 만든 것으로 친다.
+                        # 안 찍으면 다음 재색인에서도 계속 텍스트로만 비교해 맥락 변화를 영영 못 잡는다.
+                        db.set_embed_hashes([(key, h)])
                     continue
-                buf_texts.append(_contextual(ctx, c.text, turn.project))
-                buf_keys.append(f"{c.turn_id}#{c.index}")
+                buf_texts.append(inp)
+                buf_keys.append(key)
+                buf_hashes.append(h)
                 if len(buf_texts) >= batch:
                     flush_vectors()
         if turn.question:
@@ -453,6 +474,8 @@ def backfill_missing(db, vi, embedder, batch: int = EMBED_BATCH,
         if not buf_texts:
             return
         vi.add(buf_keys, embedder.embed_passages(buf_texts, parallel=parallel))
+        db.set_embed_hashes([(k, _input_hash(t)) for k, t in zip(buf_keys, buf_texts)])
+        db.commit()   # 다음 배치를 임베딩하는 동안 쓰기 잠금을 쥐고 있지 않게(#260)
         done += len(buf_texts)
         buf_keys.clear()
         buf_texts.clear()
