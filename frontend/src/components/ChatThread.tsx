@@ -194,6 +194,7 @@ export function ChatThread(
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (el && atBottom.current) el.scrollTop = el.scrollHeight
+    onScroll()   // 처음부터 화면에 다 들어오는 짧은 채팅은 스크롤이 안 일어나 '맨 아래'로 안 잡혔다
   }, [data, range.e])
 
   // 끝까지 보고 있었으면 새로 붙은 턴까지 렌더 창을 넓힌다. 중간을 보고 있으면 건드리지 않는다.

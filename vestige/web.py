@@ -967,7 +967,7 @@ def api_sessions(limit: int = 500):
         logging.getLogger(__name__).warning("색인 전 세션 조회 실패: %s", e)
         extra = []
     if extra:
-        out = sorted(out + extra, key=lambda r: r["ended"] or "", reverse=True)
+        out = sorted(out + extra, key=lambda r: r["ended"] or "", reverse=True)[:limit]
     return {"sessions": out}
 
 
