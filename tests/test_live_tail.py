@@ -132,3 +132,31 @@ def test_db_count_agrees_between_session_and_tail_for_big_sessions(tmp_path, mon
     assert d["db_count"] == web.api_session_tail(id=SID)["db_count"] == n
     # 잘라 읽어도 db_count 는 전체 기준이어야 한다(아니면 화면이 매 주기 전체를 다시 받는다)
     assert web.api_session(id=SID, limit=10)["db_count"] == n
+
+
+def test_never_indexed_session_is_listed_and_opens(tmp_path, monkeypatch):
+    """한 번도 색인 안 된 세션도 목록에 '색인 전'으로 뜨고, 열면 대화가 보인다. 색인되면 그 줄은 빠진다."""
+    from vestige import config as C
+    monkeypatch.setattr(C, "PROJECTS_DIR", tmp_path / "projects")   # 공용 테스트 폴더에 남기지 않게
+    sid = "22220000-0000-4000-8000-000000000new"
+    proj = C.PROJECTS_DIR / "C--new"
+    proj.mkdir(parents=True, exist_ok=True)
+    log = proj / f"{sid}.jsonl"
+    log.write_text(_user("새 세션 첫 질문", "n1", "2026-10-06T00:00:00Z").replace(SID, sid)
+                   + _asst("답하는 중").replace(SID, sid), encoding="utf-8")
+    monkeypatch.setattr(web, "ArchiveDB", lambda *a, **k: ArchiveDB(tmp_path / "a.db"))
+    web._unindexed_cache.clear()
+
+    rows = [r for r in web.api_sessions()["sessions"] if r["session"] == sid]
+    assert len(rows) == 1 and rows[0]["unindexed"] is True and rows[0]["headline"] == "새 세션 첫 질문"
+    assert "_path" not in rows[0]
+
+    d = web.api_session(id=sid)
+    assert [t["question"] for t in d["turns"]] == ["새 세션 첫 질문"] and d["turns"][0]["live"] is True
+    assert web.api_session_tail(id=sid)["turns"][0]["answer"] == "답하는 중"
+
+    db = ArchiveDB(tmp_path / "a.db")
+    index_file(str(log), db, VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json"), FakeEmbedder(), idle_secs=0)
+    db.commit()
+    again = [r for r in web.api_sessions()["sessions"] if r["session"] == sid]
+    assert len(again) == 1 and "unindexed" not in again[0]   # 이제 DB 의 줄 하나만

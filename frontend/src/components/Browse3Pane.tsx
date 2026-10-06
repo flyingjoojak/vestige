@@ -13,7 +13,10 @@ import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { fmtTime } from "@/lib/format"
-import type { Hit, SessionDetail } from "@/lib/types"
+import type { Hit, SessionDetail, SessionRow } from "@/lib/types"
+
+// 새로 시작한 세션이 열어 둔 목록에도 나타나는 주기. 백엔드는 로그 파일 목록만 훑는다(실측 256개 60ms).
+const SESSIONS_REFRESH_MS = 20000
 
 const PALETTE = [
   "#6ea8fe", "#f4845f", "#5cc8a8", "#c78be0", "#e6b34a", "#7ed957", "#ef6f9b",
@@ -30,7 +33,7 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
   try { el.showPicker?.() } catch { /* 미지원 */ }
 }
 
-type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean; parent?: string | null }
+type Group = { id: string; label: string; sub: string; count: number; color?: string; subagent?: boolean; folded?: boolean; parent?: string | null; unindexed?: boolean }
 type Conv = { t: string; s: string; h: string; q?: boolean }
 
 // 세션/군집 공통 3분할 브라우저. 초기=목록(가운데), 선택 후=[검색+대화목록 | 채팅 | 목록].
@@ -200,19 +203,22 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     setSelTurn(jumpTurn && jumpSess ? { turn: jumpTurn, session: jumpSess } : null)
   }, [initialSel, jumpTurn, jumpSess])
 
+  const toGroup = useCallback((s: SessionRow): Group => ({
+    id: s.session, label: s.headline || t("browse.untitled"), count: s.count,
+    sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
+    subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
+    parent: s.parent,       // 부모 세션 아래로 접어 넣기 위해(백엔드가 경로에서 파생)
+    // 전 턴이 접힌 세션(#128). 목록에서는 뺀다(아래 visibleGroups) - 접힘 화면의 '접은 세션'에서
+    // 찾아 펼치면 된다. 예전엔 흐리게 남겼는데, 접은 게 목록에 그대로 있으면 접은 의미가 없다.
+    folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
+    unindexed: s.unindexed,   // 한 번도 색인 안 된 새 세션 - '색인 전' 배지
+  }), [t])
+
   // 그룹 목록 로드(실패=에러 상태로 구분, 재시도 가능)
   const loadGroups = useCallback(() => {
     setGroupsErr(false); setGroups(null); setJustFolded(new Map()); setFoldErr(null)   // 다시 불러오면 접은 세션은 빠진다
     if (kind === "sessions") {
-      listSessions().then((r) => setGroups((r.sessions || []).map((s) => ({
-        id: s.session, label: s.headline || t("browse.untitled"), count: s.count,
-        sub: t("browse.sessionSub", { count: s.count, start: fmtTime(s.started), end: fmtTime(s.ended) }),
-        subagent: s.subagent,   // 배경 에이전트 세션이면 목록에서 아이콘으로 구분
-        parent: s.parent,       // 부모 세션 아래로 접어 넣기 위해(백엔드가 경로에서 파생)
-        // 전 턴이 접힌 세션(#128). 목록에서는 뺀다(아래 visibleGroups) - 접힘 화면의 '접은 세션'에서
-        // 찾아 펼치면 된다. 예전엔 흐리게 남겼는데, 접은 게 목록에 그대로 있으면 접은 의미가 없다.
-        folded: (s.hidden_count ?? 0) > 0 && s.hidden_count === s.count,
-      })))).catch(() => setGroupsErr(true))
+      listSessions().then((r) => setGroups((r.sessions || []).map(toGroup))).catch(() => setGroupsErr(true))
     } else {
       getGraph3D().then((g) => {
         const m = new Map<number, Conv[]>(); const seen = new Map<number, Set<string>>()
@@ -227,8 +233,19 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         })))
       }).catch(() => setGroupsErr(true))
     }
-  }, [kind, t])
+  }, [kind, t, toGroup])
   useEffect(() => { loadGroups() }, [loadGroups])
+
+  // 세션 목록을 조용히 다시 받는다 - 새로 시작한 세션('색인 전')이 열어 둔 화면에도 나타나게.
+  // 로딩 표시·방금 접은 행(되돌리기)은 건드리지 않는다. 실패는 다음 주기에 다시.
+  useEffect(() => {
+    if (kind !== "sessions") return
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return
+      listSessions().then((r) => setGroups((cur) => (cur ? (r.sessions || []).map(toGroup) : cur))).catch(() => {})
+    }, SESSIONS_REFRESH_MS)
+    return () => window.clearInterval(id)
+  }, [kind, toGroup])
 
   // 선택 그룹의 대화 목록
   useEffect(() => {
@@ -254,6 +271,15 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     }
     setConvs(pointsByCluster.get(Number(sel)) ?? [])
   }, [sel, kind, pointsByCluster])
+
+  // 채팅이 실시간 꼬리로 턴이 늘면 가운데 대화 목록도 같이 늘린다. 안 바뀌었으면 그대로 둔다 -
+  // 새 배열을 넣으면 선택 줄로 다시 스크롤하는 효과가 4초마다 돌아 목록을 읽던 위치에서 끌어당긴다.
+  const syncConvs = useCallback((ts: SessionDetail["turns"]) => {
+    if (sel == null) return
+    const next = ts.map((turn) => ({ t: turn.id, s: sel, h: turn.summary || turn.question || "", q: turn.queued }))
+    setConvs((cur) => (cur && cur.length === next.length && cur.every((c, i) => c.t === next[i].t && c.h === next[i].h)
+      ? cur : next))
+  }, [sel])
 
   const convSet = useMemo(() => new Set((convs ?? []).map((c) => c.t)), [convs])
 
@@ -368,6 +394,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
             : "mt-0.5 block truncate text-[11.5px] text-muted-foreground tabular-nums"}>{g.sub}</span>
         </button>
         {g.folded && <span className="pointer-events-none shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t("browse.folded")}</span>}
+        {g.unindexed && <span title={t("chat.liveHint")}
+          className="relative z-10 shrink-0 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-400">{t("chat.live")}</span>}
         {kind === "sessions" && foldErr?.id === g.id && (
           <span role="alert" className="relative z-10 shrink-0 text-[10.5px] text-destructive">{foldErr.text}</span>
         )}
@@ -378,7 +406,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
             <Undo2 aria-hidden className="size-3" />{t("browse.undoFold")}
           </button>
         )}
-        {kind === "sessions" && (
+        {kind === "sessions" && !g.unindexed && (
           <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ sessionId: g.id }} />
             {!g.folded && (
@@ -619,7 +647,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       {/* 가운데: 채팅 */}
       <div className="min-h-0 overflow-hidden">
         {selTurn
-          ? <ChatThread key={`${selTurn.session}:${selTurn.turn}`} session={selTurn.session} focusTurn={selTurn.turn} />
+          ? <ChatThread key={`${selTurn.session}:${selTurn.turn}`} session={selTurn.session} focusTurn={selTurn.turn}
+              onTurns={kind === "sessions" && selTurn.session === sel ? syncConvs : undefined} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">{t("browse.selectPrompt")}</div>}
       </div>
 
