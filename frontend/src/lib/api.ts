@@ -235,6 +235,11 @@ export interface SkipSdkStats { sessions: number; turns: number; enabled: boolea
 export const getSkipSdkStats = () => getJSON<SkipSdkStats>(`/api/skip-sdk-stats`)
 
 // 수동 증분 색인(새 대화만).
+// 검색하려는 낌새(검색 화면 열기·검색창 누르기)에 모델을 미리 올린다. 덤이라 실패는 무시한다.
+export function warmEmbedder(): void {
+  fetch(`/api/embedder/warm`, { method: "POST" }).catch(() => { /* 검색 때 다시 올린다 */ })
+}
+
 export async function runIndex(): Promise<{ ok: boolean; started?: boolean; busy?: boolean }> {
   const r = await fetch(`/api/index/run`, { method: "POST" })
   if (!r.ok) return failure(r)

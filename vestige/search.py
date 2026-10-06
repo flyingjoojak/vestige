@@ -52,6 +52,9 @@ class SearchHit:
     thread: tuple[Turn, ...] = ()
 
 
+_BRIEF_BATCH = 200   # 검색 후보를 가벼운 칸으로 거를 때 한 번에 읽는 수
+
+
 def _norm_q(q: str) -> str:
     return " ".join(q.lower().split())
 
@@ -83,6 +86,7 @@ def search(
     semantic: bool = True,
     tool_sources: set[str] | None = None,   # None=전체, 아니면 이 출처(claude-code/codex)만
     allow_ids: set[str] | None = None,      # None=전체, 아니면 이 턴들만(폴더 안에서 검색, #201)
+    with_thread: bool = True,               # 앞뒤 턴(MCP·CLI 가 맥락으로 쓴다. 웹 화면은 안 쓴다)
 ) -> list[SearchHit]:
     # 세션·폴더 스코프면 후보를 크게 잡아 그 안의 턴이 전역 상위 밖이어도 표면화되게 함.
     depth = max(k * 8, 1000) if (session or allow_ids is not None) else k * 8
@@ -107,32 +111,38 @@ def search(
     since_dt = _kst_lower_bound(since) if since else None  # 포함 하한
     until_dt = _kst_upper_bound(until) if until else None  # 배타 상한
 
+    # 거르기는 가벼운 칸만으로 먼저 한다. 예전엔 후보마다 본문 전체(get_turn)를 읽고 나서 걸러,
+    # 세션·폴더 안 검색은 버릴 후보 최대 2천 개의 본문을 읽었다. 본문은 채택된 k개만 읽는다.
+    # 묶음(_BRIEF_BATCH)으로 읽다가 k개가 차면 멈춘다 - 전역 검색은 앞쪽 후보에서 거의 다 찬다.
+    cand = [t for t in ranked if t not in hidden and (allow_ids is None or t in allow_ids)]
+    brief: dict = {}
     hits: list[SearchHit] = []
     seen_questions: set[str] = set()
-    for tid in ranked:
-        if tid in hidden:
+    for i, tid in enumerate(cand):
+        if i % _BRIEF_BATCH == 0:
+            brief = db.turn_brief(cand[i:i + _BRIEF_BATCH])
+        b = brief.get(tid)
+        if b is None:
             continue
-        if allow_ids is not None and tid not in allow_ids:   # 폴더 스코프(#201)
+        if tool_sources and (b["source"] or "claude-code") not in tool_sources:
             continue
-        turn = db.get_turn(tid)
-        if turn is None:
-            continue
-        if tool_sources and (turn.source or "claude-code") not in tool_sources:
-            continue
-        if session and not (turn.session_id.startswith(session) or session in turn.project):
+        if session and not (b["session_id"].startswith(session) or session in (b["project"] or "")):
             continue
         if since_dt or until_dt:
-            tt = _parse_ts(turn.timestamp)
+            tt = _parse_ts(b["timestamp"])
             if tt is not None:
                 if since_dt and tt < since_dt:
                     continue
                 if until_dt and tt >= until_dt:
                     continue
-        nq = _norm_q(turn.question)
+        nq = _norm_q(b["question"] or "")
         if nq and nq in seen_questions:  # 근접중복 다양화
             continue
         if nq:
             seen_questions.add(nq)
+        turn = db.get_turn(tid)
+        if turn is None:
+            continue
         summary, tags = db.get_enrichment(tid)
         hits.append(
             SearchHit(
@@ -142,7 +152,7 @@ def search(
                 sources=tuple(sorted(srcs.get(tid, set()))),
                 summary=summary,
                 tags=tuple(tags),
-                thread=tuple(db.thread(tid, window)),
+                thread=tuple(db.thread(tid, window)) if with_thread else (),
             )
         )
         if len(hits) >= k:

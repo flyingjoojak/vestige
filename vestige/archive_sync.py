@@ -126,6 +126,12 @@ def _checked(rec: dict) -> dict:
     return rec
 
 
+# 이미 끝까지 읽은 상대 export 의 (크기, 수정 시각). 그대로면 다시 읽지 않는다 - 색인 회차마다
+# (새 대화가 없어도) 상대 아카이브 전체를 다시 파싱했다(실측 88MB 430ms, 아카이브에 비례해 커진다).
+# 프로세스 메모리라 앱을 다시 켜면 한 번은 다시 읽는다. 키에 DB 경로를 넣어 다른 DB 와 섞이지 않게.
+_imported: dict[tuple[str, str], tuple[int, int]] = {}
+
+
 def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_fn=print) -> int:
     """다른 기기 export 파일에서 로컬에 없는(또는 더 완성된) 턴/청크/정제를 병합. 반환: 반영된 턴 수.
 
@@ -139,9 +145,19 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
     dirs = [Path(projects_dir) / ARCHIVE_DIRNAME,
             *(Path(projects_dir) / name for name in LEGACY_ARCHIVE_DIRNAMES)]
     files = [p for d in dirs if d.exists() for p in d.glob("*.ndjson")]
+    db_key = str(getattr(db, "path", ""))
+    stamps: dict[Path, tuple[int, int]] = {}
+    for p in files:
+        try:
+            st = p.stat()
+            stamps[p] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            pass
+    files = [p for p in files if p.stem != my_did and _imported.get((db_key, str(p))) != stamps.get(p)]
     if not files:
         return 0
     have = {row[0] for row in db.conn.execute("SELECT id FROM turns")}
+    done: list[Path] = []   # 끝까지 읽은 파일 - 커밋이 끝난 뒤에야 '읽음'으로 기록한다
     added = 0
     meta = 0          # 제목·접힘 등 정리 상태 반영 건수(#233)
     removed_any = False
@@ -237,11 +253,15 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                         log_fn(f"ERROR 아카이브 {p.name}:{lineno} 건너뜀: {e}")
         if bad_lines:
             log_fn(f"ERROR 아카이브 {p.name} — 읽을 수 없는 줄 {bad_lines}개를 건너뛰었어요")
+        elif p in stamps:
+            done.append(p)   # 깨진 줄이 있으면 다음에도 읽어 오류를 계속 알린다
     # meta(제목·접힘·폴더)도 커밋 대상이다. added 만 보면 '새 턴 없이 정리 상태만 온 회차'가
     # 통째로 롤백된다 — 커넥션이 닫힐 때 미완료 트랜잭션이 되돌려지기 때문이다.
     # 앱은 매 호출마다 새 커넥션을 열어서, 실사용에서는 사실상 항상 이 경우였다.
     if added or meta:
         db.commit()
+    for p in done:
+        _imported[(db_key, str(p))] = stamps[p]
     if removed_any and vi is not None:
         vi.save()
     if meta:

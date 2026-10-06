@@ -508,16 +508,13 @@ def _hit_to_dict(h) -> dict:
         "session": t.session_id[:8],
         "session_full": t.session_id,
         "question": t.question,
-        "answer": t.answer,
-        "actions": [a.render() for a in t.actions],
+        # 답변·행동·앞뒤 턴은 보내지 않는다 - 화면은 결과 줄(요약/질문)만 그리고 고르면 채팅을 따로
+        # 연다. 예전엔 이 셋이 응답의 80%였다(결과 100개 1.95MB 중 1.5MB).
         "cosine": h.cosine,
         "sources": list(h.sources),
         "source": t.source,   # 출처 도구(claude-code/codex) — 결과 배지·필터용
         "summary": h.summary,
         "tags": list(h.tags),
-        "thread": [
-            {"id": x.id, "question": x.question, "answer": x.answer} for x in h.thread
-        ],
     }
 
 
@@ -556,8 +553,30 @@ def api_search(
     hits = run_search(q, db, vi, embedder, k=k, session=session or None,
                       since=since or None, until=until or None,
                       keyword=want_kw, semantic=want_sem, tool_sources=tool_sources,
-                      allow_ids=allow_ids)
+                      allow_ids=allow_ids, with_thread=False)
     return {"query": q, "count": len(hits), "hits": [_hit_to_dict(h) for h in hits]}
+
+
+@app.post("/api/embedder/warm")
+def api_embedder_warm():
+    """검색 화면을 열거나 검색창을 누르면 부른다 - 질문을 치는 동안 모델을 미리 올린다.
+    모델은 2분 쓰지 않으면 내리므로(메모리 약 0.8GB 반환) 그 뒤 첫 검색은 로딩에 5~6초 걸렸다.
+    시간을 늘리는 대신 '곧 검색한다'는 신호가 있을 때만 올린다. 이미 올라가 있으면 시각만 갱신된다."""
+    if _state.get("needs_onboarding"):
+        return {"ok": False, "loaded": False}
+    loaded = _state.get("embedder") is not None
+    if not loaded:
+        threading.Thread(target=_warm_embedder, daemon=True).start()
+    else:
+        _embedder_last_used[0] = time.monotonic()
+    return {"ok": True, "loaded": loaded}
+
+
+def _warm_embedder() -> None:
+    try:
+        get_embedder()
+    except Exception as e:  # noqa: BLE001 — 미리 올리기는 덤이다. 실패하면 검색이 그때 다시 올린다
+        logging.getLogger(__name__).warning("모델 미리 올리기 실패: %s", e)
 
 
 @app.get("/api/sources")
@@ -1005,10 +1024,15 @@ def _unindexed_row(adapter, path: str, size: int, mtime: float) -> dict | None:
 
 
 def _unindexed_sessions(db: ArchiveDB) -> list[dict]:
-    from .indexer import _iter_all
+    from .indexer import iter_all_cached
     have = {r[0] for r in db.conn.execute("SELECT file_path FROM cursors")}
+    files = iter_all_cached()
+    # 색인됐거나 사라진 파일의 캐시는 버린다(세션마다 새 파일이 생겨 그대로 두면 계속 쌓인다)
+    live = {str(p) for _a, p in files} - have
+    for gone in [k for k in _unindexed_cache if k not in live]:
+        _unindexed_cache.pop(gone, None)
     out = []
-    for adapter, p in _iter_all(None):
+    for adapter, p in files:
         sp = str(p)
         if sp in have:
             continue
