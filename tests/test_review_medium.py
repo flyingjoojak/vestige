@@ -24,7 +24,11 @@ def test_turn_ids_of_chunks_matches_one_by_one(tmp_path):
     db.conn.executemany("INSERT INTO chunks(chunk_key, turn_id, idx, text) VALUES(?,?,?,?)",
                         [(f"t{i}#0", f"t{i}", 0, "x") for i in range(1200)])
     keys = [f"t{i}#0" for i in range(1200)] + ["nope#0"]
+    queries = []
+    db.conn.set_trace_callback(lambda sql: queries.append(sql) if "FROM chunks" in sql else None)
     batched = db.turn_ids_of_chunks(keys)
+    db.conn.set_trace_callback(None)
+    assert len(queries) == 3, len(queries)   # 1201 개를 500개씩 = 3번(한 개씩이면 1201번)
     assert batched == {k: db.turn_id_of_chunk(k) for k in keys if db.turn_id_of_chunk(k)}
 
 
@@ -76,3 +80,19 @@ def test_sync_tick_scans_for_conflicts_at_most_once_per_interval(tmp_path, monke
     assert len(calls) == 1
     session_sync.sync_tick(tmp_path)   # 기본(0) = 매번
     assert len(calls) == 2
+
+
+def test_failed_conflict_scan_is_retried_on_the_next_tick(tmp_path, monkeypatch):
+    from vestige import session_sync
+    calls = []
+
+    def boom(root):
+        calls.append(1)
+        raise OSError("디스크 오류")
+
+    monkeypatch.setattr(session_sync, "resolve_all", boom)
+    session_sync._last_scan.clear()
+    for _ in range(2):
+        with pytest.raises(OSError):
+            session_sync.sync_tick(tmp_path, min_scan_secs=60)
+    assert len(calls) == 2   # 실패한 훑기는 '훑었다'로 치지 않는다

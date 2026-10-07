@@ -144,6 +144,9 @@ function McpSection() {
         setTargets((ts) => ts?.map((x) => (x.id === tgt.id ? { ...x, registered: willRegister } : x)) ?? ts)
         setNote(willRegister ? t("mcp.registeredRestart", { label: tgt.label }) : t("mcp.unregistered", { label: tgt.label }))
       }
+    } catch (e) {
+      // 등록·해제가 400/500 이면 api 가 예외로 올린다 - 여기서 안 받으면 아무 안내 없이 끝났다
+      setNote(`${tgt.label}: ${errText(t, e, "mcp.failed")}`); setSnip(tgt.id)
     } finally {
       setBusy(null)   // 스피너 즉시 종료(등록 subprocess만 끝나면 됨)
     }

@@ -349,8 +349,8 @@ def enrich_all(db, backend: str | None = None, model: str | None = None,
     for i, sid in enumerate(sessions):
         try:
             want = db.conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE session_id=?" + (" AND summary IS NULL" if only_missing else ""),
-                (sid,)).fetchone()[0]
+                "SELECT COUNT(*) FROM turns WHERE session_id=? AND summary IS NULL" if only_missing
+                else "SELECT COUNT(*) FROM turns WHERE session_id=?", (sid,)).fetchone()[0]
             n = enrich_session(sid, db, backend=backend, model=model, missing_only=only_missing)
             total += n
             log_fn(f"enriched {n} turns  session {sid[:8]}")

@@ -149,8 +149,8 @@ def sync_tick(root: Path | None = None, *, index_fn: Callable[[], bool] | None =
     # 부르므로 min_scan_secs 에 한 번만 훑는다 - 충돌은 드물고, 늦어도 그만큼 뒤에 해소된다.
     now = time.monotonic()
     if now - _last_scan.get(str(root), -1e9) >= min_scan_secs:
-        _last_scan[str(root)] = now
         outcomes = resolve_all(root)
+        _last_scan[str(root)] = now   # 성공한 뒤에만 - 실패하면 다음 틱에 바로 다시(오류도 그때 다시 드러난다)
     else:
         outcomes = []
     indexed = False
