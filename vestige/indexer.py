@@ -178,6 +178,10 @@ def _group_with_offsets(proc: list[tuple], final_offset: int, adapter: SourceAda
     return out
 
 
+# 색인할 때 한 번에 메모리에 올리는 로그 구간 크기(이 크기를 넘으면 다음 턴 시작에서 끊는다)
+_SLICE_BYTES = 16 * 1024 * 1024
+
+
 def index_file(
     path: str | Path, db, vi, embedder, *, adapter: SourceAdapter | None = None,
     idle_secs: int = IDLE_SECS, batch: int = EMBED_BATCH,
@@ -206,38 +210,6 @@ def index_file(
 
     # 열린 턴(hold)이 있으면 그 시작부터 다시 읽어 뒤에 붙은 내용까지 합쳐 '완성된 턴'으로 재저장(멱등).
     read_from = hold if hold is not None else offset
-    records = []  # (obj, start, end)
-    prev = read_from
-    for obj, end in adapter.read_records(path, read_from):
-        records.append((obj, prev, end))
-        prev = end
-    if not records:
-        return 0
-
-    last_up = None
-    for i, (obj, _s, _e) in enumerate(records):
-        if adapter.is_turn_start(obj):
-            last_up = i
-
-    idle = (time.time() - mtime) > idle_secs
-    if last_up is None or idle:
-        proc, final_offset = records, prev
-        # idle 로 마지막 턴을 확정하지만, 그 턴은 아직 안 끝났을 수 있다(긴 도구호출 중).
-        # 그 턴의 시작을 hold 로 남겨, 나중에 뒷내용이 붙으면 여기서부터 다시 읽어 완성한다.
-        new_hold = records[last_up][1] if (idle and last_up is not None) else None
-    else:
-        # 마지막(진행중일 수 있는) 턴 보류: 그 프롬프트 시작을 최종 경계로.
-        proc, final_offset = records[:last_up], records[last_up][1]
-        new_hold = None
-    if not proc:
-        return 0
-
-    turns = _group_with_offsets(proc, final_offset, adapter)
-    if not turns:  # 노이즈만 있었으면 커서만 전진(hold 정리)
-        db.set_cursor(path, final_offset, size, mtime, new_hold)
-        db.commit()
-        return 0
-
     prev_q: dict[str, str] = {}
     buf_texts: list[str] = []
     buf_keys: list[str] = []
@@ -271,64 +243,105 @@ def index_file(
 
     # 저장 출처: 어댑터가 source_name 을 주면 그걸(예: subagent 어댑터 → 'claude-code'), 없으면 name.
     src = getattr(adapter, "source_name", adapter.name)
-    last_i = len(turns) - 1
-    for i, (turn, resume) in enumerate(turns):
-        written = db.upsert_turn(turn, source=src, source_file=path)   # 출처·원문경로 기록(재개용)
-        count += 1
-        if written:   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
-            if turn.session_id not in prev_q:
-                # 증분 회차의 첫 턴도 직전 질문을 맥락으로 받는다. 예전엔 회차마다 빈 맥락으로 시작해,
-                # 같은 턴이 처음 색인될 때와 재색인될 때 임베딩 입력이 달랐다.
-                prev_q[turn.session_id] = db.prev_question(turn.session_id, turn.timestamp)
-            ctx = prev_q[turn.session_id]
-            chunks = chunk_turn(turn) if should_embed(turn) else []
-            # 파서 버전이 올라 턴이 짧아졌으면 뒤쪽 청크가 옛 내용으로 남는다 → 치운다.
-            # 임베딩 여부와 따로 판단해야 한다: 짧아져서 임베딩 기준 아래로 내려간 턴은 청크가
-            # 0개가 맞는데, 이 정리가 should_embed 안에 있으면 옛 청크가 통째로 남아 검색에 뜬다.
-            stale = db.trim_chunks(turn.id, len(chunks))
-            if stale:
-                vi.remove(stale)
-            before = db.chunk_state(turn.id) if chunks else {}
-            for c in chunks:
-                db.add_chunks([c])
-                # 임베딩 입력(직전 질문 맥락 + 텍스트)이 그대로이고 벡터도 있으면 다시 임베딩하지 않는다.
-                # 재색인은 턴 경계를 고치려고 로그를 처음부터 다시 읽는 것인데, 예전엔 안 바뀐 청크까지
-                # 전부 다시 임베딩해(이 기기 1.6만 개, 약 1시간 20분) 쓸 수가 없었다. 텍스트만 보면 끼어든
-                # 질문이 새로 갈라져 맥락만 바뀐 청크를 놓치므로 입력 해시로 비교한다. 해시가 없는 옛 청크는
-                # 어떤 맥락으로 만들었는지 몰라 텍스트로만 비교한다(다음에 임베딩되면 해시가 생긴다).
-                key = f"{c.turn_id}#{c.index}"
-                inp = _contextual(ctx, c.text, turn.project)
-                h = _input_hash(inp)
-                old_text, old_hash = before.get(c.index, (None, None))
-                same = old_hash == h if old_hash is not None else old_text == c.text
-                if same and vi.has(key):
-                    if old_hash is None:
-                        # 옛 청크: 어떤 맥락으로 만든 벡터인지 모르니 지금 입력으로 만든 것으로 친다.
-                        # 안 찍으면 다음 재색인에서도 계속 텍스트로만 비교해 맥락 변화를 영영 못 잡는다.
-                        db.set_embed_hashes([(key, h)])
-                    continue
-                buf_texts.append(inp)
-                buf_keys.append(key)
-                buf_hashes.append(h)
-                if len(buf_texts) >= batch:
-                    flush_vectors()
-        if turn.question:
-            prev_q[turn.session_id] = turn.question
-        last_resume = resume
-        # idle 로 held 된 마지막 턴은 중간 체크포인트로 커서를 넘기지 않는다: 오직 최종
-        # checkpoint(hold 포함)에서만 커밋 → 프로세스가 kill 돼도 다음 pass가 그 턴을 다시 읽어 완성.
-        if new_hold is not None and i == last_i:
-            continue
-        since_ckpt += 1
-        # 한 구간이 턴 여럿을 낳았으면(같은 resume) 그 구간이 끝나기 전엔 커서를 넘기지 않는다 - 넘기면
-        # 아직 안 쓴 같은 구간의 뒤쪽 턴이, 그 사이에 죽었을 때 다시 읽히지 않고 영영 빠진다.
-        same_slice_follows = i < last_i and turns[i + 1][1] == resume
-        if since_ckpt >= checkpoint_turns and not same_slice_follows:
-            checkpoint(last_resume)   # 중간 체크포인트: hold 없음(확정된 경계까지만)
-            since_ckpt = 0
-    checkpoint(final_offset, new_hold)   # 최종: idle 확정이면 열린 턴 시작을 hold 로 남김
-    return count
+    def process(proc: list, final_offset: int, new_hold: int | None) -> None:
+        """레코드 구간 하나를 턴으로 묶어 저장하고 커서를 final_offset 까지 넘긴다."""
+        nonlocal count, since_ckpt, last_resume
+        turns = _group_with_offsets(proc, final_offset, adapter)
+        if not turns:  # 노이즈만 있었으면 커서만 전진(hold 정리)
+            db.set_cursor(path, final_offset, size, mtime, new_hold)
+            db.commit()
+            return
+        last_i = len(turns) - 1
+        for i, (turn, resume) in enumerate(turns):
+            written = db.upsert_turn(turn, source=src, source_file=path)   # 출처·원문경로 기록(재개용)
+            count += 1
+            if written:   # 축소로 스킵된 턴은 청크/벡터도 기존 그대로(일관 유지)
+                if turn.session_id not in prev_q:
+                    # 증분 회차의 첫 턴도 직전 질문을 맥락으로 받는다. 예전엔 회차마다 빈 맥락으로 시작해,
+                    # 같은 턴이 처음 색인될 때와 재색인될 때 임베딩 입력이 달랐다.
+                    prev_q[turn.session_id] = db.prev_question(turn.session_id, turn.timestamp)
+                ctx = prev_q[turn.session_id]
+                chunks = chunk_turn(turn) if should_embed(turn) else []
+                # 파서 버전이 올라 턴이 짧아졌으면 뒤쪽 청크가 옛 내용으로 남는다 → 치운다.
+                # 임베딩 여부와 따로 판단해야 한다: 짧아져서 임베딩 기준 아래로 내려간 턴은 청크가
+                # 0개가 맞는데, 이 정리가 should_embed 안에 있으면 옛 청크가 통째로 남아 검색에 뜬다.
+                stale = db.trim_chunks(turn.id, len(chunks))
+                if stale:
+                    vi.remove(stale)
+                before = db.chunk_state(turn.id) if chunks else {}
+                for c in chunks:
+                    db.add_chunks([c])
+                    # 임베딩 입력(직전 질문 맥락 + 텍스트)이 그대로이고 벡터도 있으면 다시 임베딩하지 않는다.
+                    # 재색인은 턴 경계를 고치려고 로그를 처음부터 다시 읽는 것인데, 예전엔 안 바뀐 청크까지
+                    # 전부 다시 임베딩해(이 기기 1.6만 개, 약 1시간 20분) 쓸 수가 없었다. 텍스트만 보면 끼어든
+                    # 질문이 새로 갈라져 맥락만 바뀐 청크를 놓치므로 입력 해시로 비교한다. 해시가 없는 옛 청크는
+                    # 어떤 맥락으로 만들었는지 몰라 텍스트로만 비교한다(다음에 임베딩되면 해시가 생긴다).
+                    key = f"{c.turn_id}#{c.index}"
+                    inp = _contextual(ctx, c.text, turn.project)
+                    h = _input_hash(inp)
+                    old_text, old_hash = before.get(c.index, (None, None))
+                    same = old_hash == h if old_hash is not None else old_text == c.text
+                    if same and vi.has(key):
+                        if old_hash is None:
+                            # 옛 청크: 어떤 맥락으로 만든 벡터인지 모르니 지금 입력으로 만든 것으로 친다.
+                            # 안 찍으면 다음 재색인에서도 계속 텍스트로만 비교해 맥락 변화를 영영 못 잡는다.
+                            db.set_embed_hashes([(key, h)])
+                        continue
+                    buf_texts.append(inp)
+                    buf_keys.append(key)
+                    buf_hashes.append(h)
+                    if len(buf_texts) >= batch:
+                        flush_vectors()
+            if turn.question:
+                prev_q[turn.session_id] = turn.question
+            last_resume = resume
+            # idle 로 held 된 마지막 턴은 중간 체크포인트로 커서를 넘기지 않는다: 오직 최종
+            # checkpoint(hold 포함)에서만 커밋 → 프로세스가 kill 돼도 다음 pass가 그 턴을 다시 읽어 완성.
+            if new_hold is not None and i == last_i:
+                continue
+            since_ckpt += 1
+            # 한 구간이 턴 여럿을 낳았으면(같은 resume) 그 구간이 끝나기 전엔 커서를 넘기지 않는다 - 넘기면
+            # 아직 안 쓴 같은 구간의 뒤쪽 턴이, 그 사이에 죽었을 때 다시 읽히지 않고 영영 빠진다.
+            same_slice_follows = i < last_i and turns[i + 1][1] == resume
+            if since_ckpt >= checkpoint_turns and not same_slice_follows:
+                checkpoint(last_resume)   # 중간 체크포인트: hold 없음(확정된 경계까지만)
+                since_ckpt = 0
+        checkpoint(final_offset, new_hold)   # 구간 끝: idle 확정이면 열린 턴 시작을 hold 로 남김
+        since_ckpt = 0
 
+    # 레코드를 _SLICE_BYTES 씩, 턴이 시작하는 자리에서 끊어 처리한다. 예전엔 커서 뒤 전부를 리스트로
+    # 올린 뒤에야 처리해, 처음 색인·재색인에서 수백 MB 로그 하나가 통째로(파이썬 객체라 몇 배로)
+    # 메모리에 올라갔다. 앞 구간은 다음 턴이 이미 시작됐으니 완성된 턴들이다 - 보류 규칙은 마지막 구간에만.
+    seg: list = []   # (obj, start, end)
+    seg_bytes = 0
+    prev = read_from
+    for obj, end in adapter.read_records(path, read_from):
+        if seg_bytes >= _SLICE_BYTES and adapter.is_turn_start(obj):
+            process(seg, prev, None)
+            seg, seg_bytes = [], 0
+        seg.append((obj, prev, end))
+        seg_bytes += end - prev
+        prev = end
+    if not seg:
+        return count
+
+    last_up = None
+    for i, (obj, _s, _e) in enumerate(seg):
+        if adapter.is_turn_start(obj):
+            last_up = i
+    idle = (time.time() - mtime) > idle_secs
+    if last_up is None or idle:
+        proc, final_offset = seg, prev
+        # idle 로 마지막 턴을 확정하지만, 그 턴은 아직 안 끝났을 수 있다(긴 도구호출 중).
+        # 그 턴의 시작을 hold 로 남겨, 나중에 뒷내용이 붙으면 여기서부터 다시 읽어 완성한다.
+        new_hold = seg[last_up][1] if (idle and last_up is not None) else None
+    else:
+        # 마지막(진행중일 수 있는) 턴 보류: 그 프롬프트 시작을 최종 경계로.
+        proc, final_offset = seg[:last_up], seg[last_up][1]
+        new_hold = None
+    if proc:
+        process(proc, final_offset, new_hold)
+    return count
 
 def reconcile(db, vi, log_fn=print) -> int:
     """원문(turns)에 없는 고아 벡터를 인덱스·chunks·FTS에서 정리.
