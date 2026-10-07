@@ -320,7 +320,10 @@ def index_file(
         if new_hold is not None and i == last_i:
             continue
         since_ckpt += 1
-        if since_ckpt >= checkpoint_turns:
+        # 한 구간이 턴 여럿을 낳았으면(같은 resume) 그 구간이 끝나기 전엔 커서를 넘기지 않는다 - 넘기면
+        # 아직 안 쓴 같은 구간의 뒤쪽 턴이, 그 사이에 죽었을 때 다시 읽히지 않고 영영 빠진다.
+        same_slice_follows = i < last_i and turns[i + 1][1] == resume
+        if since_ckpt >= checkpoint_turns and not same_slice_follows:
             checkpoint(last_resume)   # 중간 체크포인트: hold 없음(확정된 경계까지만)
             since_ckpt = 0
     checkpoint(final_offset, new_hold)   # 최종: idle 확정이면 열린 턴 시작을 hold 로 남김

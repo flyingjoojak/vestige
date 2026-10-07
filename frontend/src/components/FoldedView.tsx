@@ -42,7 +42,8 @@ export function FoldedView({ onOpenTurn, onChanged }: {
     }
   }
   // 세션 전체 펼치기 - 접은 세션이든, 일부 접힌 세션의 '모두 펼치기'든 같은 요청이다.
-  const unfoldSession = (sid: string) => run(sid, () => unhideSession(sid), (d) => ({
+  // 서버는 하위 에이전트 세션까지 함께 편다 - 그 줄들도 이 화면에서 빠지도록 펼친 뒤 목록을 다시 받는다.
+  const unfoldSession = (sid: string) => run(sid, () => unhideSession(sid).then(load), (d) => ({
     ...d,
     sessions: d.sessions.filter((s) => s.session_id !== sid),
     chats: d.chats.filter((c) => c.session_id !== sid),
