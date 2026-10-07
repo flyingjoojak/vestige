@@ -573,9 +573,11 @@ class ArchiveDB:
         <projects>/<부모 id>/subagents/ 아래에 있다(_subagent_info 와 같은 기준).
         세션 단위 접기·펼치기는 늘 이 범위로 한다 - 부모만 접으면 하위 세션이 부모를 잃고 목록 맨 위로
         튀어나왔다(#258 은 목록에서만 막았고, 채팅·접힘·폴더 화면에서는 그대로였다)."""
+        sid = session_id.replace("!", "!!").replace("%", "!%").replace("_", "!_")   # LIKE 와일드카드 무력화
         return [r["id"] for r in self.conn.execute(
-            "SELECT id FROM turns WHERE session_id=? OR source_file LIKE ? OR source_file LIKE ?",
-            (session_id, f"%\\{session_id}\\subagents\\%", f"%/{session_id}/subagents/%"))]
+            "SELECT id FROM turns WHERE session_id=? "
+            "OR source_file LIKE ? ESCAPE '!' OR source_file LIKE ? ESCAPE '!'",
+            (session_id, f"%\\{sid}\\subagents\\%", f"%/{sid}/subagents/%"))]
 
     def hide_session(self, session_id: str) -> int:
         return self.hide_turns(self.session_turn_ids(session_id))

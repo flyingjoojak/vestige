@@ -2167,16 +2167,14 @@ def api_onboarding_choose(payload: dict):
         return {"ok": False, "error": "알 수 없는 모델", "code": "unknown_model"}
     C.write_config({"VESTIGE_EMBED_MODEL": model})
     C.EMBED_MODEL = model   # 파일만 바꾸면 이 프로세스는 다시 켤 때까지 옛 기본값(큰 모델)을 쓴다
+    # 확정 표시(먼저, 응답 전에) → get_embedder 가 이 모델로 로드. 커밋해야 남는다 - 예전엔 커밋 없이
+    # 연결을 버려 기록이 되돌려졌고, 사용자가 가벼운 모델을 골라도 큰 기본 모델이 올라갔다.
+    # 실패하면 성공이라고 답하지 않는다(500 → 화면이 오류를 보인다).
+    db = ArchiveDB()
+    db.set_meta("embed_model", model)
+    db.commit()
 
     def _load():
-        # 확정 표시(먼저) → get_embedder 가 이 모델로 로드. 커밋해야 남는다 - 예전엔 커밋 없이 연결을
-        # 버려 기록이 되돌려졌고, 사용자가 가벼운 모델을 골라도 큰 기본 모델이 올라갔다.
-        try:
-            db = ArchiveDB()
-            db.set_meta("embed_model", model)
-            db.commit()
-        except Exception as e:  # noqa: BLE001
-            logging.getLogger(__name__).error("온보딩 모델 기록 실패: %s", e)
         with contextlib.suppress(Exception):
             get_embedder()   # 다운로드/로드(가벼운 모델이면 빠름) + last_used 갱신
 

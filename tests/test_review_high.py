@@ -160,3 +160,12 @@ def test_checkpoint_does_not_split_a_slice_that_yields_several_turns(tmp_path, m
         pass
     offset, _, _ = db.get_cursor(str(f))
     assert offset < f.stat().st_size, "같은 구간의 둘째 턴을 쓰기 전에 커서가 구간 끝으로 넘어갔다"
+
+
+def test_session_scope_treats_like_wildcards_literally(tmp_path):
+    """세션 id 의 _ · % 가 LIKE 와일드카드로 먹어 남의 하위 세션까지 접지 않는다."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("axb", "k1"), source="claude-code", source_file="C:\p\C--x\axb\subagents\agent-1.jsonl")
+    db.upsert_turn(_turn("a_b", "p1"), source="claude-code", source_file="C:\p\C--x\a_b.jsonl")
+    db.commit()
+    assert db.session_turn_ids("a_b") == ["a_b:p1"]
