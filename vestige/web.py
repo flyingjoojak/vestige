@@ -318,6 +318,12 @@ async def _lifespan(app: FastAPI):
                 pass
     threading.Thread(target=_warm, daemon=True).start()
 
+    # 로그 폴더를 뒤에서 미리 훑는다(하위 세션 로그 수백 MB 를 걸러 수 초). 세션 목록·대기 건수는 이 훑기를
+    # 기다리지 않는다 - 예전엔 앱을 켠 뒤 첫 세션 목록이 이걸 기다리느라 44초 멈췄다.
+    with contextlib.suppress(Exception):
+        from .indexer import warm_walk_cache
+        warm_walk_cache()
+
     # 이전에 켜둔 기기 연결(임베디드 Syncthing)이 있으면 자동 재개.
     # 충돌 정리 워커는 기기 연결에 종속 — _st_start_bg가 준비되면 함께 시작한다(별도 토글 없음).
     with contextlib.suppress(Exception):

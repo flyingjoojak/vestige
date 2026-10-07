@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
@@ -63,13 +64,53 @@ _WALK_TTL = 8.0
 _walk_cache: dict = {"at": 0.0, "roots": None, "files": []}
 
 
+_walk_lock = threading.Lock()
+
+
+def _refresh_walk(roots: tuple) -> None:
+    try:
+        files = list(_iter_all(None))
+        _walk_cache.update(at=time.time(), roots=roots, files=files)
+    finally:
+        _walk_lock.release()
+
+
 def iter_all_cached() -> list[tuple[SourceAdapter, Path]]:
-    """활성 소스의 (어댑터, path) 목록을 _WALK_TTL 동안 재사용. 루트가 바뀌면(설정 변경) 바로 다시 훑는다."""
+    """활성 소스의 (어댑터, path) 목록을 _WALK_TTL 동안 재사용. 화면 요청이 훑기를 기다리지 않는다:
+    낡았으면 가진 목록을 바로 주고 뒤에서 다시 훑는다(처음엔 빈 목록). 앱을 켠 직후 첫 훑기는 하위 세션
+    로그 수백 MB 를 걸러야 해 수 초~수십 초 걸리는데, 그동안 세션 목록이 멈췄다(실측 44초).
+    루트가 바뀌면(설정 변경) 그 자리에서 다시 훑는다 - 다른 폴더의 목록을 줄 수는 없다."""
     roots = tuple((a.name, str(r)) for a, r in _source_pairs(None))
-    now = time.time()
-    if roots != _walk_cache["roots"] or now - _walk_cache["at"] >= _WALK_TTL:
-        _walk_cache.update(at=now, roots=roots, files=list(_iter_all(None)))
+    if roots != _walk_cache["roots"]:
+        # 처음(앱 시작 직후 warm_walk_cache 가 뒤에서 훑는 중)이면 기다리지 않고 빈 목록. 설정을 바꿔
+        # 루트가 달라진 경우는 기다린다(옛 폴더 목록을 줄 수는 없다).
+        if not _walk_lock.acquire(blocking=_walk_cache["roots"] is not None):
+            return []
+        try:
+            if roots != _walk_cache["roots"]:   # 기다리는 사이 다른 쪽이 이미 훑었으면 그걸 쓴다
+                _walk_cache.update(at=time.time(), roots=roots, files=list(_iter_all(None)))
+        finally:
+            _walk_lock.release()
+        return _walk_cache["files"]
+    if time.time() - _walk_cache["at"] >= _WALK_TTL and _walk_lock.acquire(blocking=False):
+        _start_refresh(roots)
     return _walk_cache["files"]
+
+
+def _start_refresh(roots: tuple) -> None:
+    """_walk_lock 을 쥔 채 부른다 - 뒤에서 훑고 풀어 준다. 스레드를 못 띄우면 여기서 푼다(안 그러면 영영 잠긴다)."""
+    try:
+        threading.Thread(target=_refresh_walk, args=(roots,), daemon=True).start()
+    except Exception:
+        _walk_lock.release()
+        raise
+
+
+def warm_walk_cache() -> None:
+    """앱 시작 때 뒤에서 한 번 훑어 둔다(첫 세션 목록부터 색인 전 세션이 보이게)."""
+    roots = tuple((a.name, str(r)) for a, r in _source_pairs(None))
+    if _walk_lock.acquire(blocking=False):
+        _start_refresh(roots)
 
 
 def has_new_data(db, projects_dir: str | Path | None = None) -> bool:
