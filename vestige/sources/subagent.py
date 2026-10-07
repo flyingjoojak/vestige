@@ -127,11 +127,17 @@ class SubagentAdapter:
                     return False
                 # 줄로 나누지 않고 파일을 매핑한 채 표지만 찾는다 - 하위 로그는 합쳐 수백 MB 다.
                 with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                    done_to = -1   # 이미 본 줄의 끝 - 한 줄에 표지가 둘이어도 한 번만 센다
                     for hit in _META_TRUE.finditer(m):
+                        if hit.start() < done_to:
+                            continue
                         start = m.rfind(b"\n", 0, hit.start()) + 1
                         end = m.find(b"\n", hit.end())
+                        if end == -1:
+                            break   # 개행 없이 끝난 마지막 조각은 아직 쓰이는 중 - 세지 않는다
+                        done_to = end
                         try:
-                            obj = json.loads(m[start:end if end != -1 else len(m)])
+                            obj = json.loads(m[start:end])
                         except ValueError:
                             continue
                         if _is_meta_user_prompt(obj):
