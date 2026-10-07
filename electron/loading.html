@@ -5,7 +5,7 @@
   body{display:grid;place-items:center;background:#0c0d10;color:#e9eaee;
     font-family:-apple-system,'Malgun Gothic','Segoe UI',sans-serif}
   .box{text-align:center}
-  .logo{width:52px;height:52px;margin:0 auto 16px}
+  .logo{display:block;width:56px;height:56px;margin:0 auto 16px}
   .msg{color:#8b919d;font-size:13px;margin-top:10px}
   .spin{width:22px;height:22px;margin:14px auto 0;border:2px solid #292b32;
     border-top-color:#34d399;border-radius:50%;animation:s .8s linear infinite}
@@ -13,21 +13,8 @@
   @media(prefers-reduced-motion:reduce){.spin{animation:none}}
 </style></head>
 <body><div class="box">
-  <svg class="logo" viewBox="0 0 32 32" aria-label="Vestige">
-    <rect width="32" height="32" rx="7" fill="#0b0d11"/>
-    <g stroke="#34d399" stroke-width="1" stroke-opacity="0.5" stroke-linecap="round">
-      <line x1="16" y1="7.5" x2="9.1" y2="14.6"/><line x1="16" y1="7.5" x2="22.9" y2="15"/>
-      <line x1="9.1" y1="14.6" x2="16" y2="18.7"/><line x1="22.9" y1="15" x2="16" y2="18.7"/>
-      <line x1="16" y1="18.7" x2="12" y2="24.8"/><line x1="16" y1="18.7" x2="21.3" y2="24.3"/>
-      <line x1="12" y1="24.8" x2="21.3" y2="24.3"/>
-    </g>
-    <g fill="#34d399">
-      <circle cx="9.1" cy="14.6" r="1.7"/><circle cx="22.9" cy="15" r="1.7"/>
-      <circle cx="16" cy="18.7" r="1.5"/><circle cx="12" cy="24.8" r="1.8"/>
-      <circle cx="21.3" cy="24.3" r="1.4"/>
-    </g>
-    <circle cx="16" cy="7.5" r="2.4" fill="#6ee7b7"/>
-  </svg>
+  <!-- 앱 아이콘 그대로(같은 폴더에 함께 패키징된다). 예전 별자리 마크가 여기만 남아 있었다. -->
+  <img class="logo" src="icon.png" alt="Vestige">
   <div style="font-weight:600">Vestige</div>
   <div class="spin"></div>
   <div class="msg">엔진 준비 중… (첫 실행은 임베딩 모델 다운로드로 시간이 걸릴 수 있어요)</div>
