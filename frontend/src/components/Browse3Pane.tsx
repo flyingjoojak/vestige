@@ -12,6 +12,7 @@ import { getGraph3D, getSession, hideSession, listSessions, resumeSession, resto
 import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
+import { focusKeyAfterRender } from "@/lib/focus"
 import { fmtTime } from "@/lib/format"
 import type { Hit, SessionDetail, SessionRow } from "@/lib/types"
 
@@ -328,6 +329,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     const set = new Set(ids)
     const flip = (v: boolean) => setGroups((gs) => gs?.map((g) => (set.has(g.id) ? { ...g, folded: v } : g)) ?? gs)
     flip(folded)                                          // 낙관적 반영
+    focusKeyAfterRender(folded ? `undo-${id}` : `fold-${id}`)   // 누른 버튼이 사라진다 - 바뀐 버튼으로
     setJustFolded((prev) => { const n = new Map(prev); if (folded) n.set(id, ids); else n.delete(id); return n })
     try {
       // 서버는 세션 하나만 받으면 그 하위 에이전트 세션까지 함께 접고 편다(어느 화면에서 접든 같게).
@@ -407,7 +409,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         )}
         {kind === "sessions" && g.folded && justFolded.has(g.id) && (
           // 방금 접은 행: 되돌리기는 항상 보인다(마우스를 올려야 보이면 잘못 누른 걸 못 찾는다).
-          <button type="button" onClick={() => setSessionFolded(g.id, false)}
+          <button type="button" onClick={() => setSessionFolded(g.id, false)} data-focus={`undo-${g.id}`}
             className="relative z-10 inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
             <Undo2 aria-hidden className="size-3" />{t("browse.undoFold")}
           </button>
@@ -416,7 +418,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ sessionId: g.id }} />
             {!g.folded && (
-              <button type="button" onClick={() => setSessionFolded(g.id, true)}
+              <button type="button" onClick={() => setSessionFolded(g.id, true)} data-focus={`fold-${g.id}`}
                 title={t("browse.foldSessionHint")} aria-label={t("chat.foldSession")}
                 className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
                 <ChevronsDownUp className="size-3.5" />
@@ -642,7 +644,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
                 <div className="line-clamp-2 text-[13px] font-medium leading-snug">{it.h || t("browse.untitled")}</div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
                   <span>{t("browse.sessionId", { id: it.s.slice(0, 8) })}</span>
-                  {it.q && <span className="pointer-events-none rounded bg-amber-500/15 px-1 text-[9.5px] font-medium text-amber-700 dark:text-amber-400">{t("chat.queued")}</span>}
+                  {it.q && <span className="pointer-events-none rounded bg-amber-500/15 px-1 text-[9.5px] font-medium text-amber-800 dark:text-amber-400">{t("chat.queued")}</span>}
                 </div>
               </button>
             ))

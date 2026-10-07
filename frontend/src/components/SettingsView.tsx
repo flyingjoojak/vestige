@@ -462,7 +462,7 @@ function SyncStateLine({ sync, stalled = false }: { sync?: SyncthingSync | null;
       // 이 기기는 최신이지만 상대가 연결 안 돼 있어 '양쪽 최신'은 확인 불가.
       dot = "bg-muted-foreground/40"; text = <>{t("sync.thisLatest")} · <span className="text-muted-foreground">{t("sync.peerOffline")}</span></>
     } else {
-      dot = "bg-emerald-500"; text = <span className="text-emerald-600 dark:text-emerald-400">{t("sync.bothLatest")}</span>
+      dot = "bg-emerald-500"; text = <span className="text-emerald-700 dark:text-emerald-400">{t("sync.bothLatest")}</span>
     }
   }
   return (
@@ -870,7 +870,7 @@ export function SettingsView() {
                   })}
                   {srcErr && <div className="text-[11px] text-destructive">{srcErr}</div>}
                   {(cfg?.sources ?? []).length > 0 && (cfg?.sources ?? []).every((x) => !x.exists || x.disabled) && (
-                    <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
                       <AlertTriangle className="size-3.5 shrink-0" />{t("settings.allSourcesOff")}
                     </div>
                   )}

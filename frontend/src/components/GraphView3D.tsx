@@ -437,7 +437,7 @@ export function GraphView3D({ onOpenTurn }: { onOpenTurn: OpenTurn }) {
   useEffect(() => { if (selCluster != null) listScrollRef.current?.scrollTo({ top: 0 }) }, [selCluster])
   useEffect(() => {
     if (selSession == null) return
-    if (clickedRef.current) clickedRef.current.scrollIntoView({ behavior: "smooth", block: "center" })
+    if (clickedRef.current) clickedRef.current.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" as ScrollBehavior : "smooth", block: "center" })
     else listScrollRef.current?.scrollTo({ top: 0 })
   }, [selSession, clickedTurn])
 

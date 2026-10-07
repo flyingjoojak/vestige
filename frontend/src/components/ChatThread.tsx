@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, Loader2 } from "lucide-react"
 import { getSession, getSessionTail, hideSession as apiHideSession, hideTurn, unhideSession, unhideTurn } from "@/lib/api"
 import { mergeTail } from "@/lib/liveTail"
+import { focusKeyAfterRender } from "@/lib/focus"
 import { AddToFolder } from "./AddToFolder"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
@@ -26,7 +27,7 @@ function FoldedTurn({ t, i, highlight, onUnhide }: {
       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{tr("chat.folded")}</span>
       {highlight && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{tr("chat.selected")}</span>}
       <span className="min-w-0 flex-1 truncate" title={headline}>{headline}</span>
-      <button type="button" onClick={() => onUnhide(t.id)}
+      <button type="button" onClick={() => onUnhide(t.id)} data-focus={`unfold-${t.id}`}
         className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
         <ChevronsUpDown className="size-3" />{tr("chat.unfold")}
       </button>
@@ -50,7 +51,7 @@ const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i
         {highlight && <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{tr("chat.selected")}</span>}
         {/* 앞 답변이 끝나기 전에 끼어든 질문(#246). 답변이 중간에 갈리는 이유를 읽는 쪽이 알 수 있게. */}
         {t.queued && <span title={tr("chat.queuedHint")}
-          className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">{tr("chat.queued")}</span>}
+          className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-400">{tr("chat.queued")}</span>}
         {/* 로그에서 바로 읽은 턴(#249). 아직 DB 에 없어 검색·지도에 안 나오고 접기·폴더 담기도 안 된다. */}
         {t.live && <span title={tr("chat.liveHint")}
           className="shrink-0 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-400">{tr("chat.live")}</span>}
@@ -62,7 +63,7 @@ const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i
         {!t.live && (
           <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ turnId: t.id }} />
-            <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")}
+            <button type="button" onClick={() => onHide(t.id)} title={tr("chat.foldTurn")} aria-label={tr("chat.foldTurn")} data-focus={`fold-${t.id}`}
               className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
               <ChevronsDownUp className="size-3.5" />
             </button>
@@ -202,12 +203,15 @@ export function ChatThread(
   // 끝까지 보고 있었으면 새로 붙은 턴까지 렌더 창을 넓힌다. 중간을 보고 있으면 건드리지 않는다.
   const prevLen = useRef(0)
   const turnCount = data?.turns.length ?? 0
+  // 실시간으로 붙은 대화를 스크린리더에도 알린다(화면에서는 말풍선이 늘어나는 것만 보인다).
+  const [announce, setAnnounce] = useState("")
   useEffect(() => {
     const before = prevLen.current
     prevLen.current = turnCount
     if (before === 0) return   // 첫 로드는 windowFor 가 이미 정했다
+    if (turnCount > before) setAnnounce(t("chat.newTurns", { count: turnCount - before }))
     setRange((r) => (r.e >= before && turnCount > r.e ? { ...r, e: turnCount } : r))
-  }, [turnCount])
+  }, [turnCount, t])
 
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
@@ -216,6 +220,7 @@ export function ChatThread(
   async function foldTurn(id: string, folded: boolean) {
     const prev = folded   // 실패 시 되돌릴 값
     setFolded(new Set([id]), folded)   // 낙관적 반영(클릭 즉시 접힘/펼침)
+    focusKeyAfterRender(folded ? `unfold-${id}` : `fold-${id}`)   // 누른 버튼이 사라진다 - 바뀐 버튼으로
     try {
       await (folded ? hideTurn(id) : unhideTurn(id))
     } catch (e) {
@@ -237,6 +242,7 @@ export function ChatThread(
     // 색인 전 턴(#249)은 DB 에 없어 서버가 못 접는다 — 화면에서만 접혔다가 다음 주기에 다시 펼쳐진다.
     const ids = new Set((data?.turns ?? []).filter((x) => !x.live).map((x) => x.id))
     setFolded(ids, true)
+    focusKeyAfterRender("session-unfold")
     try {
       await apiHideSession(session)
     } catch (e) {
@@ -250,6 +256,7 @@ export function ChatThread(
   async function unfoldWholeSession() {
     const ids = new Set((data?.turns ?? []).map((x) => x.id))
     setFolded(ids, false)
+    focusKeyAfterRender("session-fold")
     try {
       await unhideSession(session)
     } catch (e) {
@@ -279,17 +286,18 @@ export function ChatThread(
         )}
         {data && anyIndexed && (
           allFolded
-            ? <button type="button" onClick={unfoldWholeSession} title={t("chat.unfoldAll")}
+            ? <button type="button" onClick={unfoldWholeSession} title={t("chat.unfoldAll")} data-focus="session-unfold"
                 className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
                 <ChevronsUpDown className="size-3.5" />{t("chat.unfoldAll")}
               </button>
-            : <button type="button" onClick={foldWholeSession} title={t("chat.foldSession")}
+            : <button type="button" onClick={foldWholeSession} title={t("chat.foldSession")} data-focus="session-fold"
                 className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
                 <ChevronsDownUp className="size-3.5" />{t("chat.foldSession")}
               </button>
         )}
       </div>
-      {hideErr && <div className="shrink-0 px-5 pt-2 text-[11px] text-destructive">{hideErr}</div>}
+      <div role="status" aria-live="polite" className="sr-only">{announce}</div>
+      {hideErr && <div role="alert" className="shrink-0 px-5 pt-2 text-[11px] text-destructive">{hideErr}</div>}
       {/* 색인이 크게 밀려 꼬리를 안 읽었다(#249). 조용히 빠뜨리면 대화가 사라진 것처럼 보인다. */}
       {(data?.live_skipped ?? 0) > 0 && (
         <div role="status" className="shrink-0 px-5 pt-2 text-[11px] text-muted-foreground">
