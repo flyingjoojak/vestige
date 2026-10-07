@@ -372,3 +372,51 @@ def test_legacy_chunks_get_a_hash_so_later_context_changes_are_caught(tmp_path):
     index_file(f, db, vi, again, idle_secs=0)
     assert again.seen == []   # 텍스트가 같으니 다시 임베딩은 안 하고
     assert db.conn.execute("SELECT COUNT(*) c FROM chunks WHERE embed_hash IS NULL").fetchone()["c"] == 0   # 해시만 찍는다
+
+
+def _snapshot(db, path):
+    turns = db.conn.execute("SELECT id, question, answer, actions, queued FROM turns ORDER BY id").fetchall()
+    chunks = db.conn.execute("SELECT chunk_key, text FROM chunks ORDER BY chunk_key").fetchall()
+    return [tuple(r) for r in turns], [tuple(r) for r in chunks], db.get_cursor(str(path))[0], db.get_hold(str(path))
+
+
+def test_slicing_a_big_log_gives_the_same_result(tmp_path, monkeypatch):
+    """로그를 구간으로 끊어 처리해도(메모리에 통째로 안 올림) 결과가 한 번에 처리한 것과 같다 -
+    진행 중 마지막 턴 보류(idle 아님)와 idle 확정(hold) 둘 다."""
+    import vestige.indexer as I
+    whole = I._SLICE_BYTES
+    for idle_secs in (10**9, 0):
+        results = []
+        for slice_bytes in (whole, 1):   # 1 = 턴이 시작할 때마다 끊는다
+            monkeypatch.setattr(I, "_SLICE_BYTES", slice_bytes)
+            d = tmp_path / f"{idle_secs}-{slice_bytes}"
+            d.mkdir()
+            f = d / "s1.jsonl"
+            _write_jsonl(f, 12)
+            db = ArchiveDB(d / "a.db")
+            index_file(f, db, VectorIndex(d / "v.npy", d / "ids.json"), FakeEmbedder(),
+                       idle_secs=idle_secs, checkpoint_turns=5)
+            results.append(_snapshot(db, f))
+        assert results[0] == results[1], idle_secs
+        assert len(results[0][0]) == (12 if idle_secs == 0 else 11)   # idle 아니면 마지막 턴 보류
+
+
+def test_idle_is_judged_on_a_fresh_mtime_after_long_slices(tmp_path, monkeypatch):
+    """앞 구간 처리가 오래 걸리는 동안 파일이 쓰였으면, 마지막 턴을 끝난 것으로 확정하지 않는다."""
+    import os
+    import vestige.indexer as I
+    monkeypatch.setattr(I, "_SLICE_BYTES", 1)
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 4)
+    old = os.path.getmtime(f) - 3600
+    os.utime(f, (old, old))   # 시작할 땐 한 시간 조용했던 파일
+
+    class TouchingEmbedder(FakeEmbedder):
+        def embed_passages(self, texts):
+            os.utime(f, None)   # 처리하는 사이 누가 이 로그에 쓴다
+            return super().embed_passages(texts)
+
+    db = ArchiveDB(tmp_path / "a.db")
+    index_file(f, db, VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json"), TouchingEmbedder(), idle_secs=60)
+    assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 3   # 마지막 턴은 보류
+    assert db.get_hold(str(f)) is None
