@@ -145,6 +145,5 @@ def test_gate_ignores_an_unterminated_last_record(tmp_path):
         f.write(_json.dumps(_user("세 번째 - 아직 쓰이는 중", meta=True, wrap=True)))   # 개행 없음
     assert S.SubagentAdapter._scan(p) is False
     with open(p, "a", encoding="utf-8") as f:
-        f.write("
-")   # 줄이 끝나면 센다
+        f.write("\n")   # 줄이 끝나면 센다
     assert S.SubagentAdapter._scan(p) is True
