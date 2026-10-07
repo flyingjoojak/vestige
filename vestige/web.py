@@ -88,6 +88,9 @@ def _maybe_unload_embedder() -> None:
 _FULL_SWEEP_SECS = 300   # realtime 모드에서 peer 병합·자가복구 전체 스윕 최소 간격(초)
 _QUICK_HEAVY_MIN_SECS = 60   # realtime 모드에서 무거운 색인 경로(벡터 로드+풀스캔) 최소 간격(초)
 _last_full_sweep = [0.0]
+_EXPORT_MIN_SECS = 300   # 아카이브 내보내기 최소 간격(초) - 매번 전체를 다시 쓴다
+_export_due = [False]    # 내보낼 변경이 쌓여 있다
+_last_export = [0.0]
 _last_heavy_run = [0.0]
 
 
@@ -173,10 +176,20 @@ def _run_incremental(quick: bool = False) -> bool:
                 progress_fn=lambda d, t: _autoindex_state.update(done_chunks=d, total_chunks=t),
             )
 
-        # 이 기기 아카이브를 공유 폴더로 export(다른 기기가 가져가게). 변경 있었을 때만.
+        # 이 기기 아카이브를 공유 폴더로 export(다른 기기가 가져가게). 변경 있었을 때만, 그리고
+        # _EXPORT_MIN_SECS 에 한 번만 - 매번 아카이브 전체를 다시 쓴다(실측 턴 4.9천에 약 1초). 실시간
+        # 모드는 60초마다 돌아 그만큼 반복됐다. 미룬 export 는 다음 회차(늦어도 전체 스윕 주기)에 나간다.
         if total or filled:
-            with contextlib.suppress(Exception):
+            _export_due[0] = True
+        if _export_due[0] and _time.time() - _last_export[0] >= _EXPORT_MIN_SECS:
+            try:
                 export_archive(db, C.PROJECTS_DIR, device_id(db))
+                _export_due[0] = False
+                _last_export[0] = _time.time()
+            except Exception as ex:  # noqa: BLE001
+                # 예전엔 조용히 삼켰다 - 가져오기 실패는 상태바에 떴는데 내보내기 실패는 안 떠서,
+                # 이 기기 대화가 다른 기기로 안 넘어가도 알 수 없었다.
+                _autoindex_state.setdefault("sync_errors", []).append(f"ERROR 아카이브 내보내기 실패: {ex}")
 
         _last_full_sweep[0] = _time.time()   # 전체 스윕(색인 포함) 성공 완료
         done_msg = f"최근 완료(+{total}턴" + (f", 복구 {filled}청크)" if filled else ")")
@@ -639,7 +652,7 @@ def api_session(id: str = Query(...), limit: int = 0):
         })
     info = db.session_source(id)
     if info is None:
-        info = _unindexed_source(id)   # 색인 전 세션: 원문 전체가 '꼬리'다(커서가 없어 0부터 읽는다)
+        info = _unindexed_source(id, db)   # 색인 전 세션: 원문 전체가 '꼬리'다(커서가 없어 0부터 읽는다)
     source = info[0] if info else "claude-code"
     stored = info[1] if info else None
     project = (info[2] if info else "") or ""
@@ -680,7 +693,7 @@ def api_session(id: str = Query(...), limit: int = 0):
 def api_session_tail(id: str = Query(...)):
     """활동 중인 세션의 색인 전 꼬리만. 몇 초마다 불리므로 세션 전체(수 MB)를 다시 보내지 않는다."""
     db = ArchiveDB()
-    info = db.session_source(id) or _unindexed_source(id)
+    info = db.session_source(id) or _unindexed_source(id, db)
     if info is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
     source, stored = info[0], info[1]
@@ -735,7 +748,10 @@ def api_hide(payload: dict):
             raise HTTPException(status_code=404, detail={"code": "turn_not_found", "msg": "턴을 찾을 수 없음"})
         n = db.hide_turns([turn_id])
     elif session_id:
-        n = db.hide_session(session_id)
+        n = db.hide_session(session_id)   # 하위 에이전트 세션까지 함께
+        if n == 0 and db.session_source(session_id) is None:
+            # 예전엔 없는(또는 색인 전) 세션도 {"ok": true, "hidden": 0} 이라 화면이 성공으로 알았다
+            raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
     else:
         raise HTTPException(status_code=400, detail={"code": "missing_target", "msg": "turn_id 또는 session_id 필요"})
     _graph3d_invalidate()   # 지도 캐시가 숨긴 턴을 계속 보여주지 않도록 즉시 폐기
@@ -931,7 +947,9 @@ def api_session_title(payload: dict):
     if not sid or not _SID_RE.fullmatch(sid):
         raise HTTPException(status_code=400, detail={"code": "invalid_session_id", "msg": "잘못된 세션 id"})
     db = ArchiveDB()
-    if db.conn.execute("SELECT 1 FROM turns WHERE session_id=? LIMIT 1", (sid,)).fetchone() is None:
+    # 제목은 별도 테이블이라 색인 전 세션에도 붙일 수 있다(색인되면 그대로 이어진다)
+    if (db.conn.execute("SELECT 1 FROM turns WHERE session_id=? LIMIT 1", (sid,)).fetchone() is None
+            and _unindexed_source(sid, db) is None):
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
     db.set_session_title(sid, str((payload or {}).get("title", "")).strip() or None)
     return {"ok": True}
@@ -982,6 +1000,9 @@ def api_sessions(limit: int = 500):
     try:
         known = {r["session"] for r in out}
         extra = [r for r in _unindexed_sessions(db) if r["session"] not in known]
+        for r in extra:   # 색인 전에 지은 제목도 보여준다
+            if titles.get(r["session"]):
+                r["headline"] = r["custom_title"] = titles[r["session"]]
     except Exception as e:  # noqa: BLE001 — 덤이다. 실패해도 색인된 세션 목록은 그대로
         logging.getLogger(__name__).warning("색인 전 세션 조회 실패: %s", e)
         extra = []
@@ -1055,12 +1076,19 @@ def _unindexed_sessions(db: ArchiveDB) -> list[dict]:
     return out
 
 
-def _unindexed_source(sid: str) -> tuple[str, str, str] | None:
-    """색인 전 세션의 (출처, 원문 경로, 프로젝트). 목록을 한 번 불렀어야 캐시에 있다(화면은 목록에서 연다)."""
-    for _key, row in _unindexed_cache.values():
-        if row and row["session"] == sid:
-            return row["source"], row["_path"], row["_project"]
-    return None
+def _unindexed_source(sid: str, db: ArchiveDB | None = None) -> tuple[str, str, str] | None:
+    """색인 전 세션의 (출처, 원문 경로, 프로젝트). 캐시에 없으면(백엔드를 다시 켠 직후 등) 한 번 훑어
+    채운다 - 안 그러면 열어 둔 색인 전 세션이 '0턴'으로 굳었다."""
+    def find():
+        for _key, row in list(_unindexed_cache.values()):
+            if row and row["session"] == sid:
+                return row["source"], row["_path"], row["_project"]
+        return None
+    hit = find()
+    if hit is None and db is not None and _SID_RE.fullmatch(sid):
+        _unindexed_sessions(db)
+        hit = find()
+    return hit
 
 
 # 세션 id 화이트리스트. 선두 '-' 금지 → 재개 CLI(claude/codex)로의 인자(플래그) 주입 차단.
@@ -1219,7 +1247,7 @@ def api_resume(session: str = Query(...), force: bool = False):
     if not _SID_RE.fullmatch(sid):
         raise HTTPException(status_code=400, detail={"code": "invalid_session_id", "msg": "잘못된 세션 id"})
     db = ArchiveDB()
-    info = db.session_source(sid)
+    info = db.session_source(sid) or _unindexed_source(sid, db)   # 색인 전 새 세션도 재개된다
     if info is None:
         raise HTTPException(status_code=404, detail={"code": "session_not_found", "msg": "세션을 찾을 수 없음"})
     source, stored, project = info
@@ -1367,7 +1395,7 @@ def _sync_loop() -> None:
     st = _sync
     while st["stop"] is not None and not st["stop"].is_set():
         try:
-            res = session_sync.sync_tick()          # 충돌 해소만(색인 없음)
+            res = session_sync.sync_tick(min_scan_secs=60)   # 충돌 해소만(색인 없음), 폴더 훑기는 1분에 한 번
             st["resolved_total"] += len(res.outcomes)
             st["last_error"] = None
         except Exception as ex:                     # 한 번의 오류로 스레드가 죽지 않게
@@ -1466,11 +1494,15 @@ def _st_start_bg(persist: bool = True) -> None:
                 # rename(chatmem→vestige) 잔재 폴더 정리 — 같은 경로 중복 폴더가 있으면 동기화가
                 # 0%에서 막히므로, REST 준비된 직후 새 폴더로 이관 후 옛 폴더 제거(자가복구·신규는 no-op).
                 from . import config as C
-                with contextlib.suppress(Exception):
-                    inst.migrate_legacy_folder(C.PROJECTS_DIR)
-                # 기존 페어에도 codex 원본 폴더를 자가복구로 추가(#153). 페어링 전이면 no-op.
-                with contextlib.suppress(Exception):
-                    inst.ensure_codex_folder(C.CODEX_SESSIONS_DIR)
+                # 실패해도 기기 연결은 계속하되 흔적은 남긴다 - 예전엔 조용히 삼켜, Codex 세션만 동기화가
+                # 안 되는 이유를 알 수 없었다. 기존 페어에도 codex 원본 폴더를 자가복구로 추가(#153).
+                for fix in (lambda: inst.migrate_legacy_folder(C.PROJECTS_DIR),
+                            lambda: inst.ensure_codex_folder(C.CODEX_SESSIONS_DIR)):
+                    try:
+                        fix()
+                    except Exception as ex:  # noqa: BLE001
+                        logging.getLogger(__name__).warning("동기화 폴더 자가복구 실패: %s", ex)
+                        _st_state["last_error"] = f"동기화 폴더 정리 실패: {ex}"
                 with _st_lock:
                     _st_state.update(running=True, starting=False, phase="실행 중", my_id=inst.device_id())
                 _sync_start(persist=False)   # 기기 연결이 켜지면 충돌 정리 워커도 자동 시작(별도 토글 없음)
@@ -2138,10 +2170,15 @@ def api_onboarding_choose(payload: dict):
     if model not in _EMBED_ALLOW:
         return {"ok": False, "error": "알 수 없는 모델", "code": "unknown_model"}
     C.write_config({"VESTIGE_EMBED_MODEL": model})
+    C.EMBED_MODEL = model   # 파일만 바꾸면 이 프로세스는 다시 켤 때까지 옛 기본값(큰 모델)을 쓴다
+    # 확정 표시(먼저, 응답 전에) → get_embedder 가 이 모델로 로드. 커밋해야 남는다 - 예전엔 커밋 없이
+    # 연결을 버려 기록이 되돌려졌고, 사용자가 가벼운 모델을 골라도 큰 기본 모델이 올라갔다.
+    # 실패하면 성공이라고 답하지 않는다(500 → 화면이 오류를 보인다).
+    db = ArchiveDB()
+    db.set_meta("embed_model", model)
+    db.commit()
 
     def _load():
-        with contextlib.suppress(Exception):
-            ArchiveDB().set_meta("embed_model", model)   # 확정 표시(먼저) → get_embedder가 이 모델로 로드
         with contextlib.suppress(Exception):
             get_embedder()   # 다운로드/로드(가벼운 모델이면 빠름) + last_used 갱신
 
@@ -2244,6 +2281,7 @@ def api_reindex(payload: dict):
                     progress_fn=lambda d, t: _reindex_state.update(done_files=d, total_files=t),
                     chunk_progress_fn=lambda d: _reindex_state.__setitem__("done_chunks", d))
             db.set_meta("embed_model", model)
+            db.commit()   # 커밋 없이 끝나면 연결이 닫힐 때 되돌려진다
             _state["embedder"] = emb  # 실행 중 검색도 새 모델로
             _embedder_last_used[0] = time.monotonic()  # 유휴 언로드 타이머 리셋
             _state["model_mismatch"] = None  # 재색인으로 해소 → 불일치 배너 즉시 내림
@@ -2672,17 +2710,15 @@ function card(h){
   const cos=h.cosine!=null?`cos ${h.cosine.toFixed(3)}`:'키워드';
   const meta=`<div class="meta">${src}<span>${cos}</span>· ${esc(fmtTime(h.timestamp))} · 세션 ${esc(h.session)}</div>`;
   const tags=(h.tags||[]).length?`<div class="tags">${h.tags.map(t=>`<span class="tag">#${esc(t)}</span>`).join('')}</div>`:'';
-  const acts=(h.actions||[]).length?`<div class="toggle" onclick="tog(this)">▸ 행동(bash 등) ${h.actions.length}개</div><div class="fold actions">${esc(h.actions.join('\n'))}</div>`:'';
-  const th=(h.thread||[]).map(x=>`<div class="titem"><div class="tq" onclick="tog(this)"><b>Q</b>${esc(x.question).slice(0,120)}</div><div class="fold ta">${md(x.answer)||'—'}</div></div>`).join('');
-  const thread=th?`<div class="toggle" onclick="tog(this)">▸ 스레드 맥락 ${h.thread.length}턴</div><div class="fold thread">${th}</div>`:'';
+  // 검색 응답엔 답변·행동·앞뒤 턴이 없다(#268) - 전체는 '이 세션 전체 작업 보기'로 연다.
+  const acts='', thread='';
   const sess=`<div class="toggle" onclick="openSession('${h.session_full}')">▸ 이 세션 전체 작업 보기 ↗</div>`;
   const rawFold=`<div class="toggle" onclick="tog(this)">▸ 원문 Q&amp;A</div>
-    <div class="fold raw"><p class="rq"><b>Q</b>${md(h.question)||'(질문 없음)'}</p><div class="ra"><b>A</b>${md(h.answer)||'—'}</div></div>`;
+    <div class="fold raw"><p class="rq"><b>Q</b>${md(h.question)||'(질문 없음)'}</p></div>`;
 
   let body;
   if(rawFirst){
     body=`<p class="headline">${esc(h.question)||'<span class="sub">(질문 없음)</span>'}</p>
-      <div class="a" onclick="this.classList.toggle('open')" style="margin-top:7px">${md(h.answer)||'—'}</div>
       ${h.summary?`<div class="enrich"><span class="mk">📝</span>${esc(h.summary)}</div>`:''}${tags}`;
   }else{
     const head=h.summary?`<span class="mk">📝</span>${esc(h.summary)}`:`${esc(h.question)||'<span class="sub">(요약 없음)</span>'}`;

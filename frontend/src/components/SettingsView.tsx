@@ -144,6 +144,9 @@ function McpSection() {
         setTargets((ts) => ts?.map((x) => (x.id === tgt.id ? { ...x, registered: willRegister } : x)) ?? ts)
         setNote(willRegister ? t("mcp.registeredRestart", { label: tgt.label }) : t("mcp.unregistered", { label: tgt.label }))
       }
+    } catch (e) {
+      // 등록·해제가 400/500 이면 api 가 예외로 올린다 - 여기서 안 받으면 아무 안내 없이 끝났다
+      setNote(`${tgt.label}: ${errText(t, e, "mcp.failed")}`); setSnip(tgt.id)
     } finally {
       setBusy(null)   // 스피너 즉시 종료(등록 subprocess만 끝나면 됨)
     }
@@ -462,7 +465,7 @@ function SyncStateLine({ sync, stalled = false }: { sync?: SyncthingSync | null;
       // 이 기기는 최신이지만 상대가 연결 안 돼 있어 '양쪽 최신'은 확인 불가.
       dot = "bg-muted-foreground/40"; text = <>{t("sync.thisLatest")} · <span className="text-muted-foreground">{t("sync.peerOffline")}</span></>
     } else {
-      dot = "bg-emerald-500"; text = <span className="text-emerald-600 dark:text-emerald-400">{t("sync.bothLatest")}</span>
+      dot = "bg-emerald-500"; text = <span className="text-emerald-700 dark:text-emerald-400">{t("sync.bothLatest")}</span>
     }
   }
   return (
@@ -680,7 +683,7 @@ export function SettingsView() {
       })
       setVerify({ ok: r.ok, msg: r.message }); return r.ok
     } catch (e) {
-      setVerify({ ok: false, msg: String(e) }); return false
+      setVerify({ ok: false, msg: errText(t, e, "settings.verifyFailed") }); return false
     } finally { setTesting(false) }
   }
 
@@ -870,7 +873,7 @@ export function SettingsView() {
                   })}
                   {srcErr && <div className="text-[11px] text-destructive">{srcErr}</div>}
                   {(cfg?.sources ?? []).length > 0 && (cfg?.sources ?? []).every((x) => !x.exists || x.disabled) && (
-                    <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
                       <AlertTriangle className="size-3.5 shrink-0" />{t("settings.allSourcesOff")}
                     </div>
                   )}

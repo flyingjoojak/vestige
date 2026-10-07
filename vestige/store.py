@@ -568,10 +568,19 @@ class ArchiveDB:
         self.conn.commit()
         return inserted
 
+    def session_turn_ids(self, session_id: str) -> list[str]:
+        """세션의 턴 + 그 세션이 띄운 하위 에이전트 세션의 턴. 하위 세션 로그는
+        <projects>/<부모 id>/subagents/ 아래에 있다(_subagent_info 와 같은 기준).
+        세션 단위 접기·펼치기는 늘 이 범위로 한다 - 부모만 접으면 하위 세션이 부모를 잃고 목록 맨 위로
+        튀어나왔다(#258 은 목록에서만 막았고, 채팅·접힘·폴더 화면에서는 그대로였다)."""
+        sid = session_id.replace("!", "!!").replace("%", "!%").replace("_", "!_")   # LIKE 와일드카드 무력화
+        return [r["id"] for r in self.conn.execute(
+            "SELECT id FROM turns WHERE session_id=? "
+            "OR source_file LIKE ? ESCAPE '!' OR source_file LIKE ? ESCAPE '!'",
+            (session_id, f"%\\{sid}\\subagents\\%", f"%/{sid}/subagents/%"))]
+
     def hide_session(self, session_id: str) -> int:
-        ids = [r["id"] for r in self.conn.execute(
-            "SELECT id FROM turns WHERE session_id=?", (session_id,))]
-        return self.hide_turns(ids)
+        return self.hide_turns(self.session_turn_ids(session_id))
 
     def unhide_turns(self, turn_ids: list[str]) -> None:
         if not turn_ids:
@@ -586,9 +595,7 @@ class ArchiveDB:
         self.conn.commit()
 
     def unhide_session(self, session_id: str) -> None:
-        ids = [r["id"] for r in self.conn.execute(
-            "SELECT id FROM turns WHERE session_id=?", (session_id,))]
-        self.unhide_turns(ids)
+        self.unhide_turns(self.session_turn_ids(session_id))
 
     def hidden_turn_ids(self) -> set[str]:
         """읽을 때 필터용 전체 숨김 turn id 집합(검색·지도 등에서 공유)."""
@@ -754,6 +761,15 @@ class ArchiveDB:
                ON CONFLICT(chunk_key) DO UPDATE SET text=excluded.text""",
             [(f"{c.turn_id}#{c.index}", c.turn_id, c.index, c.text) for c in chunks],
         )
+
+    def turn_ids_of_chunks(self, keys: list[str]) -> dict[str, str]:
+        """{chunk_key: turn_id} 를 500개씩 묶어 조회."""
+        out: dict[str, str] = {}
+        for i in range(0, len(keys), 500):
+            part = keys[i:i + 500]
+            out.update({r["chunk_key"]: r["turn_id"] for r in self.conn.execute(
+                f"SELECT chunk_key, turn_id FROM chunks WHERE chunk_key IN ({','.join('?' * len(part))})", part)})
+        return out
 
     def turn_id_of_chunk(self, chunk_key: str) -> str | None:
         row = self.conn.execute(

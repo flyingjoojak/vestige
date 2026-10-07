@@ -126,11 +126,15 @@ def _call_claude_cli(prompt: str, model: str, timeout: int = 240) -> str:
     if not bin_path:
         raise RuntimeError(
             "claude CLI 를 찾을 수 없습니다 — Claude Code 설치, 또는 VESTIGE_CLAUDE_BIN 로 경로 지정")
-    r = subprocess.run(
-        [bin_path, "-p", prompt, "--model", model],
-        capture_output=True, text=True, encoding="utf-8", timeout=timeout,
-        creationflags=_NO_WINDOW, env=_claude_env(bin_path),
-    )
+    # 프롬프트에는 대화 원문이 들어간다 - 동기화로 들어온 다른 기기 기록일 수도 있다. 거기 심어진
+    # 지시를 따르더라도 할 수 있는 게 없게: 빈 임시 폴더에서, 도구 없이(요약은 글만 쓰면 된다).
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="vestige-enrich-") as cwd:
+        r = subprocess.run(
+            [bin_path, "-p", prompt, "--model", model, "--tools", ""],
+            capture_output=True, text=True, encoding="utf-8", timeout=timeout,
+            creationflags=_NO_WINDOW, env=_claude_env(bin_path), cwd=cwd,
+        )
     if r.returncode != 0:
         raise RuntimeError(f"claude -p 실패(rc={r.returncode}): {(r.stderr or '')[:200]}")
     return (r.stdout or "").strip()
@@ -344,9 +348,15 @@ def enrich_all(db, backend: str | None = None, model: str | None = None,
     total = 0
     for i, sid in enumerate(sessions):
         try:
+            want = db.conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id=? AND summary IS NULL" if only_missing
+                else "SELECT COUNT(*) FROM turns WHERE session_id=?", (sid,)).fetchone()[0]
             n = enrich_session(sid, db, backend=backend, model=model, missing_only=only_missing)
             total += n
             log_fn(f"enriched {n} turns  session {sid[:8]}")
+            if want and n == 0:
+                # 모델이 형식에 안 맞게 답했거나 턴 id 를 잘못 베꼈다 - 예전엔 '완료'로만 보였다
+                log_fn(f"ERROR enrich {sid[:8]}: 요약을 하나도 받지 못했다({want}턴) - 다음 정제 때 다시 시도")
         except Exception as ex:  # 한 세션 실패가 전체를 막지 않도록
             log_fn(f"ERROR enrich {sid[:8]}: {ex}")
         if progress_fn:

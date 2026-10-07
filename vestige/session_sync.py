@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -135,17 +136,29 @@ class SyncTickResult:
     indexed: bool                     # 이번 틱에 색인을 돌렸는지
 
 
-def sync_tick(root: Path | None = None, *, index_fn: Callable[[], bool] | None = None) -> SyncTickResult:
+_last_scan: dict[str, float] = {}   # root -> 마지막 충돌 사본 훑기(monotonic)
+
+
+def sync_tick(root: Path | None = None, *, index_fn: Callable[[], bool] | None = None,
+              min_scan_secs: float = 0.0) -> SyncTickResult:
     """한 번의 점검: 충돌 해소 + (선택) 색인. 데몬/수동(--once) 공용, 단독 테스트 가능."""
     from . import config as C
 
     root = Path(root) if root is not None else C.PROJECTS_DIR
-    outcomes = resolve_all(root)
+    # 충돌 사본 찾기는 로그 폴더 전체를 훑는다(디스크 캐시가 식으면 수 초). 앱의 감시 루프는 10초마다
+    # 부르므로 min_scan_secs 에 한 번만 훑는다 - 충돌은 드물고, 늦어도 그만큼 뒤에 해소된다.
+    now = time.monotonic()
+    if now - _last_scan.get(str(root), -1e9) >= min_scan_secs:
+        outcomes = resolve_all(root)
+        _last_scan[str(root)] = now   # 성공한 뒤에만 - 실패하면 다음 틱에 바로 다시(오류도 그때 다시 드러난다)
+    else:
+        outcomes = []
     indexed = False
     if index_fn is not None:
         try:
             indexed = bool(index_fn())
-        except Exception:
+        except Exception as ex:  # noqa: BLE001
+            print(f"[sync] 색인 실패: {ex}", file=sys.stderr)   # 예전엔 아무 데도 안 남았다
             indexed = False
     return SyncTickResult(outcomes, indexed)
 

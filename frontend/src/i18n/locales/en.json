@@ -76,6 +76,7 @@
     "indexErrorTip": "See Settings > Indexing for details."
   },
   "settings": {
+    "verifyFailed": "Couldn't verify the connection.",
     "title": "Settings",
     "appearance": "Appearance",
     "theme": "Theme",
@@ -236,6 +237,7 @@
     "selected": "Selected",
     "queued": "Mid-turn",
     "queuedHint": "Sent while the previous answer was still in progress.",
+    "newTurns": "{{count}} new message(s) arrived",
     "live": "Not indexed",
     "liveHint": "Read straight from the log. Until indexing finishes it won't appear in search or the map, and can't be folded or added to a folder.",
     "liveSkipped": "Indexing is behind, so recent messages can't be shown yet ({{mb}} MB pending). They'll appear once indexing catches up.",
@@ -267,7 +269,7 @@
     "loadingFirst": "Loading… (this can take up to a minute the first time)",
     "loadError": "Couldn't load the map: {{err}}",
     "empty": "Nothing to show yet. Index your conversations first.",
-    "controlsHint": "Drag to rotate · scroll to zoom · click a point to open",
+    "controlsHint": "Drag to rotate · scroll to zoom · click a point to open · unclustered points open by mouse only (find them in Search or Sessions too)",
     "goToLabel": "Go to {{label}}",
     "goToCluster": "Go to the {{label}} cluster",
     "clearIsolation": "Clear selection",

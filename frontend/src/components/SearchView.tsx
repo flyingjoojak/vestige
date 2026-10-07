@@ -175,7 +175,7 @@ export function SearchView() {
           {state === "done" && (
             <div className="mt-2 text-xs text-muted-foreground tabular-nums">{t("search.resultsPrefix")}<b className="text-foreground">{hits.length}</b>{t("search.resultsSuffix")}</div>
           )}
-          {hideErr && <div className="mt-1 text-[10.5px] text-destructive">{hideErr}</div>}
+          {hideErr && <div role="alert" className="mt-1 text-[10.5px] text-destructive">{hideErr}</div>}
           {/* 스크린리더용 상태 안내(비시각 사용자에 검색 진행/결과 알림) */}
           <div className="sr-only" role="status" aria-live="polite">
             {state === "loading" ? t("search.srSearching") : state === "done" ? t("search.srResults", { n: hits.length }) : state === "error" ? t("search.srFailed") : ""}

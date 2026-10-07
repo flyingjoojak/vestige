@@ -354,6 +354,7 @@ export async function toggleSource(source: string, enabled: boolean): Promise<{ 
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, enabled }),
   })
+  if (!r.ok) return failure(r)   // 400 의 code(unknown_source 등)를 버리지 않게
   return r.json()
 }
 
@@ -426,6 +427,7 @@ export async function mcpRegister(target: string): Promise<{ ok: boolean; restar
   const r = await fetch(`/api/mcp/register`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target }),
   })
+  if (!r.ok) return failure(r)
   return r.json()
 }
 
@@ -433,6 +435,7 @@ export async function mcpUnregister(target: string): Promise<{ ok: boolean; erro
   const r = await fetch(`/api/mcp/unregister`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target }),
   })
+  if (!r.ok) return failure(r)
   return r.json()
 }
 

@@ -12,6 +12,7 @@ import { getGraph3D, getSession, hideSession, listSessions, resumeSession, resto
 import { filterTop, kidsToShow, nestSubagents } from "@/lib/subagents"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
+import { focusKeyAfterRender } from "@/lib/focus"
 import { fmtTime } from "@/lib/format"
 import type { Hit, SessionDetail, SessionRow } from "@/lib/types"
 
@@ -328,11 +329,15 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     const set = new Set(ids)
     const flip = (v: boolean) => setGroups((gs) => gs?.map((g) => (set.has(g.id) ? { ...g, folded: v } : g)) ?? gs)
     flip(folded)                                          // 낙관적 반영
+    focusKeyAfterRender(folded ? `undo-${id}` : `fold-${id}`)   // 누른 버튼이 사라진다 - 바뀐 버튼으로
     setJustFolded((prev) => { const n = new Map(prev); if (folded) n.set(id, ids); else n.delete(id); return n })
     try {
-      await Promise.all(ids.map((x) => (folded ? hideSession(x) : unhideSession(x))))
+      // 서버는 세션 하나만 받으면 그 하위 에이전트 세션까지 함께 접고 편다(어느 화면에서 접든 같게).
+      // 화면은 위에서 하위 줄까지 같이 뒤집어 두었다(색인 전 하위 줄 포함).
+      await (folded ? hideSession(id) : unhideSession(id))
     } catch (e) {
       flip(!folded)                                       // 서버가 거부하면 화면도 되돌린다
+      focusKeyAfterRender(folded ? `fold-${id}` : `undo-${id}`)   // 되돌린 버튼으로
       setFoldErr({ id, text: errText(t, e, "chat.foldFailed") })
     }
   }
@@ -351,7 +356,11 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   // 통째로 접은 세션은 목록에서 뺀다. 단, 지금 열려 있는 세션은 남긴다 - 접힘 화면에서 '세션 열기'로
   // 들어오면 그 세션이 선택된 채로 오는데, 목록에서 사라지면 어디를 보고 있는지 알 수 없다.
   const keptFolded = new Set([...justFolded.values()].flat())   // 방금 접은 것은 그 자리에 남긴다
-  const visibleGroups = groups ? groups.filter((g) => !g.folded || g.id === sel || keptFolded.has(g.id)) : null
+  const shown = (g: Group) => !g.folded || g.id === sel || keptFolded.has(g.id)
+  // 부모가 빠졌으면 그 하위 세션도 뺀다 - 아직 색인 전이라 접히지 않은 하위 줄이 부모를 잃고 맨 위로
+  // 튀어나오지 않게.
+  const goneParents = new Set((groups ?? []).filter((g) => !shown(g)).map((g) => g.id))
+  const visibleGroups = groups ? groups.filter((g) => shown(g) && !(g.parent && goneParents.has(g.parent))) : null
   const { top, kids } = nestSubagents(visibleGroups ?? [])
 
   // 그룹 목록 - 초기(가운데)는 큼직한 카드(hover 떠오름), 오른쪽 패널은 compact.
@@ -401,7 +410,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
         )}
         {kind === "sessions" && g.folded && justFolded.has(g.id) && (
           // 방금 접은 행: 되돌리기는 항상 보인다(마우스를 올려야 보이면 잘못 누른 걸 못 찾는다).
-          <button type="button" onClick={() => setSessionFolded(g.id, false)}
+          <button type="button" onClick={() => setSessionFolded(g.id, false)} data-focus={`undo-${g.id}`}
             className="relative z-10 inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
             <Undo2 aria-hidden className="size-3" />{t("browse.undoFold")}
           </button>
@@ -410,7 +419,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
           <span className="relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <AddToFolder target={{ sessionId: g.id }} />
             {!g.folded && (
-              <button type="button" onClick={() => setSessionFolded(g.id, true)}
+              <button type="button" onClick={() => setSessionFolded(g.id, true)} data-focus={`fold-${g.id}`}
                 title={t("browse.foldSessionHint")} aria-label={t("chat.foldSession")}
                 className="inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground">
                 <ChevronsDownUp className="size-3.5" />
@@ -636,7 +645,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
                 <div className="line-clamp-2 text-[13px] font-medium leading-snug">{it.h || t("browse.untitled")}</div>
                 <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-muted-foreground tabular-nums">
                   <span>{t("browse.sessionId", { id: it.s.slice(0, 8) })}</span>
-                  {it.q && <span className="pointer-events-none rounded bg-amber-500/15 px-1 text-[9.5px] font-medium text-amber-700 dark:text-amber-400">{t("chat.queued")}</span>}
+                  {it.q && <span className="pointer-events-none rounded bg-amber-500/15 px-1 text-[9.5px] font-medium text-amber-800 dark:text-amber-400">{t("chat.queued")}</span>}
                 </div>
               </button>
             ))
