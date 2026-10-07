@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsUpDown, ExternalLink, Loader2 } from "lucide-react"
 import { listHidden, unhideSession, unhideTurn } from "@/lib/api"
 import { errText } from "@/lib/errors"
+import { rememberNeighborRow } from "@/lib/focus"
 import { fmtTime } from "@/lib/format"
 import type { FoldedChats, FoldedGroups, FoldedSession } from "@/lib/types"
 
@@ -29,11 +30,15 @@ export function FoldedView({ onOpenTurn, onChanged }: {
   }, [t])
   useEffect(load, [load])
 
+  const headingRef = useRef<HTMLHeadingElement>(null)
   async function run(key: string, fn: () => Promise<unknown>, apply: (d: FoldedGroups) => FoldedGroups) {
+    // 줄은 요청이 끝난 뒤에 사라진다 - 누른 순간 이웃 줄(없으면 제목)을 잡아 두고, 사라진 뒤 그리로
+    const moveFocus = rememberNeighborRow(headingRef.current)
     setBusy(key)
     try {
       await fn()
       setData((d) => (d ? apply(d) : d))
+      moveFocus()
       onChanged?.()
     } catch (e) {
       setErr(errText(t, e, "folded.unfoldFailed"))
@@ -66,7 +71,7 @@ export function FoldedView({ onOpenTurn, onChanged }: {
   const chatCount = (data?.chats ?? []).reduce((n, c) => n + c.folded, 0)
   return (
     <div className="mx-auto max-w-3xl px-6 py-5">
-      <h2 className="text-lg font-semibold">{t("folded.title")}</h2>
+      <h2 ref={headingRef} tabIndex={-1} className="text-lg font-semibold outline-none">{t("folded.title")}</h2>
       <p className="mb-4 mt-1 text-[12.5px] text-muted-foreground">{t("folded.note")}</p>
 
       {err && (
@@ -125,7 +130,7 @@ function SessionRow({ s, busy, onOpen, onUnfold }: {
 }) {
   const { t } = useTranslation()
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+    <div data-row className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
       <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={s.headline}>{s.headline || t("folded.untitled")}</span>
       <span className="shrink-0 tabular-nums">{t("folded.turnCount", { count: s.total })} · {fmtTime(s.ended)}</span>
       {s.last_turn_id && (
@@ -145,7 +150,7 @@ function ChatGroup({ c, open, busy, onToggle, onOpenTurn, onUnfoldTurn, onUnfold
   const { t } = useTranslation()
   const listId = `folded-chats-${c.session_id}`
   return (
-    <div className="rounded-lg border border-dashed bg-muted/30 text-[11px] text-muted-foreground">
+    <div data-row className="rounded-lg border border-dashed bg-muted/30 text-[11px] text-muted-foreground">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={listId}
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left focus-visible:outline-2 focus-visible:outline-ring">
@@ -160,7 +165,7 @@ function ChatGroup({ c, open, busy, onToggle, onOpenTurn, onUnfoldTurn, onUnfold
       {open && (
         <ul id={listId} className="space-y-1 border-t border-dashed px-3 py-2">
           {c.turns.map((x) => (
-            <li key={x.turn_id} className="flex flex-wrap items-center gap-2">
+            <li key={x.turn_id} data-row className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground" title={x.headline}>{x.headline || t("folded.untitled")}</span>
               <span className="shrink-0 tabular-nums">{x.timestamp ? fmtTime(x.timestamp) : ""}</span>
               <button type="button" onClick={() => onOpenTurn(x.turn_id)} className={pill}><ExternalLink className="size-3" />{t("folded.openSession")}</button>

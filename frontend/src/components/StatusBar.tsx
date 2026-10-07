@@ -23,7 +23,7 @@ function indexLabel(
       : ix.total_files > 0 ? pct(ix.done_files, ix.total_files)
       : null
     const text = p != null ? t("statusbar.indexingPct", { pct: p }) : t("statusbar.indexing")
-    return { text, dot: "bg-sky-500", tone: "text-sky-600 dark:text-sky-400", spin: true }
+    return { text, dot: "bg-sky-500", tone: "text-sky-700 dark:text-sky-400", spin: true }
   }
   // 색인이 오류로 멈췄거나 일부 항목이 실패했다. 예전엔 여기서 오류를 안 보고 '대기 N건'/'최신 상태'를
   // 그대로 띄워, 색인이 죽어 있어도 초록 점이었다(오류는 설정 화면 구석에만 있었다).
@@ -36,8 +36,8 @@ function indexLabel(
     return { text: t("statusbar.indexPartial", { n: probs.length }), dot: "bg-destructive", tone: "text-destructive", spin: false,
       tip: [...probs.slice(0, 3), t("statusbar.indexErrorTip")].join("\n") }
   if (pending > 0)
-    return { text: t("statusbar.pendingNew", { n: pending }), dot: "bg-amber-500", tone: "text-amber-600 dark:text-amber-500", spin: false }
-  return { text: t("statusbar.upToDate"), dot: "bg-emerald-500", tone: "text-emerald-600 dark:text-emerald-400", spin: false }
+    return { text: t("statusbar.pendingNew", { n: pending }), dot: "bg-amber-500", tone: "text-amber-700 dark:text-amber-500", spin: false }
+  return { text: t("statusbar.upToDate"), dot: "bg-emerald-500", tone: "text-emerald-700 dark:text-emerald-400", spin: false }
 }
 
 function syncLabel(st: SyncthingStatus | null, t: TFunction, stalled: boolean): { text: string; dot: string; tone: string } {
@@ -46,12 +46,12 @@ function syncLabel(st: SyncthingStatus | null, t: TFunction, stalled: boolean): 
   const s = st.sync
   if (!s) return { text: t("statusbar.syncWaiting"), dot: "bg-muted-foreground/40", tone: g }
   if (s.state === "error") return { text: t("statusbar.syncError"), dot: "bg-destructive", tone: "text-destructive" }
-  if (s.state === "scanning") return { text: t("statusbar.syncScanning"), dot: "bg-amber-500", tone: "text-amber-600 dark:text-amber-500" }
+  if (s.state === "scanning") return { text: t("statusbar.syncScanning"), dot: "bg-amber-500", tone: "text-amber-700 dark:text-amber-500" }
   if (stalled) return { text: t("statusbar.syncStalled"), dot: "bg-destructive", tone: "text-destructive" }   // 오래 무진척(상대 미연결 등)
-  if (s.state === "syncing" || s.need_items > 0 || s.need_bytes > 0) return { text: t("statusbar.syncReceiving", { pct: s.completion }), dot: "bg-amber-500", tone: "text-amber-600 dark:text-amber-500" }
-  if (s.remote_complete != null && s.remote_complete < 100) return { text: t("statusbar.syncSending", { pct: s.remote_complete }), dot: "bg-amber-500", tone: "text-amber-600 dark:text-amber-500" }
+  if (s.state === "syncing" || s.need_items > 0 || s.need_bytes > 0) return { text: t("statusbar.syncReceiving", { pct: s.completion }), dot: "bg-amber-500", tone: "text-amber-700 dark:text-amber-500" }
+  if (s.remote_complete != null && s.remote_complete < 100) return { text: t("statusbar.syncSending", { pct: s.remote_complete }), dot: "bg-amber-500", tone: "text-amber-700 dark:text-amber-500" }
   if ((s.peers_connected ?? 0) === 0) return { text: t("statusbar.syncLatestPeerOff"), dot: "bg-muted-foreground/40", tone: g }
-  return { text: t("statusbar.syncBothLatest"), dot: "bg-emerald-500", tone: "text-emerald-600 dark:text-emerald-400" }   // 완전 동기화 = 초록
+  return { text: t("statusbar.syncBothLatest"), dot: "bg-emerald-500", tone: "text-emerald-700 dark:text-emerald-400" }   // 완전 동기화 = 초록
 }
 
 const dbg = (e: unknown) => console.debug("[statusbar]", e)   // 무음 대신 진단 로그

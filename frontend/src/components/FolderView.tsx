@@ -508,7 +508,7 @@ export function FolderView({ onOpenInSessions }: { onOpenInSessions?: (session: 
       {/* 가운데: 선택한 폴더의 내용 + 폴더 내 검색 */}
       <div className="flex min-h-0 flex-col border-r">
         {err && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-[12px] text-destructive">
+          <div role="alert" className="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-[12px] text-destructive">
             <span className="flex-1">{err}</span>
             <button onClick={() => setErr("")} aria-label={t("common.close")}><X className="size-3.5" /></button>
           </div>

@@ -170,7 +170,7 @@ export function UpdateBanner() {
       </div>
 
       {error && (
-        <div className="mt-1 flex items-center gap-1.5 text-[12px] text-amber-600 dark:text-amber-400">
+        <div className="mt-1 flex items-center gap-1.5 text-[12px] text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-3.5 shrink-0" />
           <span>{t("update.failed", { error })}</span>
         </div>
