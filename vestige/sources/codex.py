@@ -31,6 +31,7 @@ from ..models import Action, Turn
 from ..parser import iter_json_lines
 
 logger = logging.getLogger(__name__)
+_WARNED_ITEMS: set = set()   # 한 번씩만 경고
 
 # 버전 백업/아카이브 폴더 제외(Claude Code 어댑터와 동일 정책).
 _SKIP_DIRS = {".stversions", ".chatmem-archive", ".vestige-archive"}
@@ -259,7 +260,10 @@ def _collect(cur: dict, obj: dict, pt: str) -> None:
         elif itt in ("CommandExecution", "Extension"):
             cur["actions"].append(_summarize_item(item))
         elif itt not in ("UserMessage", "Reasoning"):
-            logger.debug("codex: unhandled item_completed item.type=%r", itt)
+            # 새 버전이 모르는 항목을 내면 그 내용이 턴에서 빠진다 - 디버그 로그는 아무 데도 안 남았다
+            if itt not in _WARNED_ITEMS:
+                _WARNED_ITEMS.add(itt)
+                logger.warning("codex: 처리 안 하는 item_completed 종류 %r - 그 내용은 색인에서 빠진다", itt)
 
 
 def _finalize(cur: dict) -> Turn:

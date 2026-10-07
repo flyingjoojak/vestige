@@ -762,6 +762,15 @@ class ArchiveDB:
             [(f"{c.turn_id}#{c.index}", c.turn_id, c.index, c.text) for c in chunks],
         )
 
+    def turn_ids_of_chunks(self, keys: list[str]) -> dict[str, str]:
+        """{chunk_key: turn_id} 를 500개씩 묶어 조회."""
+        out: dict[str, str] = {}
+        for i in range(0, len(keys), 500):
+            part = keys[i:i + 500]
+            out.update({r["chunk_key"]: r["turn_id"] for r in self.conn.execute(
+                f"SELECT chunk_key, turn_id FROM chunks WHERE chunk_key IN ({','.join('?' * len(part))})", part)})
+        return out
+
     def turn_id_of_chunk(self, chunk_key: str) -> str | None:
         row = self.conn.execute(
             "SELECT turn_id FROM chunks WHERE chunk_key=?", (chunk_key,)

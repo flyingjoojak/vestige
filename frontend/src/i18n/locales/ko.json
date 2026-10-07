@@ -76,6 +76,7 @@
     "indexErrorTip": "설정 > 색인에서 자세히 볼 수 있어요."
   },
   "settings": {
+    "verifyFailed": "연결 확인에 실패했어요.",
     "title": "설정",
     "appearance": "모양",
     "theme": "테마",

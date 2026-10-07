@@ -64,8 +64,10 @@ def _semantic_turn_ranks(query, db, vi, embedder, depth):
     qv = embedder.embed_query(query)
     order: list[str] = []
     cosine: dict[str, float] = {}
-    for chunk_key, score in vi.search(qv, k=depth):
-        tid = db.turn_id_of_chunk(chunk_key) or chunk_key.rsplit("#", 1)[0]
+    found = vi.search(qv, k=depth)
+    owner = db.turn_ids_of_chunks([k for k, _ in found])   # 청크마다 조회하면 세션·폴더 검색에서 최대 1천 번
+    for chunk_key, score in found:
+        tid = owner.get(chunk_key) or chunk_key.rsplit("#", 1)[0]
         if tid not in cosine:
             cosine[tid] = score
             order.append(tid)
