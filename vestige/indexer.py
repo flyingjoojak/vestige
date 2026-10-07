@@ -329,7 +329,13 @@ def index_file(
     for i, (obj, _s, _e) in enumerate(seg):
         if adapter.is_turn_start(obj):
             last_up = i
-    idle = (time.time() - mtime) > idle_secs
+    # 수정 시각은 지금 다시 본다 - 앞 구간을 처리(임베딩)하는 사이 파일이 계속 쓰였을 수 있다. 처음 값으로
+    # 판정하면 그 시간만큼 '조용했다'고 오인해, 진행 중인 마지막 턴을 끝난 것으로 확정한다.
+    try:
+        last_write = os.path.getmtime(path)
+    except OSError:
+        last_write = mtime
+    idle = (time.time() - last_write) > idle_secs
     if last_up is None or idle:
         proc, final_offset = seg, prev
         # idle 로 마지막 턴을 확정하지만, 그 턴은 아직 안 끝났을 수 있다(긴 도구호출 중).

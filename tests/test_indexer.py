@@ -399,3 +399,24 @@ def test_slicing_a_big_log_gives_the_same_result(tmp_path, monkeypatch):
             results.append(_snapshot(db, f))
         assert results[0] == results[1], idle_secs
         assert len(results[0][0]) == (12 if idle_secs == 0 else 11)   # idle 아니면 마지막 턴 보류
+
+
+def test_idle_is_judged_on_a_fresh_mtime_after_long_slices(tmp_path, monkeypatch):
+    """앞 구간 처리가 오래 걸리는 동안 파일이 쓰였으면, 마지막 턴을 끝난 것으로 확정하지 않는다."""
+    import os
+    import vestige.indexer as I
+    monkeypatch.setattr(I, "_SLICE_BYTES", 1)
+    f = tmp_path / "s1.jsonl"
+    _write_jsonl(f, 4)
+    old = os.path.getmtime(f) - 3600
+    os.utime(f, (old, old))   # 시작할 땐 한 시간 조용했던 파일
+
+    class TouchingEmbedder(FakeEmbedder):
+        def embed_passages(self, texts):
+            os.utime(f, None)   # 처리하는 사이 누가 이 로그에 쓴다
+            return super().embed_passages(texts)
+
+    db = ArchiveDB(tmp_path / "a.db")
+    index_file(f, db, VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json"), TouchingEmbedder(), idle_secs=60)
+    assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 3   # 마지막 턴은 보류
+    assert db.get_hold(str(f)) is None
