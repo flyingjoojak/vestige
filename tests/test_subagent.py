@@ -103,9 +103,9 @@ def test_gate_does_not_reparse_unchanged_file(tmp_path, monkeypatch):
     _write(p, [_user("한 번만 시킨 헬퍼 봇"), _assistant("끝")])   # 후속 지시 0 → 통과 못 함
 
     reads = []
-    real = S.iter_json_lines
-    monkeypatch.setattr(S, "iter_json_lines",
-                        lambda path, *a, **k: (reads.append(str(path)), real(path, *a, **k))[1])
+    real = S.SubagentAdapter._scan
+    monkeypatch.setattr(S.SubagentAdapter, "_scan",
+                        staticmethod(lambda path: (reads.append(str(path)), real(path))[1]))
     S._gate_cache.clear()
 
     a = SubagentAdapter()
@@ -133,3 +133,17 @@ def test_gate_rescans_when_file_grows(tmp_path, monkeypatch):
                _user("저것도 해줘", meta=True), _assistant("네")])
     os.utime(p, (time.time() + 2, time.time() + 2))   # mtime 해상도에 안 기대게 명시적으로
     assert a._qualifies(p) is True, "자란 파일을 낡은 캐시로 계속 제외했다"
+
+
+def test_gate_ignores_an_unterminated_last_record(tmp_path):
+    """개행 없이 끝난 마지막 기록(아직 쓰이는 중)은 후속 지시로 세지 않는다 - 예전 줄 단위 읽기와 같게."""
+    import json as _json
+    from vestige.sources import subagent as S
+    p = tmp_path / "proj" / "subagents" / "agent-x.jsonl"
+    _write(p, [_user("처음 지시"), _assistant("응"), _user("두 번째 지시", meta=True, wrap=True), _assistant("응")])
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(_user("세 번째 - 아직 쓰이는 중", meta=True, wrap=True)))   # 개행 없음
+    assert S.SubagentAdapter._scan(p) is False
+    with open(p, "a", encoding="utf-8") as f:
+        f.write("\n")   # 줄이 끝나면 센다
+    assert S.SubagentAdapter._scan(p) is True

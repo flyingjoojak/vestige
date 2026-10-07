@@ -420,3 +420,17 @@ def test_idle_is_judged_on_a_fresh_mtime_after_long_slices(tmp_path, monkeypatch
     index_file(f, db, VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json"), TouchingEmbedder(), idle_secs=60)
     assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 3   # 마지막 턴은 보류
     assert db.get_hold(str(f)) is None
+
+
+def test_walk_cache_does_not_block_while_the_startup_warmup_runs(monkeypatch):
+    """앱 시작 직후 뒤에서 처음 훑는 동안, 화면 요청은 기다리지 않고 빈 목록을 받는다(예전엔 44초 멈췄다)."""
+    import time as _t
+    import vestige.indexer as I
+    monkeypatch.setattr(I, "_walk_cache", {"at": 0.0, "roots": None, "files": []})
+    assert I._walk_lock.acquire(blocking=False)   # warm_walk_cache 가 훑는 중인 상태
+    try:
+        t = _t.perf_counter()
+        assert I.iter_all_cached() == []
+        assert _t.perf_counter() - t < 0.5
+    finally:
+        I._walk_lock.release()

@@ -17,6 +17,10 @@ Claude Code 는 서브에이전트 대화를 부모 세션과 같은 폴더의 �
 """
 from __future__ import annotations
 
+import json
+import mmap
+import os
+import re
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -31,6 +35,7 @@ from ..parser import (
 
 # 일회성 헬퍼 봇 걸러내기: 사람 후속 지시가 이 수 미만이면 색인 안 함.
 _MIN_FOLLOWUPS = 2
+_META_TRUE = re.compile(rb'"isMeta"\s*:\s*true')   # 후속 지시 줄의 표지(파싱 전에 거른다)
 
 # 게이트 결과 캐시: 경로 -> ((크기, mtime), 통과 여부).
 # discover() 는 /api/index/status 폴링마다 불린다. 게이트를 통과하는 파일은 두 번째
@@ -112,14 +117,34 @@ class SubagentAdapter:
     @staticmethod
     def _scan(path: Path) -> bool:
         """조기 종료로 통과 파일은 저렴. 통과 못 하는 파일은 전문을 읽는다(그래서 캐시가 필요)."""
+        # "isMeta": true 가 없는 줄은 후속 지시일 수 없다 - 그런 줄은 JSON 파싱을 건너뛴다. 예전엔 모든 줄을
+        # 파싱해, 앱을 켠 뒤 처음 훑을 때 하위 세션 505개(6.4만 줄)에 12초(설치본은 색인과 겹쳐 44초)
+        # 걸렸고 그동안 세션 목록이 멈췄다.
         seen = 0
         try:
-            for obj, _end in iter_json_lines(path):
-                if _is_meta_user_prompt(obj):
-                    seen += 1
-                    if seen >= _MIN_FOLLOWUPS:
-                        return True
-        except Exception:  # noqa: BLE001 — 파싱 불가 파일은 색인 대상에서 조용히 제외
+            with open(path, "rb") as f:
+                if os.fstat(f.fileno()).st_size == 0:
+                    return False
+                # 줄로 나누지 않고 파일을 매핑한 채 표지만 찾는다 - 하위 로그는 합쳐 수백 MB 다.
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                    done_to = -1   # 이미 본 줄의 끝 - 한 줄에 표지가 둘이어도 한 번만 센다
+                    for hit in _META_TRUE.finditer(m):
+                        if hit.start() < done_to:
+                            continue
+                        start = m.rfind(b"\n", 0, hit.start()) + 1
+                        end = m.find(b"\n", hit.end())
+                        if end == -1:
+                            break   # 개행 없이 끝난 마지막 조각은 아직 쓰이는 중 - 세지 않는다
+                        done_to = end
+                        try:
+                            obj = json.loads(m[start:end])
+                        except ValueError:
+                            continue
+                        if _is_meta_user_prompt(obj):
+                            seen += 1
+                            if seen >= _MIN_FOLLOWUPS:
+                                return True
+        except (OSError, ValueError):  # 읽을 수 없는 파일은 색인 대상에서 조용히 제외
             return False
         return False
 
