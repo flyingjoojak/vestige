@@ -192,7 +192,11 @@ function createWindow() {
     },
   })
   win.setMenuBarVisibility(false)
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" } })
+  // 새 창 요청은 외부 브라우저로 - 단 http(s) 만. 다른 스킴은 OS 가 엉뚱한 프로그램을 띄울 수 있다.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+    return { action: "deny" }
+  })
   // SPA라 페이지 이동이 없다 → 마우스 뒤로/앞으로 버튼(및 Alt+←/→)으로 인한 히스토리 이동을 차단.
   // 이게 없으면 뒤로가기가 시작 화면(loading.html)으로 돌아가 무한 '엔진 불러오는 중'에 갇힌다.
   win.on("app-command", (e, cmd) => {

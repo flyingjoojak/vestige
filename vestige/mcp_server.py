@@ -34,6 +34,11 @@ async def _offload(fn, *args):
     return await loop.run_in_executor(_pool, functools.partial(fn, *args))
 
 
+
+def _like_prefix(s: str) -> str:
+    """세션 id 접두 검색용 LIKE 패턴. 입력의 % · _ 는 글자 그대로(와일드카드로 먹지 않게)."""
+    return s.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+
 def _embedder():
     if "e" not in _state:
         from .embedder import Embedder
@@ -146,8 +151,8 @@ def _find_related(target: str, k: int) -> str:
         query_text = f"{row['question'] or ''} {row['answer'] or ''}".strip()
     else:
         rows = db.conn.execute(
-            "SELECT session_id, summary, question FROM turns WHERE session_id LIKE ? "
-            "ORDER BY timestamp, id LIMIT 12", (target + "%",)).fetchall()
+            "SELECT session_id, summary, question FROM turns WHERE session_id LIKE ? ESCAPE '!' "
+            "ORDER BY timestamp, id LIMIT 12", (_like_prefix(target),)).fetchall()
         if not rows:
             return f"'{target}' 에 해당하는 턴/세션을 찾지 못했습니다."
         exclude_session = rows[0]["session_id"]
@@ -171,8 +176,8 @@ def _get_session(session: str, limit: int) -> str:
     db = _db()
     rows = db.conn.execute(
         "SELECT session_id, timestamp, question, answer, summary FROM turns "
-        "WHERE session_id LIKE ? ORDER BY timestamp, id LIMIT ?",
-        (session + "%", max(1, min(limit, 500))),
+        "WHERE session_id LIKE ? ESCAPE '!' ORDER BY timestamp, id LIMIT ?",
+        (_like_prefix(session), max(1, min(limit, 500))),
     ).fetchall()
     if not rows:
         return f"세션 '{session}' 을(를) 찾지 못했습니다."

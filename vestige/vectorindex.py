@@ -127,7 +127,14 @@ class SqliteVecIndex:
         from .config import VECTORS_DB_PATH
         self.db_path = Path(db_path or VECTORS_DB_PATH)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), timeout=60.0)
+        # archive.db 와 같은 내성. 앱 백엔드·MCP 서버(같은 exe --mcp)·스케줄러 색인이 이 파일을 같이
+        # 연다. 기본값(잠금 5초, 롤백 저널)이면 쓰는 동안 다른 쪽 검색이 5초 뒤 'database is locked'.
+        self.conn.execute("PRAGMA busy_timeout=60000")
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass   # 다른 쪽이 쓰는 중이면 다음에 열 때 적용된다
         self.conn.enable_load_extension(True)
         sqlite_vec.load(self.conn)
         self.conn.enable_load_extension(False)

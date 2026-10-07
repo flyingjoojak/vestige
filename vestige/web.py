@@ -1395,7 +1395,7 @@ def _sync_loop() -> None:
     st = _sync
     while st["stop"] is not None and not st["stop"].is_set():
         try:
-            res = session_sync.sync_tick()          # 충돌 해소만(색인 없음)
+            res = session_sync.sync_tick(min_scan_secs=60)   # 충돌 해소만(색인 없음), 폴더 훑기는 1분에 한 번
             st["resolved_total"] += len(res.outcomes)
             st["last_error"] = None
         except Exception as ex:                     # 한 번의 오류로 스레드가 죽지 않게
@@ -1494,11 +1494,15 @@ def _st_start_bg(persist: bool = True) -> None:
                 # rename(chatmem→vestige) 잔재 폴더 정리 — 같은 경로 중복 폴더가 있으면 동기화가
                 # 0%에서 막히므로, REST 준비된 직후 새 폴더로 이관 후 옛 폴더 제거(자가복구·신규는 no-op).
                 from . import config as C
-                with contextlib.suppress(Exception):
-                    inst.migrate_legacy_folder(C.PROJECTS_DIR)
-                # 기존 페어에도 codex 원본 폴더를 자가복구로 추가(#153). 페어링 전이면 no-op.
-                with contextlib.suppress(Exception):
-                    inst.ensure_codex_folder(C.CODEX_SESSIONS_DIR)
+                # 실패해도 기기 연결은 계속하되 흔적은 남긴다 - 예전엔 조용히 삼켜, Codex 세션만 동기화가
+                # 안 되는 이유를 알 수 없었다. 기존 페어에도 codex 원본 폴더를 자가복구로 추가(#153).
+                for fix in (lambda: inst.migrate_legacy_folder(C.PROJECTS_DIR),
+                            lambda: inst.ensure_codex_folder(C.CODEX_SESSIONS_DIR)):
+                    try:
+                        fix()
+                    except Exception as ex:  # noqa: BLE001
+                        logging.getLogger(__name__).warning("동기화 폴더 자가복구 실패: %s", ex)
+                        _st_state["last_error"] = f"동기화 폴더 정리 실패: {ex}"
                 with _st_lock:
                     _st_state.update(running=True, starting=False, phase="실행 중", my_id=inst.device_id())
                 _sync_start(persist=False)   # 기기 연결이 켜지면 충돌 정리 워커도 자동 시작(별도 토글 없음)
@@ -2706,17 +2710,15 @@ function card(h){
   const cos=h.cosine!=null?`cos ${h.cosine.toFixed(3)}`:'키워드';
   const meta=`<div class="meta">${src}<span>${cos}</span>· ${esc(fmtTime(h.timestamp))} · 세션 ${esc(h.session)}</div>`;
   const tags=(h.tags||[]).length?`<div class="tags">${h.tags.map(t=>`<span class="tag">#${esc(t)}</span>`).join('')}</div>`:'';
-  const acts=(h.actions||[]).length?`<div class="toggle" onclick="tog(this)">▸ 행동(bash 등) ${h.actions.length}개</div><div class="fold actions">${esc(h.actions.join('\n'))}</div>`:'';
-  const th=(h.thread||[]).map(x=>`<div class="titem"><div class="tq" onclick="tog(this)"><b>Q</b>${esc(x.question).slice(0,120)}</div><div class="fold ta">${md(x.answer)||'—'}</div></div>`).join('');
-  const thread=th?`<div class="toggle" onclick="tog(this)">▸ 스레드 맥락 ${h.thread.length}턴</div><div class="fold thread">${th}</div>`:'';
+  // 검색 응답엔 답변·행동·앞뒤 턴이 없다(#268) - 전체는 '이 세션 전체 작업 보기'로 연다.
+  const acts='', thread='';
   const sess=`<div class="toggle" onclick="openSession('${h.session_full}')">▸ 이 세션 전체 작업 보기 ↗</div>`;
   const rawFold=`<div class="toggle" onclick="tog(this)">▸ 원문 Q&amp;A</div>
-    <div class="fold raw"><p class="rq"><b>Q</b>${md(h.question)||'(질문 없음)'}</p><div class="ra"><b>A</b>${md(h.answer)||'—'}</div></div>`;
+    <div class="fold raw"><p class="rq"><b>Q</b>${md(h.question)||'(질문 없음)'}</p></div>`;
 
   let body;
   if(rawFirst){
     body=`<p class="headline">${esc(h.question)||'<span class="sub">(질문 없음)</span>'}</p>
-      <div class="a" onclick="this.classList.toggle('open')" style="margin-top:7px">${md(h.answer)||'—'}</div>
       ${h.summary?`<div class="enrich"><span class="mk">📝</span>${esc(h.summary)}</div>`:''}${tags}`;
   }else{
     const head=h.summary?`<span class="mk">📝</span>${esc(h.summary)}`:`${esc(h.question)||'<span class="sub">(요약 없음)</span>'}`;

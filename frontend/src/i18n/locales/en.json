@@ -76,6 +76,7 @@
     "indexErrorTip": "See Settings > Indexing for details."
   },
   "settings": {
+    "verifyFailed": "Couldn't verify the connection.",
     "title": "Settings",
     "appearance": "Appearance",
     "theme": "Theme",

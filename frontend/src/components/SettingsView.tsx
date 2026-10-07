@@ -680,7 +680,7 @@ export function SettingsView() {
       })
       setVerify({ ok: r.ok, msg: r.message }); return r.ok
     } catch (e) {
-      setVerify({ ok: false, msg: String(e) }); return false
+      setVerify({ ok: false, msg: errText(t, e, "settings.verifyFailed") }); return false
     } finally { setTesting(false) }
   }
 
