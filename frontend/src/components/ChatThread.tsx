@@ -72,7 +72,9 @@ const Turn = memo(function Turn({ t, i, highlight, onHide }: { t: SessionTurn; i
       <div className="flex flex-col items-end">
         <span className="mb-1 mr-1 text-[10px] font-medium text-muted-foreground">{tr("chat.question")}</span>
         <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary/10 px-3.5 py-2 text-sm ring-1 ring-primary/15">
-          <div className="cm-md text-foreground" dangerouslySetInnerHTML={{ __html: mdToHtml(t.question) || tr("chat.noQuestion") }} />
+          {/* 질문은 사용자가 친 그대로 보여준다(마크다운으로 바꾸지 않는다). "3. 커밋해줘" 가 점 목록이
+              되고 "~~ 착수 ~~" 에 취소선이 그어졌다 - 사람은 마크다운을 의도하고 치지 않는다. */}
+          <div className="whitespace-pre-wrap leading-relaxed text-foreground [overflow-wrap:anywhere]">{t.question || tr("chat.noQuestion")}</div>
         </div>
       </div>
       <div className="mt-2 flex flex-col items-start">
