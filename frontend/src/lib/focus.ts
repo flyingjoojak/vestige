@@ -14,12 +14,14 @@ export function focusKeyAfterRender(key: string): void {
   }))
 }
 
-// 지금 포커스가 든 줄([data-row])이 사라질 때: 다음 줄 → 이전 줄의 첫 버튼 → fallback 순으로
-export function focusNeighborRowAfterRender(fallback?: HTMLElement | null): void {
+// 지금 포커스가 든 줄([data-row])이 곧 사라질 때: 지금(누른 순간) 이웃 줄을 기억해 두고, 돌려준
+// 함수를 줄이 사라진 뒤 부르면 그리로 옮긴다(다음 줄 → 이전 줄의 첫 버튼 → fallback). 누른 버튼이
+// 요청 동안 disabled 가 되면 그때 이미 포커스가 빠지므로, 이웃은 누른 순간에 잡아야 한다.
+export function rememberNeighborRow(fallback?: HTMLElement | null): () => void {
   const row = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-row]")
   const next = row?.nextElementSibling?.querySelector<HTMLElement>("button")
     ?? row?.previousElementSibling?.querySelector<HTMLElement>("button")
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  return () => requestAnimationFrame(() => requestAnimationFrame(() => {
     if (!lost()) return
     const target = next?.isConnected ? next : fallback
     target?.focus()

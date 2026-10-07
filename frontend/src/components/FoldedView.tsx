@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { ChevronRight, ChevronsUpDown, ExternalLink, Loader2 } from "lucide-react"
 import { listHidden, unhideSession, unhideTurn } from "@/lib/api"
 import { errText } from "@/lib/errors"
-import { focusNeighborRowAfterRender } from "@/lib/focus"
+import { rememberNeighborRow } from "@/lib/focus"
 import { fmtTime } from "@/lib/format"
 import type { FoldedChats, FoldedGroups, FoldedSession } from "@/lib/types"
 
@@ -32,11 +32,13 @@ export function FoldedView({ onOpenTurn, onChanged }: {
 
   const headingRef = useRef<HTMLHeadingElement>(null)
   async function run(key: string, fn: () => Promise<unknown>, apply: (d: FoldedGroups) => FoldedGroups) {
-    focusNeighborRowAfterRender(headingRef.current)   // 펼친 줄이 사라진다 - 이웃 줄(없으면 제목)로
+    // 줄은 요청이 끝난 뒤에 사라진다 - 누른 순간 이웃 줄(없으면 제목)을 잡아 두고, 사라진 뒤 그리로
+    const moveFocus = rememberNeighborRow(headingRef.current)
     setBusy(key)
     try {
       await fn()
       setData((d) => (d ? apply(d) : d))
+      moveFocus()
       onChanged?.()
     } catch (e) {
       setErr(errText(t, e, "folded.unfoldFailed"))

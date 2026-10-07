@@ -337,6 +337,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       await (folded ? hideSession(id) : unhideSession(id))
     } catch (e) {
       flip(!folded)                                       // 서버가 거부하면 화면도 되돌린다
+      focusKeyAfterRender(folded ? `fold-${id}` : `undo-${id}`)   // 되돌린 버튼으로
       setFoldErr({ id, text: errText(t, e, "chat.foldFailed") })
     }
   }

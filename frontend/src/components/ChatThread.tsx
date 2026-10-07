@@ -201,17 +201,23 @@ export function ChatThread(
   }, [data, range.e])
 
   // 끝까지 보고 있었으면 새로 붙은 턴까지 렌더 창을 넓힌다. 중간을 보고 있으면 건드리지 않는다.
-  const prevLen = useRef(0)
+  const prevLen = useRef(-1)   // -1 = 아직 첫 로드 전(빈 세션의 0 과 구분 - 그래야 첫 대화도 알린다)
   const turnCount = data?.turns.length ?? 0
+  const loaded = data != null
   // 실시간으로 붙은 대화를 스크린리더에도 알린다(화면에서는 말풍선이 늘어나는 것만 보인다).
+  // 같은 개수가 연달아 붙어도 다시 읽히게 끝에 보이지 않는 글자를 번갈아 붙인다(같은 글이면 안 읽는다).
   const [announce, setAnnounce] = useState("")
   useEffect(() => {
+    if (!loaded) return
     const before = prevLen.current
     prevLen.current = turnCount
-    if (before === 0) return   // 첫 로드는 windowFor 가 이미 정했다
-    if (turnCount > before) setAnnounce(t("chat.newTurns", { count: turnCount - before }))
+    if (before < 0) return   // 첫 로드는 windowFor 가 이미 정했다
+    if (turnCount > before) {
+      const msg = t("chat.newTurns", { count: turnCount - before })
+      setAnnounce((prev) => (prev === msg ? msg + "\u200b" : msg))
+    }
     setRange((r) => (r.e >= before && turnCount > r.e ? { ...r, e: turnCount } : r))
-  }, [turnCount, t])
+  }, [turnCount, loaded, t])
 
   // 접기/펼치기(#128): 목록에서 빼지 않고 hidden 플래그만 뒤집는다 → 제자리에서 바로 되돌릴 수 있다.
   function setFolded(ids: Set<string>, folded: boolean) {
@@ -225,6 +231,7 @@ export function ChatThread(
       await (folded ? hideTurn(id) : unhideTurn(id))
     } catch (e) {
       setFolded(new Set([id]), !prev)  // 서버가 거부하면 화면도 되돌린다
+      focusKeyAfterRender(folded ? `fold-${id}` : `unfold-${id}`)   // 되돌린 버튼으로
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
@@ -247,6 +254,7 @@ export function ChatThread(
       await apiHideSession(session)
     } catch (e) {
       setFolded(ids, false)
+      focusKeyAfterRender("session-fold")
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
@@ -261,6 +269,7 @@ export function ChatThread(
       await unhideSession(session)
     } catch (e) {
       setFolded(ids, true)
+      focusKeyAfterRender("session-unfold")
       setHideErr(errText(t, e, "chat.foldFailed"))
     }
   }
