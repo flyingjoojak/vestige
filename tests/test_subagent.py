@@ -103,9 +103,9 @@ def test_gate_does_not_reparse_unchanged_file(tmp_path, monkeypatch):
     _write(p, [_user("한 번만 시킨 헬퍼 봇"), _assistant("끝")])   # 후속 지시 0 → 통과 못 함
 
     reads = []
-    real = S.iter_json_lines
-    monkeypatch.setattr(S, "iter_json_lines",
-                        lambda path, *a, **k: (reads.append(str(path)), real(path, *a, **k))[1])
+    real = S.SubagentAdapter._scan
+    monkeypatch.setattr(S.SubagentAdapter, "_scan",
+                        staticmethod(lambda path: (reads.append(str(path)), real(path))[1]))
     S._gate_cache.clear()
 
     a = SubagentAdapter()
