@@ -64,6 +64,7 @@ def _sanitize(s: str) -> str:
 # 보존소 경로는 설정 화면에서 사용자가 직접 고를 수 있어서, 홈 폴더나 기존 백업 폴더를
 # 지정한 채 용량 상한을 켜면 앱이 만들지 않은 .jsonl.gz 까지 삭제 대상이 되기 때문.
 _MARKER = ".vestige-raw"
+_MIRROR_SLICE = 16 * 1024 * 1024   # 미러링할 때 한 번에 읽는 최대 바이트(메모리 상한)
 
 
 def _ensure_marker(root: Path) -> None:
@@ -114,38 +115,44 @@ def mirror_file(db, path: str | Path, source: str) -> int:
         mirrored = 0
     if mirrored == size:
         return 0
+    sid = session_id_for(path)
+    # 조각으로 읽어 한 멤버에 이어 쓴다 - 처음 보존하는 356MB 로그를 통째로 메모리에 올리지 않는다.
+    # EOF 까지 읽고(그 사이 로그가 자랐으면 같이), 커서는 아래에서 실제로 쓴 만큼만 전진시킨다.
     with open(path, "rb") as f:
         f.seek(mirrored)
-        chunk = f.read()
-    if not chunk:
-        return 0
-    sid = session_id_for(path)
-    out = raw_path(source, sid)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_marker(raw_dir())
-    # 보존본 파일은 **절대 잘라내지 않는다(append 전용).**
-    #
-    # 중단된 append 가 남긴 깨진 멤버를 '고쳐보려고' 잘라내는 코드를 다섯 번 시도했고, 다섯 번
-    # 다 새로운 영구 유실을 만들었다(키 불일치, 마이그레이션 백필 누락, 커서 미되감기,
-    # 소스가 둘일 때 전손, 단위 불일치). 근본 이유는 자료구조다 — 보존본은 세션당 하나인데
-    # 소스는 1:N 이고, 멀티멤버 gzip 에는 '이 멤버가 어느 소스의 어느 오프셋인지'가 없다.
-    # 그 관계를 스칼라 하나로 근사하는 한 되감을 지점을 옳게 고를 수 없다.
-    #
-    # 그래서 실패 방향을 '닫히는 쪽'으로 둔다: 손상은 고치지 않고 read_mirror_checked 가
-    # intact=False 로 정직하게 보고한다(앞부분까지는 복구되고, UI 가 잘렸다고 알린다).
-    # 자르는 코드는 실패하면 '열리는 쪽'이었다 — 데이터를 없애고 '복구 완료'라고 말했다.
-    before = out.stat().st_size if out.exists() else 0
-    with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
-        gz.write(chunk)
+        part = f.read(_MIRROR_SLICE)
+        if not part:
+            return 0
+        out = raw_path(source, sid)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_marker(raw_dir())
+        # 보존본 파일은 **절대 잘라내지 않는다(append 전용).**
+        #
+        # 중단된 append 가 남긴 깨진 멤버를 '고쳐보려고' 잘라내는 코드를 다섯 번 시도했고, 다섯 번
+        # 다 새로운 영구 유실을 만들었다(키 불일치, 마이그레이션 백필 누락, 커서 미되감기,
+        # 소스가 둘일 때 전손, 단위 불일치). 근본 이유는 자료구조다 — 보존본은 세션당 하나인데
+        # 소스는 1:N 이고, 멀티멤버 gzip 에는 '이 멤버가 어느 소스의 어느 오프셋인지'가 없다.
+        # 그 관계를 스칼라 하나로 근사하는 한 되감을 지점을 옳게 고를 수 없다.
+        #
+        # 그래서 실패 방향을 '닫히는 쪽'으로 둔다: 손상은 고치지 않고 read_mirror_checked 가
+        # intact=False 로 정직하게 보고한다(앞부분까지는 복구되고, UI 가 잘렸다고 알린다).
+        # 자르는 코드는 실패하면 '열리는 쪽'이었다 — 데이터를 없애고 '복구 완료'라고 말했다.
+        before = out.stat().st_size if out.exists() else 0
+        written = 0
+        with open(out, "ab") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb") as gz:
+            while part:
+                gz.write(part)
+                written += len(part)
+                part = f.read(_MIRROR_SLICE)
     # 멤버 경계를 옆 파일에 남긴다(#223). 이게 있어야 중간 멤버가 깨져도 뒤를 계속 읽는다.
     # **append 가 끝난 뒤에** 적는다 — 먼저 적으면 중단됐을 때 있지도 않은 멤버를 가리킨다.
     _idx_append(out, before, out.stat().st_size - before, backfill_from=before)
     # 커서는 stat() 때 크기(size)가 아니라 '실제로 기록한 만큼'만 전진시킨다.
-    # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 chunk 가 size 를 넘겨 읽는데,
+    # stat() 과 read() 사이에 claude/codex 가 로그를 이어 쓰면 읽은 양이 size 를 넘는데,
     # size 로 저장하면 다음 회차가 겹친 구간을 다시 미러링해 gz 에 중복 줄이 쌓인다.
-    db.set_raw_cursor(path, mirrored + len(chunk), sid, source)
+    db.set_raw_cursor(path, mirrored + written, sid, source)
     db.commit()
-    return len(chunk)
+    return written
 
 
 def has_mirror(source: str, session_id: str) -> bool:

@@ -5,6 +5,8 @@ import { Magnifier } from "@/components/ui/Magnifier"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChatThread } from "./ChatThread"
+import { focusKeyAfterRender } from "@/lib/focus"
+import { GoToSessionButton } from "./GoToSessionButton"
 import { SourceFilter } from "./SourceFilter"
 import { AddToFolder } from "./AddToFolder"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
@@ -21,7 +23,8 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
   try { el.showPicker?.() } catch { /* 미지원 브라우저 */ }
 }
 
-export function SearchView() {
+// onOpenInSessions: 고른 결과의 세션을 세션 목록 화면에서 연다(이 화면의 채팅은 내용 확인용이라 세션을 이어서 하지 못한다).
+export function SearchView({ onOpenInSessions }: { onOpenInSessions?: (session: string, turn: string) => void } = {}) {
   const { t } = useTranslation()
   const EXAMPLES = [t("search.ex1"), t("search.ex2"), t("search.ex3"), t("search.ex4"), t("search.ex5")]
   const MODES: { value: SearchMode; label: React.ReactNode }[] = [
@@ -63,11 +66,13 @@ export function SearchView() {
       return next
     })
     mark(folded)
+    focusKeyAfterRender(folded ? `unfold-${id}` : `fold-${id}`)   // 누른 버튼이 사라진다 - 바뀐 버튼으로
     if (folded) setSel((s) => (s?.turn === id ? null : s))   // 접은 턴을 오른쪽에 계속 띄워두지 않음
     try {
       await (folded ? hideTurn(id) : unhideTurn(id))
     } catch (err) {
       mark(!folded)                                          // 서버가 거부하면 표시도 되돌린다
+      focusKeyAfterRender(folded ? `fold-${id}` : `unfold-${id}`)
       setHideErr(errText(t, err, "search.foldFailed"))
       if (hideErrTimer.current) clearTimeout(hideErrTimer.current)
       hideErrTimer.current = setTimeout(() => setHideErr(""), 4000)
@@ -150,7 +155,7 @@ export function SearchView() {
               onChange={(v) => { setMode(v); run(q, v) }} options={MODES} />
             <label className="inline-flex items-center gap-1">{t("search.show")}
               <select value={k} onChange={(e) => { setK(+e.target.value); run() }}
-                className="rounded-md border bg-card px-1.5 py-1 outline-none shadow-sm">
+                className="rounded-md border bg-card px-1.5 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm">
                 {[8, 15, 30].map((n) => <option key={n}>{n}</option>)}
               </select>
             </label>
@@ -162,10 +167,10 @@ export function SearchView() {
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <label className="inline-flex items-center gap-1">{t("search.since")}
               <input type="date" value={since} onClick={openPicker} onFocus={openPicker} onChange={(e) => { setSince(e.target.value); run() }}
-                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
+                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm [color-scheme:light_dark]" /></label>
             <label className="inline-flex items-center gap-1">{t("search.until")}
               <input type="date" value={until} onClick={openPicker} onFocus={openPicker} onChange={(e) => { setUntil(e.target.value); run() }}
-                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
+                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm [color-scheme:light_dark]" /></label>
             {(since || until) && (
               <button onClick={() => { setSince(""); setUntil(""); run() }}
                 className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 hover:text-foreground">
@@ -283,7 +288,7 @@ export function SearchView() {
                 <div key={h.id} className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
                   <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium">{t("browse.folded")}</span>
                   <span className="min-w-0 flex-1 truncate" title={h.summary || h.question}>{h.summary || h.question || t("search.untitled")}</span>
-                  <button type="button" onClick={(e) => fold(h.id, false, e)}
+                  <button type="button" onClick={(e) => fold(h.id, false, e)} data-focus={`unfold-${h.id}`}
                     className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 transition-colors hover:bg-muted hover:text-foreground">
                     <ChevronsUpDown className="size-3" />{t("chat.unfold")}
                   </button>
@@ -311,7 +316,7 @@ export function SearchView() {
                   <span>{t("search.session", { n: h.session })}</span>
                   <span className="relative z-10 ml-auto flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     <AddToFolder target={{ turnId: h.id }} />
-                    <button type="button" onClick={(e) => fold(h.id, true, e)}
+                    <button type="button" onClick={(e) => fold(h.id, true, e)} data-focus={`fold-${h.id}`}
                       title={t("search.foldTurn")} aria-label={t("search.foldTurn")}
                       className="inline-flex min-h-6 min-w-6 items-center justify-center rounded transition-colors hover:bg-muted hover:text-foreground">
                       <ChevronsDownUp className="size-3.5" />
@@ -334,7 +339,10 @@ export function SearchView() {
         {sel
           // 검색 결과로 들어오면 그 턴으로, '최근 세션'으로 들어오면(지목한 턴 없음) 마지막 대화로.
           ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session}
-              focusTurn={sel.turn} focusLast={!sel.turn} />
+              focusTurn={sel.turn} focusLast={!sel.turn}
+              headerAction={onOpenInSessions && (
+                <GoToSessionButton onClick={() => onOpenInSessions(sel.session, sel.turn ?? "")} />
+              )} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("search.detailPlaceholder")}
             </div>}

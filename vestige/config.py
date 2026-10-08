@@ -71,8 +71,10 @@ def _load_config_file(path: Path = CONFIG_PATH) -> None:
                 continue
             key, val = line.split("=", 1)
             os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
-    except Exception:
-        pass  # 설정 파일 오류가 시스템을 막지 않도록
+    except Exception as e:
+        # 시스템은 막지 않되 알린다 - 읽기 오류(인코딩·권한)면 모든 설정이 기본값으로 돌아가는데 표시가 없었다.
+        import sys
+        print(f"[vestige] 설정 파일을 읽지 못해 기본값을 씁니다: {path} ({e})", file=sys.stderr)
 
 
 _load_config_file()

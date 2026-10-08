@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, ExternalLink, FolderPlus,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp, FolderPlus,
   Folder as FolderIcon, GripVertical, Loader2,
   MessagesSquare, Move, Pencil, Search as SearchIcon, Tag, Trash2, X,
 } from "lucide-react"
@@ -11,6 +11,7 @@ import {
   removeFromFolder, renameFolder, renameFolderItem, reorderFolder, search, unhideSession, unhideTurn, warmEmbedder,
 } from "@/lib/api"
 import { ChatThread } from "./ChatThread"
+import { GoToSessionButton } from "./GoToSessionButton"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { childrenOf, flattenTree, treeMoves, type TreeMoves } from "@/lib/foldertree"
@@ -741,11 +742,7 @@ export function FolderView({ onOpenInSessions }: { onOpenInSessions?: (session: 
           ? <ChatThread key={`${openConv.session}:${openConv.turn ?? ""}`}
               session={openConv.session} focusTurn={openConv.turn} focusLast={!openConv.turn}
               headerAction={onOpenInSessions && (
-                <button type="button" onClick={() => onOpenInSessions(openConv.session, openConv.turn ?? "")}
-                  title={t("folders.goToSessionHint")}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors hover:bg-muted">
-                  <ExternalLink aria-hidden className="size-3.5" />{t("folders.goToSession")}
-                </button>
+                <GoToSessionButton onClick={() => onOpenInSessions(openConv.session, openConv.turn ?? "")} />
               )} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("folders.pickItemPrompt")}

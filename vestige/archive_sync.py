@@ -120,6 +120,13 @@ def _checked(rec: dict) -> dict:
     # 턴 id 는 보통 문자열이지만 옛 스냅샷에 정수로 든 것이 있다(테스트가 그 경우를 지킨다).
     if isinstance(t[0], bool) or not isinstance(t[0], (str, int)) or t[0] == "":
         raise ValueError(f"턴 id 가 이상함: {t[0]!r}")
+    # 정제본도 쓰기 전에 본다 - 턴을 upsert 한 뒤 set_enrichment 에서 터지면 턴만 반쪽으로 커밋된다.
+    if t[9] is not None and not isinstance(t[9], str):
+        raise ValueError(f"요약이 문자열이 아님: {type(t[9]).__name__}")
+    if t[9] and t[10]:   # 요약이 없으면 태그는 쓰지 않으므로 보지 않는다
+        tags = json.loads(t[10])
+        if not isinstance(tags, list):
+            raise ValueError("태그가 목록이 아님")
     for idx, text in rec.get("c", []) or []:  # 청크는 [정수, 문자열] 쌍만
         if isinstance(idx, bool) or not isinstance(idx, int) or not isinstance(text, str):
             raise ValueError(f"청크 모양이 다름: {[idx, text]!r}")
@@ -130,6 +137,9 @@ def _checked(rec: dict) -> dict:
 # (새 대화가 없어도) 상대 아카이브 전체를 다시 파싱했다(실측 88MB 430ms, 아카이브에 비례해 커진다).
 # 프로세스 메모리라 앱을 다시 켜면 한 번은 다시 읽는다. 키에 DB 경로를 넣어 다른 DB 와 섞이지 않게.
 _imported: dict[tuple[str, str], tuple[int, int]] = {}
+# 가져오는 동안 이 턴 수마다 커밋해 쓰기 잠금을 놓는다. 실사용 DB 사본(5,003턴 전부 갱신)에서 다른 쓰기가 막힌 최대 시간:
+# 파일 끝에서만 6.6초, 200턴 1.2초, 50턴 0.55초, 25턴 0.33초(커밋 수가 늘어도 전체 시간은 비슷).
+_COMMIT_EVERY = 50
 
 
 def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_fn=print) -> int:
@@ -157,7 +167,6 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
     if not files:
         return 0
     have = {row[0] for row in db.conn.execute("SELECT id FROM turns")}
-    done: list[Path] = []   # 끝까지 읽은 파일 - 커밋이 끝난 뒤에야 '읽음'으로 기록한다
     added = 0
     meta = 0          # 제목·접힘 등 정리 상태 반영 건수(#233)
     removed_any = False
@@ -170,6 +179,8 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
             log_fn(f"ERROR 아카이브 열기 실패 {p.name}: {e}")
             continue
         bad_lines = 0
+        file_added = file_meta = 0
+        stale_keys: list[str] = []   # 이 파일에서 갱신한 턴의 옛 벡터 키 - 파일 끝에서 한 번에 지운다
         with fh:
             for lineno, line in enumerate(fh, 1):
                 try:
@@ -181,29 +192,29 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                     # 턴 삭제(#228)처럼 보수적으로 갈 이유가 없다.
                     if "title" in rec:
                         sid, title, at = rec["title"]
-                        meta += db.apply_title(sid, title, float(at))
+                        file_meta += db.apply_title(sid, title, float(at))
                         continue
                     if "fold" in rec:
                         tid, folded, at = rec["fold"]
-                        meta += db.apply_fold(tid, int(folded), float(at))
+                        file_meta += db.apply_fold(tid, int(folded), float(at))
                         continue
                     # 폴더는 uid 로 오간다(#233). 순서가 문제인데 — 항목/부모가 폴더보다
                     # 먼저 와도 그 회차엔 붙지 않고 다음 회차에 제자리를 찾는다.
                     if "folder" in rec:
                         uid, nm, pu, pos, at = rec["folder"]
-                        meta += db.apply_folder(uid, nm, pu, pos, float(at))
+                        file_meta += db.apply_folder(uid, nm, pu, pos, float(at))
                         continue
                     if "fitem" in rec:
                         fu, kind, ref, alias, pos, at = rec["fitem"]
-                        meta += db.apply_folder_item(fu, kind, ref, alias, pos, float(at))
+                        file_meta += db.apply_folder_item(fu, kind, ref, alias, pos, float(at))
                         continue
                     if "folder_x" in rec:
                         uid, at = rec["folder_x"]
-                        meta += db.apply_folder_removed(uid, float(at))
+                        file_meta += db.apply_folder_removed(uid, float(at))
                         continue
                     if "fitem_x" in rec:
                         fu, kind, ref, at = rec["fitem_x"]
-                        meta += db.apply_folder_item_removed(fu, kind, ref, float(at))
+                        file_meta += db.apply_folder_item_removed(fu, kind, ref, float(at))
                         continue
                     if "t" not in rec:
                         continue            # 모르는 줄 종류(더 새 버전) — 건너뛴다
@@ -236,32 +247,44 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                         old_keys = [r[0] for r in db.conn.execute(
                             "SELECT chunk_key FROM chunks WHERE turn_id=?", (tid,))]
                         db.conn.execute("DELETE FROM chunks WHERE turn_id=?", (tid,))
-                        if vi is not None and old_keys:
-                            vi.remove(old_keys)
-                            removed_any = True
+                        stale_keys.extend(old_keys)
                     for idx, text in rec.get("c", []):
                         db.conn.execute(
                             "INSERT OR REPLACE INTO chunks(chunk_key,turn_id,idx,text) VALUES(?,?,?,?)",
                             (f"{tid}#{idx}", tid, idx, text))
                     have.add(tid)
-                    added += 1
+                    file_added += 1
+                    if file_added % _COMMIT_EVERY == 0:
+                        # 상대 기기가 하나뿐이면 그 파일이 곧 전체다 - 파일 끝에서만 커밋하면 모든 턴이 갱신되는
+                        # 첫 동기화(파서 버전 전환 등)에서 수십 초 쓰기 잠금을 쥔다. 벡터를 먼저 지우고 커밋.
+                        if vi is not None and stale_keys:
+                            vi.remove(stale_keys)
+                            stale_keys.clear()
+                            removed_any = True
+                        db.commit()
                 except Exception as e:  # noqa: BLE001
                     # **줄 단위로 잡는다.** 파일 단위로 잡으면 깨진 한 줄이 그 뒤 전부를
                     # 버린다 — 실측으로 5턴 중 3턴이 조용히 사라졌다.
                     bad_lines += 1
                     if bad_lines <= 3:
                         log_fn(f"ERROR 아카이브 {p.name}:{lineno} 건너뜀: {e}")
+        # 파일마다 벡터를 지우고 커밋한다. 전부 한 번에 커밋하면 쓰기 잠금을 끝까지 쥐어(첫 동기화·파서 버전
+        # 전환 때 수십 초) 그동안 앱의 접기·제목 저장이 막힌다. 벡터를 지우는 쪽이 먼저다 - 커밋 뒤에 끊기면
+        # 새 청크가 옛 벡터를 단 채 남는다(반대 순서는 벡터만 없어져 backfill 이 다시 만든다).
+        if vi is not None and stale_keys:
+            vi.remove(stale_keys)
+            removed_any = True
+        # meta(제목·접힘·폴더)도 커밋 대상이다. added 만 보면 '새 턴 없이 정리 상태만 온 회차'가
+        # 통째로 롤백된다 — 커넥션이 닫힐 때 미완료 트랜잭션이 되돌려지기 때문이다.
+        # 앱은 매 호출마다 새 커넥션을 열어서, 실사용에서는 사실상 항상 이 경우였다.
+        if file_added or file_meta:
+            db.commit()
+        added += file_added
+        meta += file_meta
         if bad_lines:
             log_fn(f"ERROR 아카이브 {p.name} — 읽을 수 없는 줄 {bad_lines}개를 건너뛰었어요")
         elif p in stamps:
-            done.append(p)   # 깨진 줄이 있으면 다음에도 읽어 오류를 계속 알린다
-    # meta(제목·접힘·폴더)도 커밋 대상이다. added 만 보면 '새 턴 없이 정리 상태만 온 회차'가
-    # 통째로 롤백된다 — 커넥션이 닫힐 때 미완료 트랜잭션이 되돌려지기 때문이다.
-    # 앱은 매 호출마다 새 커넥션을 열어서, 실사용에서는 사실상 항상 이 경우였다.
-    if added or meta:
-        db.commit()
-    for p in done:
-        _imported[(db_key, str(p))] = stamps[p]
+            _imported[(db_key, str(p))] = stamps[p]   # 깨진 줄이 있으면 다음에도 읽어 오류를 계속 알린다
     if removed_any and vi is not None:
         vi.save()
     if meta:

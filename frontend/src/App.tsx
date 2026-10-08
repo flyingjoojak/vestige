@@ -11,6 +11,7 @@ import { FoldedView } from "@/components/FoldedView"
 import { FolderView } from "@/components/FolderView"
 import { Onboarding } from "@/components/Onboarding"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
+import { CalmStatus } from "@/components/CalmStatus"
 import { DialogProvider } from "@/components/ui/dialogs"
 import { StatusBar } from "@/components/StatusBar"
 import { UpdateBanner } from "@/components/UpdateBanner"
@@ -159,9 +160,10 @@ export default function App() {
       <main className="min-h-0 overflow-y-auto">
         <UpdateBanner />
         {firstRun && (
-          <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-2 border-b border-sky-500/40 bg-sky-500/10 px-4 py-2 text-[13px] text-sky-700 dark:text-sky-300">
+          <div className="flex flex-wrap items-center gap-2 border-b border-sky-500/40 bg-sky-500/10 px-4 py-2 text-[13px] text-sky-700 dark:text-sky-300">
             <Loader2 className="size-4 shrink-0 animate-spin" />
             <span>{t("app.firstRunIndexing", { n: firstRun.turns.toLocaleString() })}</span>
+            <CalmStatus text={t("app.firstRunIndexing", { n: firstRun.turns.toLocaleString() })} busy />
           </div>
         )}
         {mismatch && (
@@ -191,7 +193,7 @@ export default function App() {
           </div>
         )}
         <ErrorBoundary key={`${view}:${nonce}`}>
-          {view === "search" && <SearchView />}
+          {view === "search" && <SearchView onOpenInSessions={(session, turn) => openTurn("sessions", session, turn, session)} />}
           {view === "sessions" && (
             <Browse3Pane kind="sessions" initialSel={jump?.kind === "sessions" ? jump.id : null}
               initialTurn={jump?.kind === "sessions" ? { turn: jump.turn, session: jump.session } : null} />

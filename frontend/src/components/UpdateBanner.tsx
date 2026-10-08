@@ -67,7 +67,13 @@ export function UpdateBanner() {
   const startDownload = () => { setError(null); setPercent(0); setPhase("downloading"); window.vestigeUpdater?.download() }
 
   return (
-    <div role="status" className="border-b border-primary/30 bg-primary/10 px-4 py-2 text-[13px] text-foreground">
+    <div className="border-b border-primary/30 bg-primary/10 px-4 py-2 text-[13px] text-foreground">
+      {/* 알림은 단계가 바뀔 때만(다운로드 퍼센트가 바뀔 때마다 배너 전체를 다시 읽지 않게) */}
+      <span role="status" className="sr-only">
+        {phase === "available" ? t("update.available", { version })
+          : phase === "downloading" ? t("update.downloading")
+          : phase === "downloaded" ? t("update.ready", { version }) : ""}
+      </span>
       <div className="flex flex-wrap items-center gap-2">
         <Download className="size-4 shrink-0 text-primary" />
 
@@ -170,7 +176,7 @@ export function UpdateBanner() {
       </div>
 
       {error && (
-        <div className="mt-1 flex items-center gap-1.5 text-[12px] text-amber-700 dark:text-amber-400">
+        <div role="alert" className="mt-1 flex items-center gap-1.5 text-[12px] text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-3.5 shrink-0" />
           <span>{t("update.failed", { error })}</span>
         </div>
