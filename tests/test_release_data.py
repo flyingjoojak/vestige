@@ -235,3 +235,37 @@ def test_import_of_one_big_peer_file_commits_in_batches(tmp_path):
     assert A.import_archives(dst, proj, "devB", vi=VI()) == n
     assert len(commits) >= 3, commits                  # 배치마다 + 마지막
     assert sum(removes) == n and len(removes) >= 3, removes   # 벡터 삭제도 묶음으로, 커밋 앞에서
+
+
+def test_fts_map_heals_rows_written_by_an_older_app(tmp_path):
+    """업데이트 도중 옛 버전 프로세스(스케줄러·MCP)가 같은 DB 에 색인을 쓰면 FTS 행이 표 없이 생긴다.
+    다시 열 때 한 번 바로잡는다: 표에 없는 행을 등록하고, 같은 턴의 옛 행(중복)은 지운다."""
+    from vestige import store
+    p = tmp_path / "a.db"
+    db = ArchiveDB(p)
+    for t in ("t1", "t2"):
+        db.upsert_turn(_turn(t, a=f"사과 {t}"), source_file=None)
+    # 옛 앱처럼: turn_id 로 지우고 rowid 를 지정하지 않고 다시 넣는다(표는 그대로) + 새 턴은 표 없이 넣는다
+    db.conn.execute("DELETE FROM turns_fts WHERE turn_id='t1'")
+    db.conn.execute("INSERT INTO turns_fts(turn_id,text) VALUES('t1','사과 바나나 t1')")
+    db.upsert_turn(_turn("t7", a="딸기 t7"), source_file=None)                 # 저장이 도중에 실패해 FTS 행이 아예 없는 턴
+    db.conn.execute("DELETE FROM turns_fts_map WHERE turn_id='t7'")
+    db.conn.execute("DELETE FROM turns_fts WHERE turn_id='t7'")
+    db.upsert_turn(_turn("t9", a="멜론 t9"), source_file=None)
+    db.conn.execute("DELETE FROM turns_fts_map WHERE turn_id='t9'")           # t9 는 표 없이 들어온 상태
+    db.conn.execute("DELETE FROM turns_fts WHERE turn_id='t9'")
+    db.conn.execute("INSERT INTO turns_fts(turn_id,text) VALUES('t9','멜론 t9')")
+    db.conn.commit()
+    db.close()
+
+    store._fts_healed.clear()                                                  # 새 프로세스가 처음 여는 것처럼
+    db = ArchiveDB(p)
+    q = lambda s: db.conn.execute(s).fetchone()[0]
+    assert q("SELECT COUNT(*) FROM turns_fts") == q("SELECT COUNT(*) FROM turns_fts_map") == 4
+    assert q("SELECT COUNT(*) FROM turns_fts WHERE rowid NOT IN (SELECT rid FROM turns_fts_map)") == 0
+    assert [t for t, _ in db.keyword_search("바나나")] == ["t1"]
+    assert [t for t, _ in db.keyword_search("멜론")] == ["t9"]
+    assert [t for t, _ in db.keyword_search("딸기")] == ["t7"]                  # 빠졌던 턴도 다시 찾아진다
+    db.upsert_turn(_turn("t9", a="멜론 t9 그리고 수박이 더 길게"), source_file=None)   # 다시 넣어도 중복이 안 생긴다
+    assert q("SELECT COUNT(*) FROM turns_fts") == 4
+    assert [t for t, _ in db.keyword_search("수박이")] == ["t9"]
