@@ -137,6 +137,9 @@ def _checked(rec: dict) -> dict:
 # (새 대화가 없어도) 상대 아카이브 전체를 다시 파싱했다(실측 88MB 430ms, 아카이브에 비례해 커진다).
 # 프로세스 메모리라 앱을 다시 켜면 한 번은 다시 읽는다. 키에 DB 경로를 넣어 다른 DB 와 섞이지 않게.
 _imported: dict[tuple[str, str], tuple[int, int]] = {}
+# 가져오는 동안 이 턴 수마다 커밋해 쓰기 잠금을 놓는다. 실사용 DB 사본(5,003턴 전부 갱신)에서 다른 쓰기가 막힌 최대 시간:
+# 파일 끝에서만 6.6초, 200턴 1.2초, 50턴 0.55초, 25턴 0.33초(커밋 수가 늘어도 전체 시간은 비슷).
+_COMMIT_EVERY = 50
 
 
 def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_fn=print) -> int:
@@ -251,6 +254,14 @@ def import_archives(db, projects_dir: str | Path, my_did: str, *, vi=None, log_f
                             (f"{tid}#{idx}", tid, idx, text))
                     have.add(tid)
                     file_added += 1
+                    if file_added % _COMMIT_EVERY == 0:
+                        # 상대 기기가 하나뿐이면 그 파일이 곧 전체다 - 파일 끝에서만 커밋하면 모든 턴이 갱신되는
+                        # 첫 동기화(파서 버전 전환 등)에서 수십 초 쓰기 잠금을 쥔다. 벡터를 먼저 지우고 커밋.
+                        if vi is not None and stale_keys:
+                            vi.remove(stale_keys)
+                            stale_keys.clear()
+                            removed_any = True
+                        db.commit()
                 except Exception as e:  # noqa: BLE001
                     # **줄 단위로 잡는다.** 파일 단위로 잡으면 깨진 한 줄이 그 뒤 전부를
                     # 버린다 — 실측으로 5턴 중 3턴이 조용히 사라졌다.

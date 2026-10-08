@@ -201,3 +201,37 @@ def test_rebuild_fts_keeps_the_map_in_step(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM turns_fts_map").fetchone()[0] == 3
     db.upsert_turn(_turn("t0", a="수박 0 그리고 멜론"), source_file=None)
     assert db.conn.execute("SELECT COUNT(*) FROM turns_fts").fetchone()[0] == 3
+
+
+def test_import_of_one_big_peer_file_commits_in_batches(tmp_path):
+    """상대 기기가 하나뿐이면(보통) 그 파일 하나가 전체다. 파일 끝에서만 커밋하면 파서 버전 전환처럼 모든 턴이
+    갱신되는 첫 동기화에서 수십 초 쓰기 잠금을 쥐어 접기·제목 저장이 막힌다 - 일정 턴마다도 커밋한다."""
+    proj = tmp_path / "projects"
+    proj.mkdir()
+    src = ArchiveDB(tmp_path / "a.db")
+    dst = ArchiveDB(tmp_path / "b.db")
+    n = 450
+    for i in range(n):
+        tid = f"t{i}"
+        src.upsert_turn(_turn(tid, a="완성된 긴 답변입니다 도구 실행 결과 포함 상세"), source_file=None)
+        src.add_chunks([_chunk(tid, 0, "새 청크")])
+        dst.upsert_turn(_turn(tid, a="짧음"), source_file=None)
+        dst.add_chunks([_chunk(tid, 0, "짧음")])
+    src.commit()
+    dst.commit()
+    A.export_archive(src, proj, "devA")
+
+    removes = []
+
+    class VI:
+        def remove(self, keys):
+            removes.append(len(keys))
+
+        def save(self):
+            pass
+
+    commits = []
+    dst.conn.set_trace_callback(lambda sql: commits.append(sql) if sql.strip().upper() == "COMMIT" else None)
+    assert A.import_archives(dst, proj, "devB", vi=VI()) == n
+    assert len(commits) >= 3, commits                  # 배치마다 + 마지막
+    assert sum(removes) == n and len(removes) >= 3, removes   # 벡터 삭제도 묶음으로, 커밋 앞에서
