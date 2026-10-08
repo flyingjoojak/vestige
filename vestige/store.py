@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS cursors(
   hold_offset INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS turns_fts_map(
+  rid INTEGER PRIMARY KEY AUTOINCREMENT, turn_id TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS raw_cursors(
   file_path TEXT PRIMARY KEY, mirrored_offset INTEGER, session_id TEXT, source TEXT, updated_at REAL,
   mirror_bytes INTEGER
@@ -301,6 +304,18 @@ def _mig_0016_chunk_embed_hash(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE chunks ADD COLUMN embed_hash TEXT")
 
 
+def _mig_0017_fts_rowid_map(conn: sqlite3.Connection) -> None:
+    """turn_id -> FTS rowid 표. FTS 의 turn_id 는 UNINDEXED 라 `DELETE ... WHERE turn_id=?` 가 매번 FTS 전체를
+    훑는다(5천 턴 38ms, 5만 턴 370ms - 재색인이 턴 수의 제곱으로 느려지고 그동안 쓰기 잠금을 쥔다).
+    rowid 로 지우려면 그 rowid 를 알아야 해서 표를 둔다. 기존 FTS 행의 rowid 를 그대로 옮긴다(재구축 불필요)."""
+    conn.execute("CREATE TABLE IF NOT EXISTS turns_fts_map("
+                 "rid INTEGER PRIMARY KEY AUTOINCREMENT, turn_id TEXT NOT NULL UNIQUE)")
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='turns_fts'").fetchone():
+        conn.execute("INSERT OR IGNORE INTO turns_fts_map(rid, turn_id) SELECT rowid, turn_id FROM turns_fts")
+        # 같은 turn_id 가 둘 이상이던 옛 잔재는 표에 못 들어갔다 - 이제 아무도 못 지우니 여기서 정리한다.
+        conn.execute("DELETE FROM turns_fts WHERE rowid NOT IN (SELECT rid FROM turns_fts_map)")
+
+
 # 순서 고정 — 끝에만 추가한다. len(_MIGRATIONS) 가 곧 최신 스키마 버전.
 _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0001_source_columns,
@@ -319,6 +334,7 @@ _MIGRATIONS: tuple[_Migration, ...] = (
     _mig_0014_turn_queued,
     _mig_0015_turn_parser_version,
     _mig_0016_chunk_embed_hash,
+    _mig_0017_fts_rowid_map,
 )
 _SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -431,17 +447,31 @@ class ArchiveDB:
     def _fts_text(question: str, answer: str, actions: tuple[Action, ...]) -> str:
         return "\n".join([question or "", answer or "", "; ".join(a.render() for a in actions)])
 
+    def _fts_put(self, turn_id: str, text: str) -> None:
+        """턴의 FTS 행을 넣거나 바꾼다. 같은 rowid 를 다시 쓴다 - turn_id 로 지우면 FTS 전체를 훑는다."""
+        r = self.conn.execute("SELECT rid FROM turns_fts_map WHERE turn_id=?", (turn_id,)).fetchone()
+        if r:
+            rid = r[0]
+            self.conn.execute("DELETE FROM turns_fts WHERE rowid=?", (rid,))
+        else:
+            rid = self.conn.execute("INSERT INTO turns_fts_map(turn_id) VALUES(?)", (turn_id,)).lastrowid
+        self.conn.execute("INSERT INTO turns_fts(rowid,turn_id,text) VALUES(?,?,?)", (rid, turn_id, text))
+
+    def _fts_drop(self, turn_id: str) -> None:
+        r = self.conn.execute("SELECT rid FROM turns_fts_map WHERE turn_id=?", (turn_id,)).fetchone()
+        if r:
+            self.conn.execute("DELETE FROM turns_fts WHERE rowid=?", (r[0],))
+            self.conn.execute("DELETE FROM turns_fts_map WHERE rid=?", (r[0],))
+
     def rebuild_fts(self) -> int:
         """기존 turns 전체로 FTS 인덱스를 재구축(백필/최초 1회)."""
         if not self.fts_enabled:
             return 0
         self.conn.execute("DELETE FROM turns_fts")
+        self.conn.execute("DELETE FROM turns_fts_map")
         n = 0
-        for r in self.conn.execute("SELECT id,question,answer,actions FROM turns"):
-            text = self._fts_text(r["question"], r["answer"], _actions_from_json(r["actions"]))
-            self.conn.execute(
-                "INSERT INTO turns_fts(turn_id,text) VALUES(?,?)", (r["id"], text)
-            )
+        for r in self.conn.execute("SELECT id,question,answer,actions FROM turns").fetchall():
+            self._fts_put(r["id"], self._fts_text(r["question"], r["answer"], _actions_from_json(r["actions"])))
             n += 1
         self.conn.commit()
         return n
@@ -462,7 +492,8 @@ class ArchiveDB:
             ).fetchall()
         except sqlite3.OperationalError:
             return []
-        return [(r["turn_id"], r["s"]) for r in rows]
+        seen: set[str] = set()   # 표를 모르는 옛 앱이 같은 턴을 다시 넣었다면 행이 둘일 수 있다
+        return [(r["turn_id"], r["s"]) for r in rows if not (r["turn_id"] in seen or seen.add(r["turn_id"]))]
 
     def close(self) -> None:
         self.conn.close()
@@ -517,11 +548,7 @@ class ArchiveDB:
              source, source_file, 1 if turn.queued else 0, turn.parser_version),
         )
         if self.fts_enabled:  # 키워드 인덱스 동기화(멱등)
-            self.conn.execute("DELETE FROM turns_fts WHERE turn_id=?", (turn.id,))
-            self.conn.execute(
-                "INSERT INTO turns_fts(turn_id,text) VALUES(?,?)",
-                (turn.id, self._fts_text(turn.question, turn.answer, turn.actions)),
-            )
+            self._fts_put(turn.id, self._fts_text(turn.question, turn.answer, turn.actions))
         return True
 
     def delete_turns(self, turn_ids: list[str]) -> list[str]:
@@ -534,7 +561,7 @@ class ArchiveDB:
             self.conn.execute("DELETE FROM chunks WHERE turn_id=?", (tid,))
             self.conn.execute("DELETE FROM turns WHERE id=?", (tid,))
             if self.fts_enabled:
-                self.conn.execute("DELETE FROM turns_fts WHERE turn_id=?", (tid,))
+                self._fts_drop(tid)
         return removed
 
     def turn_brief(self, ids: list[str]) -> dict[str, sqlite3.Row]:

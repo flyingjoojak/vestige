@@ -144,3 +144,60 @@ def test_import_removes_stale_vectors_in_one_call_per_file(tmp_path):
 
     assert A.import_archives(dst, proj, "devB", vi=VI()) == 3
     assert len(calls) == 1 and sorted(calls[0]) == ["t0#0", "t1#0", "t2#0"], calls
+
+
+# --- FTS: 턴 하나 지우고 다시 넣을 때 FTS 전체를 훑지 않는다 -----------------------------------------
+
+def _fts_deletes(db, fn):
+    seen = []
+    db.conn.set_trace_callback(lambda sql: seen.append(sql) if "DELETE FROM turns_fts WHERE" in sql else None)
+    try:
+        fn()
+    finally:
+        db.conn.set_trace_callback(None)
+    return seen
+
+
+def test_fts_is_updated_by_rowid_not_by_scanning(tmp_path):
+    """turn_id 는 FTS 의 UNINDEXED 칸이라 `DELETE ... WHERE turn_id=?` 는 매번 FTS 전체를 훑는다
+    (5천 턴 38ms, 5만 턴 370ms - 재색인이 턴 수의 제곱으로 느려지고 그동안 쓰기 잠금을 쥔다)."""
+    db = ArchiveDB(tmp_path / "a.db")
+    db.upsert_turn(_turn("t1", a="사과 이야기"), source_file=None)
+    seen = _fts_deletes(db, lambda: db.upsert_turn(_turn("t1", a="바나나 이야기가 더 길게"), source_file=None))
+    assert seen and all("rowid" in s and "turn_id" not in s for s in seen), seen
+    assert [t for t, _ in db.keyword_search("바나나")] == ["t1"]
+    assert db.keyword_search("사과") == []                  # 옛 본문은 빠졌다
+
+    seen = _fts_deletes(db, lambda: db.delete_turns(["t1"]))
+    assert seen and all("rowid" in s and "turn_id" not in s for s in seen), seen
+    assert db.keyword_search("바나나") == []
+
+
+def test_fts_rowid_map_is_built_for_a_db_that_already_has_fts_rows(tmp_path):
+    """0.3.1 DB 는 매핑 표가 없다 - 열 때 기존 FTS 행으로 채워서, 다시 넣어도 중복이 생기지 않아야 한다."""
+    p = tmp_path / "a.db"
+    db = ArchiveDB(p)
+    for i in range(3):
+        db.upsert_turn(_turn(f"t{i}", a=f"포도 {i}"), source_file=None)
+    db.conn.execute("DROP TABLE turns_fts_map")
+    db.conn.execute("PRAGMA user_version = 16")
+    db.conn.commit()
+    db.close()
+
+    db = ArchiveDB(p)                                            # 마이그레이션 0017
+    assert db.conn.execute("SELECT COUNT(*) FROM turns_fts_map").fetchone()[0] == 3
+    db.upsert_turn(_turn("t1", a="포도 1 에 딸기가 더"), source_file=None)
+    ids = [t for t, _ in db.keyword_search("포도")]
+    assert sorted(ids) == ["t0", "t1", "t2"], ids                # t1 이 두 번 나오지 않는다
+    assert db.conn.execute("SELECT COUNT(*) FROM turns_fts").fetchone()[0] == 3
+    assert [t for t, _ in db.keyword_search("딸기가")] == ["t1"]
+
+
+def test_rebuild_fts_keeps_the_map_in_step(tmp_path):
+    db = ArchiveDB(tmp_path / "a.db")
+    for i in range(3):
+        db.upsert_turn(_turn(f"t{i}", a=f"수박 {i}"), source_file=None)
+    assert db.rebuild_fts() == 3
+    assert db.conn.execute("SELECT COUNT(*) FROM turns_fts_map").fetchone()[0] == 3
+    db.upsert_turn(_turn("t0", a="수박 0 그리고 멜론"), source_file=None)
+    assert db.conn.execute("SELECT COUNT(*) FROM turns_fts").fetchone()[0] == 3
