@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 # FTS MATCH 용 토큰: ASCII 영숫자 런 + 한글 런. '_'는 제외(FTS unicode61이 _로 분리하므로).
 _FTS_TOKEN = re.compile(r"[A-Za-z0-9]+|[가-힣]+")
+_fts_healed: set[str] = set()   # 표 보정을 끝낸 DB 파일(프로세스 안에서 한 번만)
+_FTS_HEAL_MAX = 1000            # 한 번에 채워 넣는 FTS 행 없는 턴의 상한
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS turns(
@@ -434,6 +436,7 @@ class ArchiveDB:
             "SELECT name FROM sqlite_master WHERE name='turns_fts'"
         ).fetchone()
         if has:
+            self._heal_fts_map()
             return True
         try:
             self.conn.execute(
@@ -442,6 +445,42 @@ class ArchiveDB:
             return True
         except sqlite3.OperationalError:
             return False
+
+    def _heal_fts_map(self) -> None:
+        """표(turns_fts_map)에 없는 FTS 행을 바로잡는다 - 프로세스마다 DB 파일당 한 번.
+
+        업데이트 도중 옛 버전 프로세스(OS 스케줄러, 열려 있던 MCP)가 같은 DB 에 색인을 쓰면, 그 앱은 표를 몰라
+        turn_id 로 지우고 rowid 없이 다시 넣는다 - 표에 없는 행이 생기고, 표는 이미 지워진 rowid 를 가리킨다.
+        그대로 두면 그 턴은 새 행이 하나 더 생겨 영영 중복이 남는다. 표에 없는 행을 정본으로 등록하고,
+        같은 턴의 옛 행은 지운다."""
+        key = str(getattr(self, "path", ""))
+        if key in _fts_healed:
+            return
+        try:
+            rows = self.conn.execute(
+                "SELECT rowid, turn_id FROM turns_fts WHERE rowid NOT IN (SELECT rid FROM turns_fts_map) "
+                "ORDER BY rowid").fetchall()
+            for rowid, tid in rows:                       # 같은 턴이 둘이면 나중 행이 이긴다
+                old = self.conn.execute("SELECT rid FROM turns_fts_map WHERE turn_id=?", (tid,)).fetchone()
+                if old:
+                    self.conn.execute("DELETE FROM turns_fts WHERE rowid=?", (old[0],))
+                    self.conn.execute("UPDATE turns_fts_map SET rid=? WHERE turn_id=?", (rowid, tid))
+                else:
+                    self.conn.execute("INSERT INTO turns_fts_map(rid, turn_id) VALUES(?,?)", (rowid, tid))
+            # FTS 행이 아예 없는 턴(저장이 도중에 실패한 것): 모두 등록됐으니 '표에 없는 턴' = 'FTS 행 없는 턴'이다.
+            # 새로 FTS 를 만든 DB 처럼 전부가 빠진 경우는 여기서 하지 않는다(열 때 오래 걸린다).
+            missing = self.conn.execute(
+                "SELECT id, question, answer, actions FROM turns WHERE id NOT IN (SELECT turn_id FROM turns_fts_map) LIMIT ?",
+                (_FTS_HEAL_MAX + 1,)).fetchall()
+            if 0 < len(missing) <= _FTS_HEAL_MAX:
+                for t in missing:
+                    self._fts_put(t[0], self._fts_text(t[1], t[2], _actions_from_json(t[3])))
+            if rows or missing:
+                self.conn.commit()
+                logger.info("키워드 색인 보정: 표에 없던 행 %d건, 행이 없던 턴 %d건", len(rows), len(missing))
+            _fts_healed.add(key)
+        except sqlite3.OperationalError:
+            self.conn.rollback()   # 다른 프로세스가 쓰는 중이면 다음에 연 프로세스가 한다
 
     @staticmethod
     def _fts_text(question: str, answer: str, actions: tuple[Action, ...]) -> str:
@@ -454,7 +493,11 @@ class ArchiveDB:
             rid = r[0]
             self.conn.execute("DELETE FROM turns_fts WHERE rowid=?", (rid,))
         else:
-            rid = self.conn.execute("INSERT INTO turns_fts_map(turn_id) VALUES(?)", (turn_id,)).lastrowid
+            # 번호는 표의 시퀀스와 FTS 의 최대 rowid 중 큰 쪽 다음 - 옛 앱이 표 없이 넣은 행의 번호와 겹치면 저장이 실패한다
+            seq = self.conn.execute("SELECT seq FROM sqlite_sequence WHERE name='turns_fts_map'").fetchone()
+            top = self.conn.execute("SELECT MAX(rowid) FROM turns_fts").fetchone()[0] or 0
+            rid = max(seq[0] if seq else 0, top) + 1
+            self.conn.execute("INSERT INTO turns_fts_map(rid, turn_id) VALUES(?,?)", (rid, turn_id))
         self.conn.execute("INSERT INTO turns_fts(rowid,turn_id,text) VALUES(?,?,?)", (rid, turn_id, text))
 
     def _fts_drop(self, turn_id: str) -> None:
