@@ -666,6 +666,8 @@ export function SettingsView() {
   }
 
   const be = BACKENDS.find((b) => b.v === backend)!
+  // 서버는 Gemini 키를 GEMINI_API_KEY 나 GOOGLE_API_KEY 어느 쪽에서든 읽는다 - 화면도 둘 다 인정한다.
+  const keySet = !!(be.key && (cfg?.keys[be.key] || (be.v === "gemini" && cfg?.keys.GOOGLE_API_KEY)))
 
   function onBackendChange(v: string) {
     setBackend(v)
@@ -707,7 +709,7 @@ export function SettingsView() {
   async function save() {
     setBlockMsg("")
     // 키가 필요한 백엔드인데 입력도 없고 저장된 것도 없으면 → 저장 차단.
-    if (be.key && !apiKey && !cfg?.keys[be.key]) {
+    if (be.key && !apiKey && !keySet) {
       setBlockMsg(t("settings.needApiKey"))
       return
     }
@@ -973,9 +975,9 @@ export function SettingsView() {
                   </Row>
                 )}
                 {be.key && (
-                  <Row label={`${t("settings.apiKey")} ${cfg?.keys[be.key] ? t("settings.apiKeySet") : ""}`}>
+                  <Row label={`${t("settings.apiKey")} ${keySet ? t("settings.apiKeySet") : ""}`}>
                     <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} aria-label={t("settings.apiKey")}
-                      className="h-8 w-56" placeholder={cfg?.keys[be.key] ? t("settings.apiKeyChangePlaceholder") : (be.keyExKey ? t(be.keyExKey) : "")} />
+                      className="h-8 w-56" placeholder={keySet ? t("settings.apiKeyChangePlaceholder") : (be.keyExKey ? t(be.keyExKey) : "")} />
                   </Row>
                 )}
                 {backend === "claude" && (
@@ -1217,8 +1219,8 @@ export function SettingsView() {
                   <div className="mt-2.5 space-y-1.5 border-t pt-2.5">
                     <div className="flex items-center gap-2">
                       <span className="text-foreground">{t("settings.parallelProcs")}</span>
-                      <input type="number" min={1} max={16} value={parallelN}
-                        onChange={(e) => setParallelN(Math.max(1, Math.min(16, +e.target.value || 1)))}
+                      <input type="number" min={2} max={8} value={parallelN}
+                        onChange={(e) => setParallelN(Math.max(2, Math.min(8, +e.target.value || 2)))}
                         onWheel={(e) => (e.target as HTMLInputElement).blur()}
                         className="h-7 w-16 rounded-md border bg-background px-2 tabular-nums outline-none" />
                       <span className="text-muted-foreground">{t("settings.recMaxLabel")} <b className="text-foreground tabular-nums">{recMax}</b></span>

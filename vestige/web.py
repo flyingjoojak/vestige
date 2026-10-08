@@ -307,23 +307,26 @@ async def _lifespan(app: FastAPI):
     # 오래 사는 웹 서버에서 하므로 UMAP numba JIT은 1회만(짧은 인덱스 프로세스와 대조).
     def _warm():
         import time
+        import traceback
         try:
             _graph3d_data()                 # 시작 시 1회 준비(캐시 있으면 즉시)
         except Exception:
-            pass
+            traceback.print_exc(file=_sys.stderr)
         while True:                          # 이후 주기적으로 벡터 수 바뀌면 조용히 재계산
             time.sleep(180)
             try:
                 _graph3d_data()              # stale-while-revalidate: 바뀌었으면 백그라운드 갱신 트리거
             except Exception:
-                pass
+                traceback.print_exc(file=_sys.stderr)
     threading.Thread(target=_warm, daemon=True).start()
 
     # 로그 폴더를 뒤에서 미리 훑는다(하위 세션 로그 수백 MB 를 걸러 수 초). 세션 목록·대기 건수는 이 훑기를
     # 기다리지 않는다 - 예전엔 앱을 켠 뒤 첫 세션 목록이 이걸 기다리느라 44초 멈췄다.
-    with contextlib.suppress(Exception):
+    try:
         from .indexer import warm_walk_cache
         warm_walk_cache()
+    except Exception:  # 실패하면 첫 요청이 그 자리에서 훑어 첫 목록이 다시 멈춘다 - 이유를 남긴다
+        logging.getLogger(__name__).warning("로그 폴더 미리 훑기 실패", exc_info=True)
 
     # 이전에 켜둔 기기 연결(임베디드 Syncthing)이 있으면 자동 재개.
     # 충돌 정리 워커는 기기 연결에 종속 — _st_start_bg가 준비되면 함께 시작한다(별도 토글 없음).
@@ -1355,6 +1358,9 @@ def _resume_env() -> dict:
     for k in ("CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "NO_COLOR"):
         env.pop(k, None)
     env["CLAUDE_CODE_FORCE_SESSION_PERSISTENCE"] = "1"
+    # cmd.exe 는 PATH 보다 현재 폴더를 먼저 본다. 재개 창의 cwd 는 세션 로그에 적힌 프로젝트 폴더라, 거기에
+    # (예: git pull 로 들어온) claude.bat 이 있으면 '재개'를 누르는 순간 그게 실행된다.
+    env["NoDefaultCurrentDirectoryInExePath"] = "1"
     return env
 
 
@@ -1837,8 +1843,11 @@ def _pending_snapshot() -> dict:
             enr = db.conn.execute(
                 "SELECT COUNT(*) c FROM turns WHERE summary IS NULL").fetchone()["c"]
         except Exception:  # noqa: BLE001 — 대기 조회 실패해도 UI가 죽지 않게 이전 값 유지
+            if not _pending_cache.get("failing"):   # 8초마다 같은 줄이 쌓이지 않게 연속 실패는 한 번만
+                logging.getLogger(__name__).warning("대기 건수 조회 실패 - 이전 값을 유지합니다", exc_info=True)
+                _pending_cache["failing"] = True
             return _pending_cache
-        _pending_cache.update(at=now, index=idx, enrich_turns=enr)
+        _pending_cache.update(at=now, index=idx, enrich_turns=enr, failing=False)
         return _pending_cache
     finally:
         _pending_lock.release()
@@ -2387,7 +2396,8 @@ def _graph3d_recompute_bg(n: int) -> None:
         try:
             _graph3d_compute_and_cache(n)
         except Exception:
-            pass
+            import traceback   # 계속 실패하면 지도가 옛 캐시로 남는다 - 이유를 남긴다
+            traceback.print_exc(file=_sys.stderr)
         finally:
             _graph3d_recomputing["on"] = False
     threading.Thread(target=work, daemon=True).start()
