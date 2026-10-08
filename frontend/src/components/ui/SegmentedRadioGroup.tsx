@@ -45,7 +45,7 @@ export function SegmentedRadioGroup<T extends string>({ label, value, options, o
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => handleKeyDown(e, i)}
-            className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 ${active ? "bg-primary/10 font-semibold text-primary" : "text-muted-foreground hover:text-foreground"}`}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring ${active ? "bg-primary/10 font-semibold text-primary" : "text-muted-foreground hover:text-foreground"}`}
           >
             {o.label}
           </button>

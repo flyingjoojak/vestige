@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
 import { SchemaReportSection } from "@/components/SchemaReportSection"
+import { CalmStatus } from "@/components/CalmStatus"
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -957,7 +958,7 @@ export function SettingsView() {
               <Section title={t("settings.tabEnrich")}>
                 <Row label={t("settings.backend")}>
                   <select value={backend} onChange={(e) => onBackendChange(e.target.value)} aria-label={t("settings.backendAria")}
-                    className="rounded-md border bg-background px-2 py-1.5 outline-none">
+                    className="rounded-md border bg-background px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     {BACKENDS.map((b) => <option key={b.v} value={b.v}>{t(b.labelKey)}</option>)}
                   </select>
                 </Row>
@@ -965,7 +966,7 @@ export function SettingsView() {
                   <Row label={t("settings.model")}>
                     <select value={customModel ? CUSTOM : model} aria-label={t("settings.modelAria")}
                       onChange={(e) => { if (e.target.value === CUSTOM) { setCustomModel(true) } else { setCustomModel(false); setModel(e.target.value) } }}
-                      className="rounded-md border bg-background px-2 py-1.5 outline-none">
+                      className="rounded-md border bg-background px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring">
                       {be.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       <option value={CUSTOM}>{t("settings.modelCustom")}</option>
                     </select>
@@ -1042,7 +1043,10 @@ export function SettingsView() {
                   <Button variant="outline" size="sm" disabled={backend === "off"} busy={!!enrichSt?.running} onClick={doEnrich}>
                     {enrichSt?.running && <Loader2 className="mr-1 size-4 animate-spin" />}{t("settings.enrichNow")}
                   </Button>
-                  <span role="status" aria-live="polite" className={`text-[11px] ${enrichErr && !enrichSt?.running ? "text-destructive" : "text-muted-foreground"}`}>
+                  <CalmStatus busy={!!enrichSt?.running}
+                    text={enrichSt?.running ? t("settings.enrichingPhase", { phase: enrichSt.phase })
+                      : enrichErr ? enrichErr : enrichPending > 0 ? t("settings.enrichPending", { n: enrichPending }) : t("settings.enrichUpToDate")} />
+                  <span className={`text-[11px] ${enrichErr && !enrichSt?.running ? "text-destructive" : "text-muted-foreground"}`}>
                     {enrichSt?.running
                       ? (enrichSt.total_sessions > 0 ? t("settings.enrichingSessions", { done: enrichSt.done_sessions, total: enrichSt.total_sessions }) : t("settings.enrichingPhase", { phase: enrichSt.phase }))
                       : enrichErr
@@ -1096,7 +1100,9 @@ export function SettingsView() {
                     <Button variant="outline" size="sm" busy={!!ixStatus?.running || reindexing} onClick={doRunIndex}>
                       {ixStatus?.running && <Loader2 className="mr-1 size-4 animate-spin" />}{t("settings.indexNow")}
                     </Button>
-                    <span role="status" aria-live="polite" className="text-[11px] text-muted-foreground">
+                    <CalmStatus busy={!!ixStatus?.running}
+                      text={ixStatus?.running ? t("settings.indexingShort") : String(idxPendingText ?? "")} />
+                    <span className="text-[11px] text-muted-foreground">
                       {ixStatus?.running
                         ? (ixStatus.total_chunks > 0
                             ? t("settings.selfHealing")
@@ -1120,7 +1126,8 @@ export function SettingsView() {
                 </div>
                 {reindexing && (
                   <div className="border-b py-3.5">
-                    <div role="status" aria-live="polite" className="mb-1.5 flex items-center gap-2 text-sm text-primary">
+                    <CalmStatus busy text={t("settings.reindexing", { msg: "" })} />
+                    <div className="mb-1.5 flex items-center gap-2 text-sm text-primary">
                       <Loader2 className="size-4 animate-spin" />{t("settings.reindexing", { msg: reindexMsg })}
                     </div>
                     {reindexProg.totalChunks > 0
@@ -1222,7 +1229,7 @@ export function SettingsView() {
                       <input type="number" min={2} max={8} value={parallelN}
                         onChange={(e) => setParallelN(Math.max(2, Math.min(8, +e.target.value || 2)))}
                         onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                        className="h-7 w-16 rounded-md border bg-background px-2 tabular-nums outline-none" />
+                        className="h-7 w-16 rounded-md border bg-background px-2 tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                       <span className="text-muted-foreground">{t("settings.recMaxLabel")} <b className="text-foreground tabular-nums">{recMax}</b></span>
                     </div>
                     <div className="tabular-nums text-muted-foreground">
