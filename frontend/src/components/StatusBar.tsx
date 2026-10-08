@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { usePolling } from "@/lib/usePolling"
+import { CalmStatus } from "./CalmStatus"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import { Loader2 } from "lucide-react"
@@ -95,14 +96,16 @@ export function StatusBar() {
       </span>
       {/* 오른쪽: 색인 상태(필수·색상) + 동기화 상태(꺼짐이면 회색으로 표시) — 항상 한 줄에 온전히 */}
       <span className="ml-auto flex shrink-0 items-center gap-x-3 whitespace-nowrap">
-        <span title={idx.tip ?? t("statusbar.indexTip")} aria-live="polite" aria-atomic="true" className={`inline-flex items-center gap-1.5 font-medium ${idx.tone}`}>
+        <CalmStatus text={idx.text} busy={!!idx.spin} />
+        <span title={idx.tip ?? t("statusbar.indexTip")} className={`inline-flex items-center gap-1.5 font-medium ${idx.tone}`}>
           {idx.spin
             ? <Loader2 className="size-3 shrink-0 animate-spin" />
             : <span className={`size-2 rounded-full ${idx.dot}`} />}
           {idx.text}
         </span>
         <span className="opacity-30">·</span>
-        <span title={t("statusbar.syncTip")} aria-live="polite" aria-atomic="true" className={`inline-flex items-center gap-1.5 ${sync.tone}`}>
+        <CalmStatus text={sync.text} busy={syncPending} />
+        <span title={t("statusbar.syncTip")} className={`inline-flex items-center gap-1.5 ${sync.tone}`}>
           <span className={`size-2 rounded-full ${sync.dot}`} />{sync.text}
         </span>
       </span>

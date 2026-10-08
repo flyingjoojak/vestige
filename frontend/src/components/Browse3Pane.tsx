@@ -318,7 +318,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
   const dq = useDebounced(q, 300)
   useEffect(() => { void runSearch(dq, mode) }, [dq, mode, since, until])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  function pickGroup(id: string) { setSel(id); setSelTurn(null) }
+  function pickGroup(id: string) { setSel(id); setSelTurn(null); focusKeyAfterRender("back") }
 
   // 세션을 목록에서 바로 접고 펼친다(매번 세션에 들어가 '세션 전체 접기'를 누르지 않게).
   // 딸린 하위 에이전트 세션도 같이 접는다 - 부모만 접으면 부모가 목록에서 빠지면서 하위 세션들이
@@ -337,6 +337,9 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       await (folded ? hideSession(id) : unhideSession(id))
     } catch (e) {
       flip(!folded)                                       // 서버가 거부하면 화면도 되돌린다
+      // '방금 접음' 표시도 되돌린다 - 펼치기가 실패했는데 표시를 지운 채로 두면 접힌 행이 목록에서 빠져
+      // 오류 문구(행 안에 있다)도, 되돌리기 버튼도 사라진다.
+      setJustFolded((prev) => { const n = new Map(prev); if (folded) n.delete(id); else n.set(id, ids); return n })
       focusKeyAfterRender(folded ? `fold-${id}` : `undo-${id}`)   // 되돌린 버튼으로
       setFoldErr({ id, text: errText(t, e, "chat.foldFailed") })
     }
@@ -395,7 +398,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
     const body = (
       <>
         {groupIcon(g)}
-        <button onClick={() => pickGroup(g.id)}
+        <button onClick={() => pickGroup(g.id)} data-focus={`row-${g.id}`}
           className={`min-w-0 flex-1 text-left after:absolute after:inset-0 after:content-[''] ${g.folded ? "opacity-55" : ""}`}>
           <span className={compact ? "block truncate text-sm font-medium" : "block truncate text-sm font-medium"}>{g.label}</span>
           <span className={compact
@@ -512,7 +515,8 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
       <div className="flex min-h-0 flex-col border-r">
         <div className="shrink-0 border-b p-4">
           <div className="mb-2 flex items-center gap-2">
-            <button onClick={() => setSel(null)} className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:opacity-75">
+            <button data-focus="back" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:opacity-75"
+              onClick={() => { const was = sel; setSel(null); if (was) focusKeyAfterRender(`row-${was}`) }}>
               <ArrowLeft className="size-4" />{title}
             </button>
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
@@ -537,7 +541,7 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               </div>
               <div className="text-[10.5px] text-muted-foreground">{t("browse.subagentNote")}</div>
               {parentSid && (
-                <button type="button" onClick={() => setSel(parentSid)}
+                <button type="button" onClick={() => { setSel(parentSid); focusKeyAfterRender("back") }}
                   className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-1.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15">
                   <ArrowLeft className="size-3.5" />{t("browse.openParent")}
                 </button>
@@ -615,10 +619,10 @@ export function Browse3Pane({ kind, initialSel = null, initialTurn = null }: {
               options={MODES.map((m) => ({ value: m.v, label: <><m.Icon className="size-3.5" />{t(m.key)}</> }))} />
             <label className="inline-flex items-center gap-1">{t("browse.since")}
               <input type="date" value={since} onClick={openPicker} onFocus={openPicker} onChange={(e) => setSince(e.target.value)}
-                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
+                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm [color-scheme:light_dark]" /></label>
             <label className="inline-flex items-center gap-1">{t("browse.until")}
               <input type="date" value={until} onClick={openPicker} onFocus={openPicker} onChange={(e) => setUntil(e.target.value)}
-                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none shadow-sm [color-scheme:light_dark]" /></label>
+                className="cursor-pointer rounded-md border bg-card px-1.5 py-1 tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-sm [color-scheme:light_dark]" /></label>
           </div>
         </div>
         <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
