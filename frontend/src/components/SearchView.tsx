@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChatThread } from "./ChatThread"
 import { focusKeyAfterRender } from "@/lib/focus"
+import { GoToSessionButton } from "./GoToSessionButton"
 import { SourceFilter } from "./SourceFilter"
 import { AddToFolder } from "./AddToFolder"
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup"
@@ -22,7 +23,8 @@ function openPicker(e: React.MouseEvent<HTMLInputElement> | React.FocusEvent<HTM
   try { el.showPicker?.() } catch { /* 미지원 브라우저 */ }
 }
 
-export function SearchView() {
+// onOpenInSessions: 고른 결과의 세션을 세션 목록 화면에서 연다(이 화면의 채팅은 내용 확인용이라 세션을 이어서 하지 못한다).
+export function SearchView({ onOpenInSessions }: { onOpenInSessions?: (session: string, turn: string) => void } = {}) {
   const { t } = useTranslation()
   const EXAMPLES = [t("search.ex1"), t("search.ex2"), t("search.ex3"), t("search.ex4"), t("search.ex5")]
   const MODES: { value: SearchMode; label: React.ReactNode }[] = [
@@ -337,7 +339,10 @@ export function SearchView() {
         {sel
           // 검색 결과로 들어오면 그 턴으로, '최근 세션'으로 들어오면(지목한 턴 없음) 마지막 대화로.
           ? <ChatThread key={`${sel.session}:${sel.turn}`} session={sel.session}
-              focusTurn={sel.turn} focusLast={!sel.turn} />
+              focusTurn={sel.turn} focusLast={!sel.turn}
+              headerAction={onOpenInSessions && (
+                <GoToSessionButton onClick={() => onOpenInSessions(sel.session, sel.turn ?? "")} />
+              )} />
           : <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
               {t("search.detailPlaceholder")}
             </div>}

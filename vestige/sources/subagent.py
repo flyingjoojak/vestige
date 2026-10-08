@@ -18,6 +18,7 @@ Claude Code 는 서브에이전트 대화를 부모 세션과 같은 폴더의 �
 from __future__ import annotations
 
 import json
+import logging
 import mmap
 import os
 import re
@@ -63,7 +64,7 @@ def _strip_wrapper(text: str) -> str:
 
 def _is_meta_user_prompt(obj: dict) -> bool:
     """서브에이전트 파일에서 '사람이 보낸 후속 지시'(isMeta user, 실텍스트, 비-plumbing)인지."""
-    return bool(obj.get("isMeta")) and is_real_user_prompt(obj)
+    return isinstance(obj, dict) and bool(obj.get("isMeta")) and is_real_user_prompt(obj)
 
 
 def _agent_id(objs: Iterable[dict]) -> str | None:
@@ -111,12 +112,15 @@ class SubagentAdapter:
         if hit is not None and hit[0] == sig:
             return hit[1]
         ok = self._scan(path)
+        if ok is None:
+            return False   # 읽기 실패는 캐시하지 않는다 - '후속 지시 부족'으로 굳으면 앱을 다시 켤 때까지 색인되지 않는다
         _gate_cache[key] = (sig, ok)
         return ok
 
     @staticmethod
-    def _scan(path: Path) -> bool:
-        """조기 종료로 통과 파일은 저렴. 통과 못 하는 파일은 전문을 읽는다(그래서 캐시가 필요)."""
+    def _scan(path: Path) -> bool | None:
+        """조기 종료로 통과 파일은 저렴. 통과 못 하는 파일은 전문을 읽는다(그래서 캐시가 필요).
+        읽지 못했으면 None(일시적 오류일 수 있어 캐시하지 않는다)."""
         # "isMeta": true 가 없는 줄은 후속 지시일 수 없다 - 그런 줄은 JSON 파싱을 건너뛴다. 예전엔 모든 줄을
         # 파싱해, 앱을 켠 뒤 처음 훑을 때 하위 세션 505개(6.4만 줄)에 12초(설치본은 색인과 겹쳐 44초)
         # 걸렸고 그동안 세션 목록이 멈췄다.
@@ -144,8 +148,9 @@ class SubagentAdapter:
                             seen += 1
                             if seen >= _MIN_FOLLOWUPS:
                                 return True
-        except (OSError, ValueError):  # 읽을 수 없는 파일은 색인 대상에서 조용히 제외
-            return False
+        except (OSError, ValueError) as e:  # 읽을 수 없는 파일은 이번엔 색인 대상에서 제외하되 남긴다
+            logging.getLogger(__name__).warning("하위 에이전트 로그를 읽지 못함 %s: %s", path.name, e)
+            return None
         return False
 
     def read_records(self, path: str | Path, start_offset: int = 0) -> Iterator[tuple[dict, int]]:
