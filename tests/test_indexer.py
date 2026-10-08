@@ -84,6 +84,11 @@ def test_has_new_data(tmp_path, monkeypatch):
         import json as _j
         fh.write((_j.dumps({"type": "user", "uuid": "u9", "sessionId": "s1",
                             "message": {"role": "user", "content": "새 질문 추가됨 상세"}}) + "\n").encode())
+    # 방금 이어 쓴 단일 턴은 진행 중이라 색인기가 보류한다(새 데이터 아님) - 쉬는 파일이 되면 대상.
+    assert has_new_data(db, projects_dir=proj) is False
+    import os, time
+    old = time.time() - 10 * 60
+    os.utime(f, (old, old))
     assert has_new_data(db, projects_dir=proj) is True
 
 
