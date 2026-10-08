@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import mmap
 import os
 import re
 import shlex
@@ -1884,6 +1885,42 @@ _skip_sdk_cache: dict = {"at": 0.0, "sessions": 0, "turns": 0}
 _SKIP_SDK_TTL = 60.0
 
 
+_SDK_MARK = re.compile(rb'"promptSource"\s*:\s*"sdk"')
+# 파일별 (크기, 수정시각) -> 자동화 프롬프트 수. 안 바뀐 파일은 다시 읽지 않는다.
+_sdk_file_cache: dict[str, tuple[tuple[int, int], int]] = {}
+
+
+def _sdk_turns_in(f) -> int:
+    """이 로그 파일 안의 자동화(sdk) 프롬프트 수. 표지(`"promptSource":"sdk"`)가 있는 줄만 파싱한다 -
+    예전엔 설정 화면을 열 때마다 원문 로그 전체를 JSON 으로 파싱했다(실측 1.2GB 약 28초, GIL 을 쥔 채).
+    표지는 plumbing 기록에도 붙어 파일 대부분(207/265)에 있어서, 파일 단위로 거르면 소용이 없다."""
+    from .parser import is_sdk_prompt
+    st = os.stat(f)
+    key = (st.st_size, st.st_mtime_ns)
+    got = _sdk_file_cache.get(str(f))
+    if got and got[0] == key:
+        return got[1]
+    n = 0
+    if st.st_size:
+        with open(f, "rb") as fh, mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            done_to = -1   # 이미 본 줄의 끝 - 한 줄에 표지가 둘이어도 한 번만 센다
+            for hit in _SDK_MARK.finditer(m):
+                if hit.start() < done_to:
+                    continue
+                start = m.rfind(b"\n", 0, hit.start()) + 1
+                end = m.find(b"\n", hit.end())
+                end = len(m) if end == -1 else end
+                done_to = end
+                try:
+                    obj = json.loads(m[start:end])
+                except ValueError:
+                    continue   # 아직 쓰이는 중인 마지막 줄 등
+                if isinstance(obj, dict) and is_sdk_prompt(obj):
+                    n += 1
+    _sdk_file_cache[str(f)] = (key, n)
+    return n
+
+
 def _skip_sdk_stats() -> dict:
     """자동화(sdk) 프롬프트가 원문 로그에 몇 개(세션/턴) 있는지 — 제외 개수 표기용. 60s 캐시.
     파일=세션 단위(claude-code/codex 모두 파일 하나가 한 세션)."""
@@ -1891,20 +1928,15 @@ def _skip_sdk_stats() -> dict:
     if now - _skip_sdk_cache["at"] < _SKIP_SDK_TTL:
         return {"sessions": _skip_sdk_cache["sessions"], "turns": _skip_sdk_cache["turns"]}
     from .indexer import discover_files
-    from .parser import is_sdk_prompt
     sessions = turns = 0
     try:
-        for f, adapter in discover_files(recent_first=False):
-            hit = False
+        for f, _adapter in discover_files(recent_first=False):
             try:
-                for obj, _end in adapter.read_records(f, 0):
-                    if is_sdk_prompt(obj):
-                        turns += 1
-                        hit = True
+                n = _sdk_turns_in(f)
             except Exception:  # noqa: BLE001 — 한 파일 오류가 집계를 막지 않게
                 continue
-            if hit:
-                sessions += 1
+            turns += n
+            sessions += 1 if n else 0
     except Exception:  # noqa: BLE001 — 집계 실패는 이전 값 유지
         return {"sessions": _skip_sdk_cache["sessions"], "turns": _skip_sdk_cache["turns"]}
     _skip_sdk_cache.update(at=now, sessions=sessions, turns=turns)
@@ -1998,12 +2030,18 @@ def api_archive_sync():
     가져온 세션의 벡터는 이어지는 증분 색인(backfill)이 활성 모델로 채운다."""
     from . import config as C
     from .archive_sync import device_id, export_archive, import_archives
-    db = ArchiveDB()
-    did = device_id(db)
-    vi = make_index()   # 더 완성된 상대 턴으로 갱신 시 스테일 벡터 제거용(backfill 이 재임베딩)
-    notes: list[str] = []
-    imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=notes.append)
-    exported = export_archive(db, C.PROJECTS_DIR, did)
+    # 색인과 같은 DB 를 동시에 쓰지 않는다(쓰기 주체가 둘이면 서로의 잠금 대기가 길어진다).
+    if not _index_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={"code": "reindex_already_running", "msg": "이미 색인 중이에요"})
+    try:
+        db = ArchiveDB()
+        did = device_id(db)
+        vi = make_index()   # 더 완성된 상대 턴으로 갱신 시 스테일 벡터 제거용(backfill 이 재임베딩)
+        notes: list[str] = []
+        imported = import_archives(db, C.PROJECTS_DIR, did, vi=vi, log_fn=notes.append)
+        exported = export_archive(db, C.PROJECTS_DIR, did)
+    finally:
+        _index_lock.release()
     if imported and not _autoindex_state.get("running") and not _reindex_state.get("running"):
         threading.Thread(target=_run_incremental, daemon=True).start()   # 가져온 청크 임베딩
     # 건너뛴 줄이 있으면 사용자에게 알린다 — ok:true 만 주면 부분 실패가 묻힌다.
@@ -2241,7 +2279,10 @@ def api_reindex(payload: dict):
             db = ArchiveDB()
             total_chunks = db.conn.execute("SELECT COUNT(*) c FROM chunks").fetchone()["c"]
             vi = make_index()
-            emb = Embedder(model)
+            emb = _state.get("embedder")
+            if emb is None or getattr(emb, "model_name", None) != model:
+                _state.pop("embedder", None)   # 다른 모델이면 내려 둔다 - 두 벌이 함께 올라 RAM 이 두 배가 된다
+                emb = Embedder(model)
             _reindex_state["total_chunks"] = total_chunks
 
             def log(msg):

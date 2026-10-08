@@ -114,15 +114,23 @@ def warm_walk_cache() -> None:
 
 
 def has_new_data(db, projects_dir: str | Path | None = None) -> bool:
-    """커서 이후 새 바이트가 있는 파일이 하나라도 있으면 True(모델 로드 전 값싼 확인)."""
-    for _adapter, p in _iter_all(projects_dir):
+    """지금 색인할 새 내용이 있는 파일이 하나라도 있으면 True(모델 로드 전 값싼 확인).
+
+    활성 파일에 남은 게 진행 중인 마지막 턴 하나뿐이면 세지 않는다 - index_file 이 그 턴을 IDLE_SECS 까지
+    보류하므로 지금은 색인할 게 없다. 바이트만 보면 Claude 를 쓰는 내내 True 라, 할 일 없는 회차마다
+    임베딩 모델(약 0.8GB)을 올리고 유휴 언로드도 영영 일어나지 않았다(count_pending 과 같은 기준)."""
+    now = time.time()
+    for adapter, p in _iter_all(projects_dir):
         try:
-            size = p.stat().st_size
+            stt = p.stat()
         except OSError:
             continue
         offset, _, _ = db.get_cursor(str(p))
-        if size > offset:
-            return True
+        if stt.st_size <= offset:
+            continue
+        if (now - stt.st_mtime) <= IDLE_SECS and _held_back_only(adapter, str(p), offset):
+            continue
+        return True
     return False
 
 
@@ -131,19 +139,18 @@ def _held_back_only(adapter, path: str, offset: int) -> bool:
     index_file은 활성(비-idle) 파일의 마지막 턴을 IDLE_SECS까지 홀드백하므로, 그 턴만 남은
     경우 지금은 색인할 게 없다 → UI에서 "대기"로 세면 안 됨(색인 눌러도 안 사라져 혼란).
     파싱 실패/불명확하면 False(=대기로 유지, 실제 대기를 놓치지 않게 보수적)."""
+    # 한 번에 읽지 않고 흘려 읽는다: 첫 기록이 턴 시작이고 그 뒤에 턴 시작이 없어야 True 라서, 두 번째 턴
+    # 시작을 보면 바로 False. 재색인 직후 커서가 0 인 큰 활성 로그(356MB)를 8초마다 통째로 올리지 않는다.
+    first_is_start = False
     try:
-        recs = list(adapter.read_records(path, offset))
+        for i, (obj, _end) in enumerate(adapter.read_records(path, offset)):
+            if adapter.is_turn_start(obj):
+                if i > 0:
+                    return False   # 마지막 턴 앞에 완결 턴이 있어 지금 색인 가능 → 홀드백-only 아님
+                first_is_start = True
     except Exception:  # noqa: BLE001 — 파싱 불가 파일은 바이트 기반 판정으로 폴백
         return False
-    if not recs:
-        return False
-    last_up = None
-    for i, (obj, _end) in enumerate(recs):
-        if adapter.is_turn_start(obj):
-            last_up = i
-    # last_up>=1 이면 마지막 턴 앞에 완결 턴이 있어 지금 색인 가능 → 홀드백-only 아님.
-    # last_up==0 이면 커서 이후 turn-start가 진행 중 턴 하나뿐 → 홀드백-only.
-    return last_up == 0
+    return first_is_start   # 커서 이후 turn-start 가 진행 중 턴 하나뿐 → 홀드백-only
 
 
 def count_pending(
