@@ -757,8 +757,11 @@ class ArchiveDB:
 
     def add_chunks(self, chunks) -> None:
         self.conn.executemany(
+            # 텍스트가 바뀌면 해시를 ''(NULL 아님)로 비운다: 옛 벡터를 '이 텍스트의 것'으로 오인하지 않게.
+            # NULL 이면 색인이 텍스트 비교로 되돌아가, 임베딩 전에 끊긴 뒤 옛 벡터가 확정된다.
             """INSERT INTO chunks(chunk_key,turn_id,idx,text) VALUES(?,?,?,?)
-               ON CONFLICT(chunk_key) DO UPDATE SET text=excluded.text""",
+               ON CONFLICT(chunk_key) DO UPDATE SET text=excluded.text,
+                 embed_hash=CASE WHEN chunks.text IS excluded.text THEN chunks.embed_hash ELSE '' END""",
             [(f"{c.turn_id}#{c.index}", c.turn_id, c.index, c.text) for c in chunks],
         )
 

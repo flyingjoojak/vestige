@@ -223,10 +223,17 @@ class SqliteVecIndex:
 
     def reset(self) -> None:
         """전체 비우기(모델 교체=차원 변경 대응): 테이블 드롭 후 재생성."""
-        self.conn.execute("DROP TABLE IF EXISTS vec")
-        self.conn.execute("DELETE FROM vkeys")
-        self.conn.execute("DELETE FROM vmeta")
+        # 한 트랜잭션으로: DROP 만 먼저 커밋되고 끊기면 vec 은 비었는데 vkeys 는 남아 의미 검색이 영영 0건이 된다.
         self.conn.commit()
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.execute("DROP TABLE IF EXISTS vec")
+            self.conn.execute("DELETE FROM vkeys")
+            self.conn.execute("DELETE FROM vmeta")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         self._dim = None
 
     def save(self) -> None:
