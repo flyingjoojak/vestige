@@ -7,6 +7,68 @@
 만들어지고, **그 릴리스 본문이 앱의 업데이트 배너에 그대로 표시**됩니다. 아래처럼
 `<!--lang:ko-->` / `<!--lang:en-->` 마커로 나눠 두면, 배너가 사용자 언어에 맞는 섹션만 보여줍니다.
 
+## [0.4.0] - 2026-10-08
+
+<!--lang:ko-->
+
+> **업데이트 후 설정 > 색인·임베딩 > 재색인을 한 번 돌려 주세요.** 작업 중에 끼어들어 친 질문의 분리, 진행 안내문, 빠졌던 답변이 기존 기록에도 반영됩니다. 같은 모델이라 바뀐 부분만 다시 계산해서 빠릅니다.
+> 업데이트 전에 접어 둔 대화에 "작업 중 질문"이 섞여 있었다면, 재색인 뒤 그 질문 부분이 접히지 않은 별도 대화로 나타날 수 있습니다. 그 부분만 다시 접으면 됩니다.
+
+### Added
+- **지금 하는 작업이 바로 보입니다.** 색인을 기다리지 않고 진행 중인 대화가 채팅 화면에 따라 올라오고('색인 전' 표시), 새로 시작한 세션도 목록에 바로 뜹니다. 검색·지도에는 색인된 뒤에 반영됩니다.
+- **작업 중에 끼어들어 친 질문을 별도 대화로 나눠 보여줍니다.** '작업 중 질문' 배지로 구분하고, "~를 확인하겠습니다" 같은 진행 안내문도 답변에 남깁니다.
+- **제목 · 접힘 · 폴더가 기기 간에 맞춰집니다.** 대화뿐 아니라 직접 정리한 상태도 같이 동기화됩니다(두 곳에서 바꾸면 늦게 바꾼 쪽이 이깁니다).
+- **세션 목록에서 바로 접고 되돌립니다.** 딸린 하위 에이전트 세션도 같이 접히고, 접힘 화면은 세션과 채팅으로 나뉘어 모입니다. 하위 에이전트 세션은 부모 세션 아래로 묶여 보입니다.
+- **검색 결과와 폴더에서 '세션으로 이동'.** 그 대화가 있는 세션을 세션 목록에서 열어 이어서 하거나 세션 안에서 검색할 수 있습니다.
+
+### Changed
+- **검색 응답은 1/29, 세션 목록은 1/11로 가벼워졌습니다.** 쉬는 동안의 색인 회차는 1/12, 창을 숨기면 화면 갱신도 쉽니다.
+- **앱을 켜자마자 세션 목록이 뜹니다.** 첫 목록이 로그 폴더를 훑는 동안 최대 44초 멈추던 것을 뒤에서 훑도록 바꿨습니다(실측 0.09초).
+- **같은 모델로 재색인하면 바뀐 부분만 다시 계산합니다.** 이번 한 번만 1/4 정도, 다음부터는 거의 0입니다. 크기가 큰 로그(356MB)를 색인할 때 최대 메모리도 726MB에서 131MB로 줄었습니다.
+- 한 턴을 다시 저장할 때 키워드 색인 전체를 훑던 것을 고쳐 재색인이 턴당 38ms에서 0.6ms로 줄었습니다.
+- 접근성: 키보드 포커스 표시를 눈에 띄게(대비 5:1 이상), 진행률을 스크린리더가 끊임없이 읽지 않게, 접거나 세션을 연 뒤 포커스가 사라지지 않게 고쳤습니다.
+
+### Fixed
+- **색인하는 동안 접기 · 폴더 · 제목 저장이 최대 55초 멈추던 문제.** 임베딩하는 동안 DB 쓰기 잠금을 쥐고 있었습니다.
+- 작업 중간의 기록이 질문으로 오인돼 그 뒤 답변이 색인에서 빠지던 문제.
+- 직접 친 질문이 마크다운으로 바뀌어 보이던 문제(`~~착수~~` 가 취소선으로, `3.` 이 점 목록으로).
+- 번호 목록이 점 목록으로 바뀌며 번호가 사라지던 문제.
+- 휠 클릭 자동 스크롤에서 세션 목록 · 대화 목록이 출렁이던 문제.
+- 다른 기기 기록을 가져올 때 일부만 반영되거나 쓰기 잠금을 오래 쥐던 문제, 재색인 도중 앱을 닫으면 옛 벡터가 남던 문제.
+- 설치가 깨져도 앱이 말없이 죽지 않고 안내합니다. ARM64 Windows 에서 설치 때마다 DLL 하나가 빠지던 것도 고쳤습니다.
+- Windows 에서 '세션 재개'가 작업 폴더의 `claude.bat` 을 먼저 실행할 수 있던 문제, 요약 AI 가 도구를 쓸 수 있던 문제.
+- Codex 0.160 대화 형식을 확인했습니다.
+
+<!--lang:en-->
+
+> **After updating, run Settings > Index & embeddings > Re-index once.** It applies the separate handling of questions typed mid-task, progress notes, and previously missing answers to your existing history. It reuses the same model, so only what changed is recomputed and it is fast.
+> If a conversation you had folded before updating contained a "mid-task question", that part may show up as a separate unfolded conversation after re-indexing. Just fold that part again.
+
+### Added
+- **See what you're doing right now.** A conversation in progress follows into the chat view without waiting for indexing (marked "not indexed yet"), and a brand-new session appears in the list right away. Search and the map pick it up once it is indexed.
+- **Questions typed while the assistant was working are shown as their own conversation**, marked "mid-task question". Progress notes such as "let me check..." are kept in the answer too.
+- **Titles, folds and folders stay in step across devices.** Not just conversations - the way you organized them syncs too (if you change both sides, the later change wins).
+- **Fold and undo right from the session list.** Sub-agent sessions fold together with their parent, the Folded view is split into sessions and chats, and sub-agent sessions are shown under their parent.
+- **"Go to session" from search results and folders.** Open the session that holds a conversation in the session list to continue it or search within it.
+
+### Changed
+- **Search responses are 1/29 the size and the session list 1/11.** Idle indexing passes cost 1/12, and screen updates pause while the window is hidden.
+- **The session list appears the moment the app starts.** The first list used to freeze for up to 44s while the log folder was scanned; it is now scanned in the background (measured 0.09s).
+- **Re-indexing with the same model only recomputes what changed.** About 1/4 this one time, close to zero afterwards. Peak memory while indexing a large log (356MB) dropped from 726MB to 131MB.
+- Re-saving a turn no longer scans the whole keyword index, so re-indexing went from 38ms to 0.6ms per turn.
+- Accessibility: keyboard focus is clearly visible (contrast 5:1 or more), screen readers no longer read progress aloud constantly, and focus no longer gets lost after folding or opening a session.
+
+### Fixed
+- **Saving a fold, folder or title froze for up to 55s while indexing.** The database write lock was held during embedding.
+- A record in the middle of a task being mistaken for a question, which dropped the answer after it from the index.
+- Your own questions being rendered as markdown (`~~word~~` shown struck through, `3.` shown as a bullet).
+- Numbered lists turning into bullet lists and losing their numbers.
+- The session and conversation lists jittering during middle-click auto-scroll.
+- Importing another device's history applying only part of it or holding the write lock too long, and a stale vector surviving if the app was closed mid re-index.
+- A broken install no longer makes the app die silently - it explains. A DLL going missing on every ARM64 Windows install is fixed too.
+- On Windows, "Resume session" could run a `claude.bat` sitting in the working folder first; the summarizer AI could use tools.
+- Verified the Codex 0.160 conversation format.
+
 ## [0.3.1] - 2026-09-22
 
 <!--lang:ko-->
