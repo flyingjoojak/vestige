@@ -191,7 +191,7 @@ export default function App() {
           </div>
         )}
         <ErrorBoundary key={`${view}:${nonce}`}>
-          {view === "search" && <SearchView />}
+          {view === "search" && <SearchView onOpenInSessions={(session, turn) => openTurn("sessions", session, turn, session)} />}
           {view === "sessions" && (
             <Browse3Pane kind="sessions" initialSel={jump?.kind === "sessions" ? jump.id : null}
               initialTurn={jump?.kind === "sessions" ? { turn: jump.turn, session: jump.session } : null} />
