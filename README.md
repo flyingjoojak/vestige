@@ -232,7 +232,11 @@ claude mcp add vestige -- vestige-mcp
 
 2. `git tag vX.Y.Z && git push origin vX.Y.Z` (1번에서 올린 버전과 같은 값).
 3. 릴리스가 만들어지면 **macOS `.dmg`가 실제로 첨부됐는지 확인**하세요 - mac 빌드는 미서명이라 CI에서 비차단(`continue-on-error`)이어서, 조용히 실패해도 릴리스는 green으로 생성됩니다(그러면 Homebrew가 404).
-4. **릴리스 본문이 앱 업데이트 배너에 표시**됩니다 - `<!--lang:en-->` / `<!--lang:ko-->` 마커로 나누면 배너가 사용자 언어 섹션만 보여줍니다.
+4. **릴리스는 초안(draft) + 빈 본문으로 만들어집니다(electron-builder 기본) - 본문을 넣고 공개해야 사용자가 받습니다.** 초안인 동안은 자동 업데이트도 동작하지 않고, **릴리스 본문이 앱 업데이트 배너에 그대로 표시**됩니다(`<!--lang:en-->` / `<!--lang:ko-->` 마커로 나누면 배너가 사용자 언어 섹션만 보여줍니다). `CHANGELOG.md` 의 해당 버전 블록(`## [X.Y.Z]` 제목 줄은 빼고 `<!--lang:ko-->` 부터)을 파일로 저장해 한 번에 넣고 공개합니다:
+
+   ```bash
+   gh release edit vX.Y.Z --notes-file <본문 파일> --draft=false --latest
+   ```
 5. **배포 경로에 실제로 도달했는지 확인**하세요. dmg 첨부(3번)까지 됐어도 tap 이 옛 버전을 가리키면 mac 사용자에게는 아무 일도 일어나지 않습니다:
 
    ```bash
