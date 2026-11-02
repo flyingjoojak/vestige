@@ -240,15 +240,13 @@ def test_skipped_exec_file_leaves_no_pending_and_no_work(tmp_path: Path, monkeyp
     색인 회차마다 임베딩 모델을 올린다."""
     from vestige.indexer import count_pending, has_new_data, index_file
     from vestige.store import ArchiveDB
-    from vestige.vectorindex import VectorIndex
     monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
     root = tmp_path / "sessions"
     f = _write_rollout(root, [_META_EXEC, _USER1, _AGENT1])
     db = ArchiveDB(tmp_path / "a.db")
-    vi = VectorIndex(tmp_path / "v.npy", tmp_path / "ids.json")
     monkeypatch.setattr("vestige.indexer._iter_all", lambda _p=None: [(CodexAdapter(), f)])
     assert has_new_data(db) is True                      # 색인 전에는 한 번 대기로 잡힌다
-    assert index_file(f, db, vi, object(), adapter=CodexAdapter(), idle_secs=0) == 0
+    assert index_file(f, db, object(), object(), adapter=CodexAdapter(), idle_secs=0) == 0
     assert db.get_cursor(str(f))[0] == f.stat().st_size
     assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 0
     assert has_new_data(db) is False
