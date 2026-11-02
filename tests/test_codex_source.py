@@ -204,6 +204,37 @@ def test_read_records_corrupt_first_line_falls_back(tmp_path: Path):
     assert obj["_codex_cwd"] == ""
 
 
+# ── 자동화(codex exec) 세션은 기본 제외 ─────────────────────────
+_META_EXEC = _META.replace('"originator":"codex-tui"', '"originator":"codex_exec","source":"exec"')
+
+
+def test_exec_session_skipped_by_default(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1])
+    assert list(CodexAdapter().read_records(f, 0)) == []
+
+
+def test_exec_session_kept_when_skip_off(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("VESTIGE_SKIP_SDK_SESSIONS", "0")
+    f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1])
+    assert list(CodexAdapter().read_records(f, 0))
+
+
+def test_interactive_session_never_skipped(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    f = _write_rollout(tmp_path, [_META, _USER1, _AGENT1])   # originator=codex-tui
+    assert list(CodexAdapter().read_records(f, 0))
+
+
+def test_automated_turns_counts_exec_only(tmp_path: Path, monkeypatch):
+    from vestige.sources.codex import automated_turns
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    exec_f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1, _USER2, _AGENT2])
+    tui_f = _write_rollout(tmp_path / "tui", [_META, _USER1, _AGENT1])
+    assert automated_turns(exec_f) == 2
+    assert automated_turns(tui_f) == 0
+
+
 # ── extract_turns: 구형 ───────────────────────────────────────
 def test_extract_turns_old_schema(tmp_path: Path):
     turns = _turns_from_file(_write_rollout(tmp_path, _LINES_OLD))
