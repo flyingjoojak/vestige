@@ -162,9 +162,14 @@ class CodexAdapter:
             if _SKIP_DIRS.isdisjoint(p.parts):
                 yield p
 
+    def is_skipped(self, path: str | Path) -> bool:
+        """자동화(codex exec) 실행이고 제외 설정이 켜져 있으면 True. 인덱서가 파일째 건너뛰고
+        커서를 끝에 둔다(안 두면 '대기'로 영영 남는다). claude -p 와 같은 설정을 따른다."""
+        return skip_sdk_enabled() and _read_session_ctx(path)[2]
+
     def read_records(self, path: str | Path, start_offset: int = 0) -> Iterator[tuple[dict, int]]:
         sid, cwd, is_exec = _read_session_ctx(path)
-        if is_exec and skip_sdk_enabled():   # claude -p 와 같은 설정: 자동화 실행은 파일째 건너뛴다
+        if is_exec and skip_sdk_enabled():   # 인덱서를 거치지 않는 직접 호출에도 같은 기준
             return
         for obj, end in iter_json_lines(path, start_offset):
             obj[_SID_KEY] = sid
