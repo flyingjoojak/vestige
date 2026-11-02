@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from ..models import Action, Turn
-from ..parser import iter_json_lines
+from ..parser import iter_json_lines, skip_sdk_enabled
 
 logger = logging.getLogger(__name__)
 _WARNED_ITEMS: set = set()   # 한 번씩만 경고
@@ -54,9 +54,10 @@ def _sid_from_name(path: str | Path) -> str:
     return m.group(1) if m else Path(path).stem
 
 
-def _read_session_ctx(path: str | Path) -> tuple[str, str]:
-    """파일 첫 줄에서 (session_id, cwd) 복원. 첫 줄이 session_meta 가 아니면 파일명 폴백.
+def _read_session_ctx(path: str | Path) -> tuple[str, str, bool]:
+    """파일 첫 줄에서 (session_id, cwd, 자동화 실행 여부) 복원. 첫 줄이 session_meta 가 아니면 파일명 폴백.
 
+    자동화 = ``codex exec`` 로 돌린 비대화형 실행(``originator=codex_exec`` / ``source=exec``).
     ``read_records`` 가 index_file 호출당 파일마다 한 번만 부르는 것을 전제로 한 값싼 첫 줄 읽기.
     """
     sid_fallback = _sid_from_name(path)
@@ -64,18 +65,29 @@ def _read_session_ctx(path: str | Path) -> tuple[str, str]:
         with open(path, "rb") as f:
             first = f.readline()
     except OSError:
-        return sid_fallback, ""
+        return sid_fallback, "", False
     if not first.strip():
-        return sid_fallback, ""
+        return sid_fallback, "", False
     try:
         obj = json.loads(first.decode("utf-8", errors="replace"))
     except json.JSONDecodeError:
-        return sid_fallback, ""
+        return sid_fallback, "", False
     if obj.get("type") != "session_meta":
-        return sid_fallback, ""
+        return sid_fallback, "", False
     payload = obj.get("payload") or {}
     sid = payload.get("id") or payload.get("session_id") or sid_fallback
-    return sid, (payload.get("cwd") or "")
+    is_exec = payload.get("originator") == "codex_exec" or payload.get("source") == "exec"
+    return sid, (payload.get("cwd") or ""), is_exec
+
+
+def automated_turns(path: str | Path) -> int:
+    """``codex exec`` 자동화 실행이면 그 안의 사용자 메시지 수, 아니면 0. 제외 개수 표기용(설정과 무관).
+
+    대화형 세션은 첫 줄만 읽고 끝나서 값싸다. 자동화 실행 로그는 작다."""
+    if not _read_session_ctx(path)[2]:
+        return 0
+    adapter = CodexAdapter()
+    return sum(1 for obj, _end in iter_json_lines(path, 0) if adapter.is_turn_start(obj))
 
 
 def _payload_type(obj: dict) -> str:
@@ -150,8 +162,15 @@ class CodexAdapter:
             if _SKIP_DIRS.isdisjoint(p.parts):
                 yield p
 
+    def is_skipped(self, path: str | Path) -> bool:
+        """자동화(codex exec) 실행이고 제외 설정이 켜져 있으면 True. 인덱서가 파일째 건너뛰고
+        커서를 끝에 둔다(안 두면 '대기'로 영영 남는다). claude -p 와 같은 설정을 따른다."""
+        return skip_sdk_enabled() and _read_session_ctx(path)[2]
+
     def read_records(self, path: str | Path, start_offset: int = 0) -> Iterator[tuple[dict, int]]:
-        sid, cwd = _read_session_ctx(path)
+        sid, cwd, is_exec = _read_session_ctx(path)
+        if is_exec and skip_sdk_enabled():   # 인덱서를 거치지 않는 직접 호출에도 같은 기준
+            return
         for obj, end in iter_json_lines(path, start_offset):
             obj[_SID_KEY] = sid
             obj[_CWD_KEY] = cwd

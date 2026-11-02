@@ -255,6 +255,11 @@ def index_file(
         hold = None
     if offset == size:   # 새 바이트 없음 → 스킵(열린 턴도 안 변했음)
         return 0
+    is_skipped = getattr(adapter, "is_skipped", None)
+    if is_skipped and is_skipped(path):   # 어댑터가 파일째 제외(자동화 실행 등): 커서만 끝으로 둔다
+        db.set_cursor(path, size, size, mtime, None)
+        db.commit()
+        return 0
 
     # 열린 턴(hold)이 있으면 그 시작부터 다시 읽어 뒤에 붙은 내용까지 합쳐 '완성된 턴'으로 재저장(멱등).
     read_from = hold if hold is not None else offset

@@ -204,6 +204,55 @@ def test_read_records_corrupt_first_line_falls_back(tmp_path: Path):
     assert obj["_codex_cwd"] == ""
 
 
+# ── 자동화(codex exec) 세션은 기본 제외 ─────────────────────────
+_META_EXEC = _META.replace('"originator":"codex-tui"', '"originator":"codex_exec","source":"exec"')
+
+
+def test_exec_session_skipped_by_default(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1])
+    assert list(CodexAdapter().read_records(f, 0)) == []
+
+
+def test_exec_session_kept_when_skip_off(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("VESTIGE_SKIP_SDK_SESSIONS", "0")
+    f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1])
+    assert list(CodexAdapter().read_records(f, 0))
+
+
+def test_interactive_session_never_skipped(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    f = _write_rollout(tmp_path, [_META, _USER1, _AGENT1])   # originator=codex-tui
+    assert list(CodexAdapter().read_records(f, 0))
+
+
+def test_automated_turns_counts_exec_only(tmp_path: Path, monkeypatch):
+    from vestige.sources.codex import automated_turns
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    exec_f = _write_rollout(tmp_path, [_META_EXEC, _USER1, _AGENT1, _USER2, _AGENT2])
+    tui_f = _write_rollout(tmp_path / "tui", [_META, _USER1, _AGENT1])
+    assert automated_turns(exec_f) == 2
+    assert automated_turns(tui_f) == 0
+
+
+def test_skipped_exec_file_leaves_no_pending_and_no_work(tmp_path: Path, monkeypatch):
+    """제외된 자동화 파일은 커서를 끝으로 둔다 - 안 그러면 '대기 N'과 has_new_data 가 영영 참이라
+    색인 회차마다 임베딩 모델을 올린다."""
+    from vestige.indexer import count_pending, has_new_data, index_file
+    from vestige.store import ArchiveDB
+    monkeypatch.delenv("VESTIGE_SKIP_SDK_SESSIONS", raising=False)
+    root = tmp_path / "sessions"
+    f = _write_rollout(root, [_META_EXEC, _USER1, _AGENT1])
+    db = ArchiveDB(tmp_path / "a.db")
+    monkeypatch.setattr("vestige.indexer._iter_all", lambda _p=None: [(CodexAdapter(), f)])
+    assert has_new_data(db) is True                      # 색인 전에는 한 번 대기로 잡힌다
+    assert index_file(f, db, object(), object(), adapter=CodexAdapter(), idle_secs=0) == 0
+    assert db.get_cursor(str(f))[0] == f.stat().st_size
+    assert db.conn.execute("SELECT COUNT(*) c FROM turns").fetchone()["c"] == 0
+    assert has_new_data(db) is False
+    assert count_pending(db, root)["files"] == 0
+
+
 # ── extract_turns: 구형 ───────────────────────────────────────
 def test_extract_turns_old_schema(tmp_path: Path):
     turns = _turns_from_file(_write_rollout(tmp_path, _LINES_OLD))

@@ -1941,7 +1941,11 @@ def _skip_sdk_stats() -> dict:
     try:
         for f, _adapter in discover_files(recent_first=False):
             try:
-                n = _sdk_turns_in(f)
+                if _adapter.name == "codex":   # promptSource 표지가 없다 - codex exec 실행을 따로 센다
+                    from .sources.codex import automated_turns
+                    n = automated_turns(f)
+                else:
+                    n = _sdk_turns_in(f)
             except Exception:  # noqa: BLE001 — 한 파일 오류가 집계를 막지 않게
                 continue
             turns += n
