@@ -136,6 +136,9 @@ export const deleteFolder = (id: number) =>
   postJSON<{ ok: boolean; deleted: number }>("/api/folders/delete", { id })
 export type FolderTarget = { turnId?: string; sessionId?: string }
 const targetBody = (t: FolderTarget) => (t.turnId ? { turn_id: t.turnId } : { session_id: t.sessionId })
+// 이 대상이 이미 담긴 폴더 id들(담기 패널이 '이미 담김'을 표시)
+export const foldersOf = (t: FolderTarget) =>
+  getJSON<{ ids: number[] }>(`/api/folders/of?${new URLSearchParams(t.turnId ? { turn_id: t.turnId } : { session_id: t.sessionId ?? "" })}`)
 export const addToFolder = (folderId: number, t: FolderTarget) =>
   postJSON<{ ok: boolean }>("/api/folders/add", { folder_id: folderId, ...targetBody(t) })
 // changed=0 이면 '이미 없던 항목'이다 — ok 만 보면 아무 일도 안 했는데 성공으로 보인다.

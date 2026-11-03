@@ -321,6 +321,23 @@ def test_folder_crud_and_detail(tmp_path, monkeypatch):
     assert web.api_folder(id=child)["folder"]["name"] == "배포 삽질"
 
 
+def test_folders_of_reports_where_item_is_already_filed(tmp_path, monkeypatch):
+    """담기 패널이 '이미 담긴 폴더'를 표시할 수 있게, 항목이 담긴 폴더 id 를 내려준다."""
+    _seed_folder_db(tmp_path, monkeypatch)
+    a = web.api_folder_create({"name": "A"})["id"]
+    b = web.api_folder_create({"name": "B"})["id"]
+    web.api_folder_add({"folder_id": a, "session_id": "s1"})
+    web.api_folder_add({"folder_id": b, "session_id": "s1"})
+    web.api_folder_add({"folder_id": b, "turn_id": "s2:u1"})
+
+    assert sorted(web.api_folders_of(session_id="s1")["ids"]) == sorted([a, b])
+    assert web.api_folders_of(turn_id="s2:u1")["ids"] == [b]
+    assert web.api_folders_of(session_id="s2")["ids"] == []        # 세션 s2 자체는 안 담김(턴만 담김)
+    with pytest.raises(web.HTTPException) as ei:
+        web.api_folders_of()                                        # 대상 미지정
+    assert ei.value.status_code == 400
+
+
 def test_folder_move_rejects_cycle_and_delete_removes_subtree(tmp_path, monkeypatch):
     _seed_folder_db(tmp_path, monkeypatch)
     root = web.api_folder_create({"name": "부모"})["id"]

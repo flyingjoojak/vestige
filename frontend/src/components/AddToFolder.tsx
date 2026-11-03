@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { Check, FolderPlus, Loader2, X } from "lucide-react"
-import { addToFolder, createFolder, listFolders, type FolderTarget } from "@/lib/api"
+import { addToFolder, createFolder, foldersOf, listFolders, type FolderTarget } from "@/lib/api"
 import { useDialogs } from "@/components/ui/dialogs"
 import { errText } from "@/lib/errors"
 import { flattenTree } from "@/lib/foldertree"
@@ -19,7 +19,8 @@ export function AddToFolder({ target, className, showLabel }: {
   const [open, setOpen] = useState(false)
   const [folders, setFolders] = useState<Folder[] | null>(null)
   const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState("")      // 방금 담은 폴더 이름(잠깐 표시)
+  const [filed, setFiled] = useState<Set<number>>(new Set())   // 이 대상이 이미 담긴 폴더 id
+  const [done, setDone] = useState("")      // 방금 담았다/이미 담겼다는 안내 문구(잠깐 표시)
   const [err, setErr] = useState("")
   // 드롭다운은 목록의 스크롤 영역(overflow-y-auto) 안에 있으면 잘린다 → body 로 포털해서
   // 화면 좌표(fixed)로 띄운다. 아래 공간이 부족하면 위로 뒤집는다.
@@ -52,6 +53,8 @@ export function AddToFolder({ target, className, showLabel }: {
     if (next && folders == null) {
       listFolders().then((r) => setFolders(r.folders)).catch((e) => setErr(errText(t, e, "folders.loadFailed")))
     }
+    // 담긴 곳은 열 때마다 새로 읽는다(다른 화면에서 담았거나 뺐을 수 있다). 실패해도 담기는 되므로 표시만 포기.
+    if (next) foldersOf(target).then((r) => setFiled(new Set(r.ids))).catch(() => setFiled(new Set()))
   }
 
   useEffect(() => {
@@ -73,18 +76,24 @@ export function AddToFolder({ target, className, showLabel }: {
     }
   }, [open])
 
-  function flashDone(name: string) {
-    setDone(name)
+  function flashDone(msg: string) {
+    setDone(msg)
     if (doneTimer.current) clearTimeout(doneTimer.current)
     doneTimer.current = setTimeout(() => setDone(""), 1800)
   }
 
   async function add(f: Folder) {
+    if (filed.has(f.id)) {   // 이미 담긴 폴더: 요청 없이 알려만 준다
+      setOpen(false)
+      flashDone(t("folders.alreadyIn", { name: f.name }))
+      return
+    }
     setBusy(true)
     try {
       await addToFolder(f.id, target)
+      setFiled((prev) => new Set(prev).add(f.id))
       setOpen(false)
-      flashDone(f.name)
+      flashDone(t("folders.addedTo", { name: f.name }))
     } catch (e) {
       setErr(errText(t, e, "folders.saveFailed"))
     } finally {
@@ -111,7 +120,7 @@ export function AddToFolder({ target, className, showLabel }: {
         return
       }
       setFolders(null)          // 다음에 열 때 새 목록으로
-      flashDone(name)
+      flashDone(t("folders.addedTo", { name }))
     } catch (e) {
       setErr(errText(t, e, "folders.saveFailed"))
     } finally {
@@ -128,11 +137,11 @@ export function AddToFolder({ target, className, showLabel }: {
       <button ref={triggerRef} type="button"
         onClick={(e) => { e.stopPropagation(); toggleOpen() }}
         aria-expanded={open} aria-controls={open ? panelId : undefined}
-        title={done ? t("folders.addedTo", { name: done }) : t("folders.addTo")}
+        title={done || t("folders.addTo")}
         aria-label={t("folders.addTo")}
         className={className ?? "inline-flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground"}>
         {done ? <Check className="size-3.5 text-primary" /> : <FolderPlus className="size-3.5" />}
-        {showLabel && (done ? t("folders.addedTo", { name: done }) : t("folders.addTo"))}
+        {showLabel && (done || t("folders.addTo"))}
       </button>
       {/* 패널이 닫힌 상태의 실패는 여기서 보여준다. '새 폴더 만들어 담기'는 모달을 띄우려고
           드롭다운을 먼저 닫으므로, 에러를 패널 안에만 두면 아무 데도 표시되지 않는다
@@ -167,14 +176,24 @@ export function AddToFolder({ target, className, showLabel }: {
             {folders?.length === 0 && (
               <div className="px-2 py-1.5 text-muted-foreground">{t("folders.empty")}</div>
             )}
-            {tree.map((f) => (
+            {tree.map((f) => {
+              const isFiled = filed.has(f.id)
+              return (
               <button key={f.id} type="button" disabled={busy} onClick={() => add(f)}
+                title={isFiled ? t("folders.alreadyIn", { name: f.name }) : undefined}
                 style={{ paddingLeft: `${f.depth * 12 + 8}px` }}
-                className="flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left transition-colors hover:bg-muted disabled:opacity-60">
-                <span className="min-w-0 flex-1 truncate text-foreground">{f.name}</span>
+                className={`flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left transition-colors disabled:opacity-60 ${
+                  isFiled ? "bg-primary/10 hover:bg-primary/15" : "hover:bg-muted"}`}>
+                <span className={`min-w-0 flex-1 truncate ${isFiled ? "font-medium text-primary" : "text-foreground"}`}>{f.name}</span>
+                {isFiled && (
+                  <span className="inline-flex shrink-0 items-center gap-0.5 text-[10.5px] text-primary">
+                    <Check className="size-3" aria-hidden="true" /><span>{t("folders.filed")}</span>
+                  </span>
+                )}
                 {f.items > 0 && <span className="shrink-0 tabular-nums text-[10.5px] text-muted-foreground">{f.items}</span>}
               </button>
-            ))}
+              )
+            })}
             <button type="button" disabled={busy} onClick={addToNew}
               className="mt-1 flex w-full items-center gap-1.5 rounded-md border-t px-2 py-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60">
               <FolderPlus className="size-3.5" />{t("folders.newAndAdd")}

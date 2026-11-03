@@ -817,6 +817,13 @@ def api_folders():
     return {"folders": ArchiveDB().list_folders()}
 
 
+@app.get("/api/folders/of")
+def api_folders_of(turn_id: str | None = None, session_id: str | None = None):
+    """이 턴/세션이 이미 담긴 폴더 id들. 담기 패널이 '이미 담김'을 표시하는 데 쓴다."""
+    kind, ref = _folder_target({"turn_id": turn_id, "session_id": session_id})
+    return {"ids": ArchiveDB().folders_of(kind, ref)}
+
+
 @app.post("/api/folders/create")
 def api_folder_create(payload: dict):
     name = str((payload or {}).get("name", "")).strip()

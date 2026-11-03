@@ -561,6 +561,8 @@
     "searchFailed": "Search failed",
     "addTo": "Add to folder",
     "addedTo": "Added to '{{name}}'",
+    "alreadyIn": "Already in '{{name}}'",
+    "filed": "Added",
     "newAndAdd": "New folder and add",
     "create": "Create",
     "deleteTitle": "Delete '{{name}}'",
